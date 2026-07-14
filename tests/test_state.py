@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -87,7 +88,7 @@ def test_invalid_transition_and_overlapping_lease_fail(tmp_path: Path) -> None:
 
 def test_dead_cli_lease_is_reclaimed_after_process_exit(tmp_path: Path) -> None:
     state = StateStore(tmp_path / "state.db")
-    with state._connect() as conn:
+    with cast(Any, state)._connect() as conn:
         conn.execute(
             "INSERT INTO leases(repo,owner,expires_at) VALUES(?,?,?)",
             (

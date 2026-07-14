@@ -738,11 +738,11 @@ def _board_diagnostics(adapter: Any, board_id: str) -> dict[str, Any]:
     """Prefer board-filtered diagnostics while keeping portable adapters compatible."""
     board_method = getattr(adapter, "diagnostics_for_board", None)
     if callable(board_method):
-        value = board_method(board_id)
+        value: object = cast(object, board_method(board_id))
         if isinstance(value, dict):
-            return value
-    value = adapter.diagnostics()
-    return value if isinstance(value, dict) else {}
+            return cast(dict[str, Any], value)
+    value = cast(object, adapter.diagnostics())
+    return cast(dict[str, Any], value) if isinstance(value, dict) else {}
 
 
 def cmd_doctor(config: AppConfig) -> int:

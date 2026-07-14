@@ -202,9 +202,14 @@ class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
             card = entry.get("card")
             if not isinstance(card, dict):
                 continue
-            metadata = card.get("metadata")
-            automation = metadata.get("automation") if isinstance(metadata, dict) else None
-            candidate = automation.get("boardId") if isinstance(automation, dict) else None
+            card_row = cast(dict[str, Any], card)
+            metadata_value = card_row.get("metadata")
+            metadata = cast(dict[str, Any], metadata_value) if isinstance(metadata_value, dict) else {}
+            automation_value = metadata.get("automation")
+            automation = (
+                cast(dict[str, Any], automation_value) if isinstance(automation_value, dict) else {}
+            )
+            candidate = automation.get("boardId")
             if str(candidate or "").lower() == board_id.lower():
                 filtered.append(entry)
         return {**payload, "diagnostics": filtered}
