@@ -1,0 +1,141 @@
+version: 1
+state_dir: /home/example/.local/state/captains-chair
+artifact_dir: /home/example/.local/state/captains-chair/artifacts
+
+harnesses:
+  openclaw:
+    kind: openclaw
+    executable: /home/example/.npm-global/bin/openclaw
+    default_agent: codex-harness
+    timeout_seconds: 3600
+  codex:
+    kind: codex
+    executable: codex
+    timeout_seconds: 3600
+
+orchestrators:
+  openclaw-workers:
+    kind: openclaw_workboard
+    executable: /home/example/.npm-global/bin/openclaw
+    captains_chair_command: [captains-chair, --config, /home/example/.config/captains-chair/config.yaml]
+    board_prefix: captains-chair
+    workers:
+      captain: github-captain
+      coder: github-coder
+      reviewer: github-reviewer
+      tester: github-tester
+      ux_reviewer: github-ux
+      final_reviewer: github-final
+      merger: github-merge
+      verifier: github-verify
+    worker_models:
+      captain: codex/gpt-5.5
+      # Validate coding models against the selected auth source with
+      # `captains-chair model-check --role coder`. Spark is an optional Codex OAuth
+      # coding canary; keep planning and review on the stronger model.
+      coder: codex/gpt-5.3-codex
+      tester: codex/gpt-5.3-codex
+      reviewer: codex/gpt-5.5
+      ux_reviewer: codex/gpt-5.3-codex
+      final_reviewer: codex/gpt-5.5
+      merger: codex/gpt-5.5
+      verifier: codex/gpt-5.5
+    auth_source_agent: codex-harness
+    dispatch_timeout_seconds: 120
+    # Bound metadata-only usage imports; increase only when the audit needs older sessions.
+    session_limit: 1000
+    max_runtime_seconds: 3600
+    max_retries: 2
+    require_live_completion_validation: true
+models:
+  baseline:
+    primary: {model: codex/gpt-5.5, agent: codex-harness, thinking: high}
+    fallbacks: []
+    allow_fallback: true
+  planner:
+    primary: {model: codex/gpt-5.5, agent: codex-harness, thinking: high}
+    fallbacks: []
+    allow_fallback: true
+  coder:
+    primary: {model: codex/gpt-5.3-codex, agent: codex-harness, thinking: medium}
+    fallbacks: []
+    allow_fallback: true
+  tester:
+    primary: {model: codex/gpt-5.3-codex, agent: codex-harness, thinking: medium}
+    fallbacks: []
+    allow_fallback: true
+  reviewer:
+    primary: {model: codex/gpt-5.5, agent: codex-harness, thinking: high}
+    fallbacks: []
+    allow_fallback: true
+  final_reviewer:
+    primary: {model: codex/gpt-5.5, agent: codex-harness, thinking: high}
+    fallbacks: []
+    allow_fallback: false
+  ux_reviewer:
+    primary: {model: codex/gpt-5.3-codex, agent: codex-harness, thinking: medium}
+    fallbacks: []
+    allow_fallback: true
+harness_model_overrides:
+  codex:
+    baseline:
+      primary: {model: gpt-5.5, thinking: high}
+    planner:
+      primary: {model: gpt-5.5, thinking: high}
+    coder:
+      primary: {model: gpt-5.3-codex, thinking: medium}
+    tester:
+      primary: {model: gpt-5.3-codex, thinking: medium}
+    reviewer:
+      primary: {model: gpt-5.5, thinking: high}
+    ux_reviewer:
+      primary: {model: gpt-5.3-codex, thinking: medium}
+    final_reviewer:
+      primary: {model: gpt-5.5, thinking: high}
+      allow_fallback: false
+
+usage:
+  # Illustrative internal estimates, in credits per million tokens. Verify against
+  # the account's official usage view before enabling a hard budget.
+  # Account-wide same-day ceiling across all managed repositories.
+  # daily_budget_credits: 10
+  block_on_unknown: true
+  # Supervised-only escape hatch for runtimes that expose aggregate or partial
+  # usage. Keep false for autonomous operation; CAPTAINS_CHAIR still reports lower-bound
+  # estimates and telemetry warnings when this is enabled.
+  allow_incomplete_telemetry: false
+  rates:
+    gpt-5.6-sol:
+      input_credits_per_million: 125
+      cached_input_credits_per_million: 12.5
+      output_credits_per_million: 750
+    gpt-5.5:
+      input_credits_per_million: 125
+      cached_input_credits_per_million: 12.5
+      output_credits_per_million: 750
+    gpt-5.3-codex:
+      input_credits_per_million: 43.75
+      cached_input_credits_per_million: 4.375
+      output_credits_per_million: 350
+  retention_days: 90
+
+repos:
+  - full_name: example/project
+    local_path: /home/example/repos/project
+    default_branch: main
+    # disabled stops cycles, baselines, dispatch, and Workboard mutations.
+    operation_mode: advisory
+    completion_policy: owner_approval
+    allow_autonomous_merge: false
+    canonical_docs: [README.md, docs/architecture.md]
+    planning_doc: docs/IMPLEMENTATION_PLAN.md
+    require_project_manifest: true
+    checks: [pytest]
+    docs_checks: []
+    ux_enabled: true
+    ux_paths: [frontend/, "*.tsx", "*.jsx", "*.css", "*.html"]
+    preserved_prs: []
+    orchestrator: openclaw-workers
+    orchestration_board: captains-chair-example-project
+    notification:
+      kind: stdout

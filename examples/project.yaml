@@ -1,0 +1,12 @@
+version: 1
+goal: Deliver the documented product through small, reviewed, dependency-aware pull requests.
+canonical_docs:
+  - README.md
+  - docs/architecture.md
+planning_doc: docs/IMPLEMENTATION_PLAN.md
+checks:
+  - pytest
+required_check_names:
+  - test
+later_phase: []
+

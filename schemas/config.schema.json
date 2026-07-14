@@ -1,0 +1,976 @@
+{
+  "$defs": {
+    "ActionKind": {
+      "enum": [
+        "report_only",
+        "no_action",
+        "update_plan",
+        "implement",
+        "review_pr",
+        "repair_pr",
+        "merge_pr",
+        "create_issue",
+        "update_issue",
+        "label_issue",
+        "retarget_issue",
+        "close_issue",
+        "maintenance",
+        "release",
+        "production_deploy",
+        "secrets",
+        "billing",
+        "destructive",
+        "force_push",
+        "delete_branch"
+      ],
+      "title": "ActionKind",
+      "type": "string"
+    },
+    "CodexWorkboardConfig": {
+      "additionalProperties": false,
+      "description": "Reserved configuration shape for a future standalone Codex queue adapter.",
+      "properties": {
+        "board_prefix": {
+          "default": "captains-chair",
+          "minLength": 1,
+          "title": "Board Prefix",
+          "type": "string"
+        },
+        "workers": {
+          "$ref": "#/$defs/WorkerAssignments"
+        },
+        "worker_models": {
+          "$ref": "#/$defs/WorkerModelAssignments",
+          "default": {
+            "captain": "codex/gpt-5.5",
+            "coder": "codex/gpt-5.3-codex",
+            "reviewer": "codex/gpt-5.5",
+            "tester": "codex/gpt-5.3-codex",
+            "ux_reviewer": "codex/gpt-5.3-codex",
+            "final_reviewer": "codex/gpt-5.5",
+            "merger": "codex/gpt-5.5",
+            "verifier": "codex/gpt-5.5"
+          }
+        },
+        "max_runtime_seconds": {
+          "default": 3600,
+          "maximum": 14400,
+          "minimum": 60,
+          "title": "Max Runtime Seconds",
+          "type": "integer"
+        },
+        "max_retries": {
+          "default": 2,
+          "maximum": 10,
+          "minimum": 0,
+          "title": "Max Retries",
+          "type": "integer"
+        },
+        "require_live_completion_validation": {
+          "default": true,
+          "title": "Require Live Completion Validation",
+          "type": "boolean"
+        },
+        "kind": {
+          "const": "codex_workboard",
+          "default": "codex_workboard",
+          "title": "Kind",
+          "type": "string"
+        },
+        "executable": {
+          "default": "codex",
+          "title": "Executable",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workers"
+      ],
+      "title": "CodexWorkboardConfig",
+      "type": "object"
+    },
+    "CompletionPolicy": {
+      "enum": [
+        "owner_approval",
+        "control_plane_complete",
+        "auto_merge"
+      ],
+      "title": "CompletionPolicy",
+      "type": "string"
+    },
+    "ExternalWorkboardConfig": {
+      "additionalProperties": false,
+      "description": "Configuration envelope for a queue adapter supplied by an extension package.",
+      "properties": {
+        "board_prefix": {
+          "default": "captains-chair",
+          "minLength": 1,
+          "title": "Board Prefix",
+          "type": "string"
+        },
+        "workers": {
+          "$ref": "#/$defs/WorkerAssignments"
+        },
+        "worker_models": {
+          "$ref": "#/$defs/WorkerModelAssignments",
+          "default": {
+            "captain": "codex/gpt-5.5",
+            "coder": "codex/gpt-5.3-codex",
+            "reviewer": "codex/gpt-5.5",
+            "tester": "codex/gpt-5.3-codex",
+            "ux_reviewer": "codex/gpt-5.3-codex",
+            "final_reviewer": "codex/gpt-5.5",
+            "merger": "codex/gpt-5.5",
+            "verifier": "codex/gpt-5.5"
+          }
+        },
+        "max_runtime_seconds": {
+          "default": 3600,
+          "maximum": 14400,
+          "minimum": 60,
+          "title": "Max Runtime Seconds",
+          "type": "integer"
+        },
+        "max_retries": {
+          "default": 2,
+          "maximum": 10,
+          "minimum": 0,
+          "title": "Max Retries",
+          "type": "integer"
+        },
+        "require_live_completion_validation": {
+          "default": true,
+          "title": "Require Live Completion Validation",
+          "type": "boolean"
+        },
+        "kind": {
+          "minLength": 1,
+          "title": "Kind",
+          "type": "string"
+        },
+        "executable": {
+          "minLength": 1,
+          "title": "Executable",
+          "type": "string"
+        },
+        "settings": {
+          "additionalProperties": true,
+          "title": "Settings",
+          "type": "object"
+        }
+      },
+      "required": [
+        "workers",
+        "kind",
+        "executable"
+      ],
+      "title": "ExternalWorkboardConfig",
+      "type": "object"
+    },
+    "HarnessConfig": {
+      "additionalProperties": false,
+      "description": "Runtime-neutral harness connection settings.\n\nBuilt-in kinds are validated by the harness registry. Keeping the kind\nopen here lets an installed adapter package add a new runtime without\nchanging the core configuration model.",
+      "properties": {
+        "kind": {
+          "minLength": 1,
+          "title": "Kind",
+          "type": "string"
+        },
+        "executable": {
+          "minLength": 1,
+          "title": "Executable",
+          "type": "string"
+        },
+        "default_agent": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Default Agent"
+        },
+        "timeout_seconds": {
+          "default": 3600,
+          "maximum": 14400,
+          "minimum": 30,
+          "title": "Timeout Seconds",
+          "type": "integer"
+        },
+        "settings": {
+          "additionalProperties": true,
+          "title": "Settings",
+          "type": "object"
+        }
+      },
+      "required": [
+        "kind",
+        "executable"
+      ],
+      "title": "HarnessConfig",
+      "type": "object"
+    },
+    "HermesWorkboardConfig": {
+      "additionalProperties": false,
+      "description": "Reserved configuration shape for a future Hermes task/session adapter.",
+      "properties": {
+        "board_prefix": {
+          "default": "captains-chair",
+          "minLength": 1,
+          "title": "Board Prefix",
+          "type": "string"
+        },
+        "workers": {
+          "$ref": "#/$defs/WorkerAssignments"
+        },
+        "worker_models": {
+          "$ref": "#/$defs/WorkerModelAssignments",
+          "default": {
+            "captain": "codex/gpt-5.5",
+            "coder": "codex/gpt-5.3-codex",
+            "reviewer": "codex/gpt-5.5",
+            "tester": "codex/gpt-5.3-codex",
+            "ux_reviewer": "codex/gpt-5.3-codex",
+            "final_reviewer": "codex/gpt-5.5",
+            "merger": "codex/gpt-5.5",
+            "verifier": "codex/gpt-5.5"
+          }
+        },
+        "max_runtime_seconds": {
+          "default": 3600,
+          "maximum": 14400,
+          "minimum": 60,
+          "title": "Max Runtime Seconds",
+          "type": "integer"
+        },
+        "max_retries": {
+          "default": 2,
+          "maximum": 10,
+          "minimum": 0,
+          "title": "Max Retries",
+          "type": "integer"
+        },
+        "require_live_completion_validation": {
+          "default": true,
+          "title": "Require Live Completion Validation",
+          "type": "boolean"
+        },
+        "kind": {
+          "const": "hermes_workboard",
+          "default": "hermes_workboard",
+          "title": "Kind",
+          "type": "string"
+        },
+        "executable": {
+          "default": "hermes",
+          "title": "Executable",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workers"
+      ],
+      "title": "HermesWorkboardConfig",
+      "type": "object"
+    },
+    "ModelPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "baseline": {
+          "$ref": "#/$defs/RoleModels"
+        },
+        "planner": {
+          "$ref": "#/$defs/RoleModels"
+        },
+        "coder": {
+          "$ref": "#/$defs/RoleModels"
+        },
+        "reviewer": {
+          "$ref": "#/$defs/RoleModels"
+        },
+        "tester": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RoleModels"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "final_reviewer": {
+          "$ref": "#/$defs/RoleModels"
+        },
+        "ux_reviewer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RoleModels"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "baseline",
+        "planner",
+        "coder",
+        "reviewer",
+        "final_reviewer"
+      ],
+      "title": "ModelPolicy",
+      "type": "object"
+    },
+    "ModelTarget": {
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "minLength": 1,
+          "title": "Model",
+          "type": "string"
+        },
+        "agent": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Agent"
+        },
+        "thinking": {
+          "default": "high",
+          "enum": [
+            "off",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "title": "Thinking",
+          "type": "string"
+        }
+      },
+      "required": [
+        "model"
+      ],
+      "title": "ModelTarget",
+      "type": "object"
+    },
+    "NotificationConfig": {
+      "additionalProperties": false,
+      "description": "Built-in delivery settings plus an extension-owned settings envelope.",
+      "properties": {
+        "kind": {
+          "default": "stdout",
+          "minLength": 1,
+          "title": "Kind",
+          "type": "string"
+        },
+        "route": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Route"
+        },
+        "webhook_env": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Webhook Env"
+        },
+        "executable": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Executable"
+        },
+        "settings": {
+          "additionalProperties": true,
+          "title": "Settings",
+          "type": "object"
+        }
+      },
+      "title": "NotificationConfig",
+      "type": "object"
+    },
+    "OpenClawWorkboardConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "board_prefix": {
+          "default": "captains-chair",
+          "minLength": 1,
+          "title": "Board Prefix",
+          "type": "string"
+        },
+        "workers": {
+          "$ref": "#/$defs/WorkerAssignments"
+        },
+        "worker_models": {
+          "$ref": "#/$defs/WorkerModelAssignments",
+          "default": {
+            "captain": "codex/gpt-5.5",
+            "coder": "codex/gpt-5.3-codex",
+            "reviewer": "codex/gpt-5.5",
+            "tester": "codex/gpt-5.3-codex",
+            "ux_reviewer": "codex/gpt-5.3-codex",
+            "final_reviewer": "codex/gpt-5.5",
+            "merger": "codex/gpt-5.5",
+            "verifier": "codex/gpt-5.5"
+          }
+        },
+        "max_runtime_seconds": {
+          "default": 3600,
+          "maximum": 14400,
+          "minimum": 60,
+          "title": "Max Runtime Seconds",
+          "type": "integer"
+        },
+        "max_retries": {
+          "default": 2,
+          "maximum": 10,
+          "minimum": 0,
+          "title": "Max Retries",
+          "type": "integer"
+        },
+        "require_live_completion_validation": {
+          "default": true,
+          "title": "Require Live Completion Validation",
+          "type": "boolean"
+        },
+        "kind": {
+          "const": "openclaw_workboard",
+          "default": "openclaw_workboard",
+          "title": "Kind",
+          "type": "string"
+        },
+        "executable": {
+          "default": "openclaw",
+          "title": "Executable",
+          "type": "string"
+        },
+        "captains_chair_command": {
+          "default": [
+            "captains_chair"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "title": "Captains Chair Command",
+          "type": "array"
+        },
+        "auth_source_agent": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Auth Source Agent"
+        },
+        "dispatch_timeout_seconds": {
+          "default": 120,
+          "maximum": 900,
+          "minimum": 10,
+          "title": "Dispatch Timeout Seconds",
+          "type": "integer"
+        },
+        "session_limit": {
+          "default": 1000,
+          "maximum": 10000,
+          "minimum": 1,
+          "title": "Session Limit",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "workers"
+      ],
+      "title": "OpenClawWorkboardConfig",
+      "type": "object"
+    },
+    "OperationMode": {
+      "enum": [
+        "disabled",
+        "advisory",
+        "supervised",
+        "autonomous"
+      ],
+      "title": "OperationMode",
+      "type": "string"
+    },
+    "RepoConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "full_name": {
+          "pattern": "^[^/\\s]+/[^/\\s]+$",
+          "title": "Full Name",
+          "type": "string"
+        },
+        "local_path": {
+          "format": "path",
+          "title": "Local Path",
+          "type": "string"
+        },
+        "default_branch": {
+          "default": "main",
+          "title": "Default Branch",
+          "type": "string"
+        },
+        "operation_mode": {
+          "$ref": "#/$defs/OperationMode",
+          "default": "advisory"
+        },
+        "completion_policy": {
+          "$ref": "#/$defs/CompletionPolicy",
+          "default": "owner_approval"
+        },
+        "allow_autonomous_merge": {
+          "default": false,
+          "title": "Allow Autonomous Merge",
+          "type": "boolean"
+        },
+        "canonical_docs": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Canonical Docs",
+          "type": "array"
+        },
+        "planning_doc": {
+          "title": "Planning Doc",
+          "type": "string"
+        },
+        "project_manifest": {
+          "default": ".captains-chair/project.yaml",
+          "title": "Project Manifest",
+          "type": "string"
+        },
+        "require_project_manifest": {
+          "default": false,
+          "title": "Require Project Manifest",
+          "type": "boolean"
+        },
+        "checks": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Checks",
+          "type": "array"
+        },
+        "docs_checks": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Docs Checks",
+          "type": "array"
+        },
+        "ux_paths": {
+          "default": [
+            "frontend/",
+            "*.tsx",
+            "*.jsx",
+            "*.css",
+            "*.html"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "title": "Ux Paths",
+          "type": "array"
+        },
+        "ux_enabled": {
+          "default": true,
+          "title": "Ux Enabled",
+          "type": "boolean"
+        },
+        "notification": {
+          "$ref": "#/$defs/NotificationConfig",
+          "default": {
+            "kind": "stdout",
+            "route": null,
+            "webhook_env": null,
+            "executable": null,
+            "settings": {}
+          }
+        },
+        "approval_whitelist": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ActionKind"
+          },
+          "title": "Approval Whitelist",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "max_parallel_prs": {
+          "default": 1,
+          "maximum": 10,
+          "minimum": 1,
+          "title": "Max Parallel Prs",
+          "type": "integer"
+        },
+        "deploy_is_merge_gate": {
+          "default": false,
+          "title": "Deploy Is Merge Gate",
+          "type": "boolean"
+        },
+        "preserved_prs": {
+          "default": [],
+          "items": {
+            "type": "integer"
+          },
+          "title": "Preserved Prs",
+          "type": "array"
+        },
+        "orchestrator": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Orchestrator"
+        },
+        "orchestration_board": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Orchestration Board"
+        }
+      },
+      "required": [
+        "full_name",
+        "local_path",
+        "planning_doc"
+      ],
+      "title": "RepoConfig",
+      "type": "object"
+    },
+    "RoleModels": {
+      "additionalProperties": false,
+      "properties": {
+        "primary": {
+          "$ref": "#/$defs/ModelTarget"
+        },
+        "fallbacks": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ModelTarget"
+          },
+          "title": "Fallbacks",
+          "type": "array"
+        },
+        "allow_fallback": {
+          "default": true,
+          "title": "Allow Fallback",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "primary"
+      ],
+      "title": "RoleModels",
+      "type": "object"
+    },
+    "UsageConfig": {
+      "additionalProperties": false,
+      "description": "Accounting is best-effort; unknown provider telemetry stays unknown.",
+      "properties": {
+        "rates": {
+          "additionalProperties": {
+            "$ref": "#/$defs/UsageRate"
+          },
+          "title": "Rates",
+          "type": "object"
+        },
+        "daily_budget_credits": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Daily Budget Credits"
+        },
+        "block_on_unknown": {
+          "default": true,
+          "title": "Block On Unknown",
+          "type": "boolean"
+        },
+        "allow_incomplete_telemetry": {
+          "default": false,
+          "title": "Allow Incomplete Telemetry",
+          "type": "boolean"
+        },
+        "retention_days": {
+          "default": 90,
+          "maximum": 3650,
+          "minimum": 1,
+          "title": "Retention Days",
+          "type": "integer"
+        }
+      },
+      "title": "UsageConfig",
+      "type": "object"
+    },
+    "UsageRate": {
+      "additionalProperties": false,
+      "description": "Optional ChatGPT/Codex credit rates, expressed per million tokens.",
+      "properties": {
+        "input_credits_per_million": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Input Credits Per Million",
+          "type": "number"
+        },
+        "cached_input_credits_per_million": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Cached Input Credits Per Million",
+          "type": "number"
+        },
+        "output_credits_per_million": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Output Credits Per Million",
+          "type": "number"
+        }
+      },
+      "title": "UsageRate",
+      "type": "object"
+    },
+    "WorkerAssignments": {
+      "additionalProperties": false,
+      "properties": {
+        "captain": {
+          "minLength": 1,
+          "title": "Captain",
+          "type": "string"
+        },
+        "coder": {
+          "minLength": 1,
+          "title": "Coder",
+          "type": "string"
+        },
+        "reviewer": {
+          "minLength": 1,
+          "title": "Reviewer",
+          "type": "string"
+        },
+        "tester": {
+          "minLength": 1,
+          "title": "Tester",
+          "type": "string"
+        },
+        "ux_reviewer": {
+          "minLength": 1,
+          "title": "Ux Reviewer",
+          "type": "string"
+        },
+        "final_reviewer": {
+          "minLength": 1,
+          "title": "Final Reviewer",
+          "type": "string"
+        },
+        "merger": {
+          "minLength": 1,
+          "title": "Merger",
+          "type": "string"
+        },
+        "verifier": {
+          "minLength": 1,
+          "title": "Verifier",
+          "type": "string"
+        }
+      },
+      "required": [
+        "captain",
+        "coder",
+        "reviewer",
+        "tester",
+        "ux_reviewer",
+        "final_reviewer",
+        "merger",
+        "verifier"
+      ],
+      "title": "WorkerAssignments",
+      "type": "object"
+    },
+    "WorkerModelAssignments": {
+      "additionalProperties": false,
+      "properties": {
+        "captain": {
+          "default": "codex/gpt-5.5",
+          "title": "Captain",
+          "type": "string"
+        },
+        "coder": {
+          "default": "codex/gpt-5.3-codex",
+          "title": "Coder",
+          "type": "string"
+        },
+        "reviewer": {
+          "default": "codex/gpt-5.5",
+          "title": "Reviewer",
+          "type": "string"
+        },
+        "tester": {
+          "default": "codex/gpt-5.3-codex",
+          "title": "Tester",
+          "type": "string"
+        },
+        "ux_reviewer": {
+          "default": "codex/gpt-5.3-codex",
+          "title": "Ux Reviewer",
+          "type": "string"
+        },
+        "final_reviewer": {
+          "default": "codex/gpt-5.5",
+          "title": "Final Reviewer",
+          "type": "string"
+        },
+        "merger": {
+          "default": "codex/gpt-5.5",
+          "title": "Merger",
+          "type": "string"
+        },
+        "verifier": {
+          "default": "codex/gpt-5.5",
+          "title": "Verifier",
+          "type": "string"
+        }
+      },
+      "title": "WorkerModelAssignments",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "const": 1,
+      "title": "Version",
+      "type": "integer"
+    },
+    "state_dir": {
+      "format": "path",
+      "title": "State Dir",
+      "type": "string"
+    },
+    "artifact_dir": {
+      "format": "path",
+      "title": "Artifact Dir",
+      "type": "string"
+    },
+    "harnesses": {
+      "additionalProperties": {
+        "$ref": "#/$defs/HarnessConfig"
+      },
+      "title": "Harnesses",
+      "type": "object"
+    },
+    "orchestrators": {
+      "additionalProperties": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/OpenClawWorkboardConfig"
+          },
+          {
+            "$ref": "#/$defs/HermesWorkboardConfig"
+          },
+          {
+            "$ref": "#/$defs/CodexWorkboardConfig"
+          },
+          {
+            "$ref": "#/$defs/ExternalWorkboardConfig"
+          }
+        ]
+      },
+      "title": "Orchestrators",
+      "type": "object"
+    },
+    "models": {
+      "$ref": "#/$defs/ModelPolicy"
+    },
+    "harness_model_overrides": {
+      "additionalProperties": {
+        "$ref": "#/$defs/ModelPolicy"
+      },
+      "title": "Harness Model Overrides",
+      "type": "object"
+    },
+    "usage": {
+      "$ref": "#/$defs/UsageConfig",
+      "default": {
+        "rates": {},
+        "daily_budget_credits": null,
+        "block_on_unknown": true,
+        "allow_incomplete_telemetry": false,
+        "retention_days": 90
+      }
+    },
+    "repos": {
+      "items": {
+        "$ref": "#/$defs/RepoConfig"
+      },
+      "title": "Repos",
+      "type": "array"
+    }
+  },
+  "required": [
+    "version",
+    "state_dir",
+    "artifact_dir",
+    "harnesses",
+    "models",
+    "repos"
+  ],
+  "title": "AppConfig",
+  "type": "object"
+}
