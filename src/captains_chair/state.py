@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
 import uuid
 from collections.abc import Generator
@@ -77,6 +78,26 @@ ALLOWED_TRANSITIONS: dict[RunState, frozenset[RunState]] = {
 
 class LeaseBusyError(RuntimeError):
     pass
+
+
+def _cli_owner_process_alive(owner: str) -> bool | None:
+    """Return process liveness for local CLI leases; unknown owners stay fail-closed."""
+    parts = owner.split(":")
+    if len(parts) < 3 or parts[0] != "cli":
+        return None
+    try:
+        pid = int(parts[2])
+    except ValueError:
+        return None
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
 
 
 def _usage_attempt_index(
@@ -625,7 +646,10 @@ class StateStore:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute("SELECT owner,expires_at FROM leases WHERE repo = ?", (repo,)).fetchone()
             if row and datetime.fromisoformat(row["expires_at"]) > now and row["owner"] != owner:
-                raise LeaseBusyError(f"repository lease is held by {row['owner']}")
+                existing_owner = str(row["owner"])
+                if _cli_owner_process_alive(existing_owner) is not False:
+                    raise LeaseBusyError(f"repository lease is held by {existing_owner}")
+                conn.execute("DELETE FROM leases WHERE repo = ? AND owner = ?", (repo, existing_owner))
             conn.execute(
                 "INSERT INTO leases(repo,owner,expires_at) VALUES(?,?,?) "
                 "ON CONFLICT(repo) DO UPDATE SET owner=excluded.owner, expires_at=excluded.expires_at",

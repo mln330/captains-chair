@@ -1,3 +1,4 @@
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -81,6 +82,22 @@ def test_invalid_transition_and_overlapping_lease_fail(tmp_path: Path) -> None:
         pytest.raises(LeaseBusyError),
         state.lease("example/project", "second"),
     ):
+        pass
+
+
+def test_dead_cli_lease_is_reclaimed_after_process_exit(tmp_path: Path) -> None:
+    state = StateStore(tmp_path / "state.db")
+    with state._connect() as conn:
+        conn.execute(
+            "INSERT INTO leases(repo,owner,expires_at) VALUES(?,?,?)",
+            (
+                "example/project",
+                "cli:reconcile:99999999:dead-process",
+                (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+            ),
+        )
+
+    with state.lease("example/project", "cli:reconcile:12345678:new-process"):
         pass
 
 

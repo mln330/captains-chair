@@ -425,6 +425,44 @@ def test_malformed_success_output_fails_closed() -> None:
         adapter.diagnostics()
 
 
+def test_diagnostics_for_board_filters_global_workboard_results() -> None:
+    def runner(
+        command: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        input_text: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        del command, cwd, input_text, timeout
+        return CommandResult(
+            0,
+            json.dumps(
+                {
+                    "diagnostics": [
+                        {
+                            "card": {
+                                "id": "old-card",
+                                "metadata": {"automation": {"boardId": "old-board"}},
+                            },
+                            "diagnostics": [{"kind": "stale"}],
+                        },
+                        {
+                            "card": {
+                                "id": "current-card",
+                                "metadata": {"automation": {"boardId": "current-board"}},
+                            },
+                            "diagnostics": [{"kind": "current"}],
+                        },
+                    ]
+                }
+            ),
+            "",
+        )
+
+    result = OpenClawWorkboardAdapter(config(), runner).diagnostics_for_board("current-board")
+    assert [entry["card"]["id"] for entry in result["diagnostics"]] == ["current-card"]
+
+
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     (

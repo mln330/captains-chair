@@ -188,6 +188,27 @@ class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
     def diagnostics(self) -> dict[str, Any]:
         return self._rpc("workboard.cards.diagnostics.refresh", {})
 
+    def diagnostics_for_board(self, board_id: str) -> dict[str, Any]:
+        """Limit global Workboard diagnostics to cards owned by this board."""
+        payload = self.diagnostics()
+        raw = payload.get("diagnostics")
+        if not isinstance(raw, list):
+            return payload
+        filtered: list[dict[str, Any]] = []
+        for value in cast(list[object], raw):
+            if not isinstance(value, dict):
+                continue
+            entry = cast(dict[str, Any], value)
+            card = entry.get("card")
+            if not isinstance(card, dict):
+                continue
+            metadata = card.get("metadata")
+            automation = metadata.get("automation") if isinstance(metadata, dict) else None
+            candidate = automation.get("boardId") if isinstance(automation, dict) else None
+            if str(candidate or "").lower() == board_id.lower():
+                filtered.append(entry)
+        return {**payload, "diagnostics": filtered}
+
     def recover_ended_workers(self, board_id: str, cards: list[QueueCard]) -> tuple[str, ...]:
         """Reconcile ended sessions and expired claims without completion proof."""
         del board_id

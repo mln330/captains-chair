@@ -583,7 +583,7 @@ def _orchestration_preflight(
         warnings.append("runtime does not expose a worker model health check")
 
     try:
-        diagnostics = adapter.diagnostics()
+        diagnostics = _board_diagnostics(adapter, board_id)
         diagnostics_status = str(diagnostics.get("status") or "ok").lower()
         findings = _preflight_diagnostic_rows(diagnostics)
         finding_count = len(findings)
@@ -732,6 +732,17 @@ def _preflight_diagnostic_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
                 }
             )
     return rows[:25]
+
+
+def _board_diagnostics(adapter: Any, board_id: str) -> dict[str, Any]:
+    """Prefer board-filtered diagnostics while keeping portable adapters compatible."""
+    board_method = getattr(adapter, "diagnostics_for_board", None)
+    if callable(board_method):
+        value = board_method(board_id)
+        if isinstance(value, dict):
+            return value
+    value = adapter.diagnostics()
+    return value if isinstance(value, dict) else {}
 
 
 def cmd_doctor(config: AppConfig) -> int:
@@ -1015,7 +1026,7 @@ def _run_orchestrate_reconcile_live(
         )
         cards = orchestrator.adapter.list_cards(board_id)
         try:
-            diagnostics = orchestrator.adapter.diagnostics()
+            diagnostics = _board_diagnostics(orchestrator.adapter, board_id)
         except Exception as exc:
             diagnostics = {"status": "degraded", "error": str(exc)}
         events = project_queue_events(
@@ -1522,7 +1533,7 @@ def main(argv: list[str] | None = None) -> int:
                     ),
                 )
             elif args.action == "diagnostics":
-                print(json.dumps(orchestrator.adapter.diagnostics(), indent=2, default=str))
+                print(json.dumps(_board_diagnostics(orchestrator.adapter, board_id), indent=2, default=str))
             else:
                 cards = orchestrator.adapter.list_cards(board_id)
                 print(
