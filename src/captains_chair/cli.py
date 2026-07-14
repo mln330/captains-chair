@@ -738,7 +738,7 @@ def _board_diagnostics(adapter: Any, board_id: str) -> dict[str, Any]:
     """Prefer board-filtered diagnostics while keeping portable adapters compatible."""
     board_method = getattr(adapter, "diagnostics_for_board", None)
     if callable(board_method):
-        value: object = cast(object, board_method(board_id))
+        value: object = board_method(board_id)
         if isinstance(value, dict):
             return cast(dict[str, Any], value)
     value = cast(object, adapter.diagnostics())
