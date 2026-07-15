@@ -83,14 +83,8 @@ jobs:
         working-directory: openclaw-plugin
       - run: npx playwright install --with-deps chromium
         working-directory: openclaw-plugin
-      - run: npm run test:e2e -- --update-snapshots
+      - run: npm run test:e2e
         working-directory: openclaw-plugin
-      - name: Upload OpenClaw screenshot baselines
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: openclaw-plugin-snapshots-${{ github.run_id }}
-          path: openclaw-plugin/tests-e2e/dashboard.spec.ts-snapshots
       - run: npm audit --omit=optional --audit-level=high
         working-directory: openclaw-plugin
 
