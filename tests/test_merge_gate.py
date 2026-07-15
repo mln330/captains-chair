@@ -82,6 +82,22 @@ def test_final_review_head_does_not_reuse_old_marker_after_new_pass_without_mark
     assert final_review_head(card) is None
 
 
+def test_final_review_head_ignores_malformed_proof_shapes() -> None:
+    malformed = final_card().model_copy(update={"metadata": {"proof": "not-a-list"}})
+    assert final_review_head(malformed) is None
+    mixed = final_card().model_copy(
+        update={
+            "metadata": {
+                "proof": [
+                    {"status": "passed", "note": "AUTO_MERGE_ALLOWED:abcdef1"},
+                    "not-a-proof-object",
+                ]
+            }
+        }
+    )
+    assert final_review_head(mixed) == "abcdef1"
+
+
 def test_workboard_merge_gate_rejects_stale_final_review(tmp_path: Path) -> None:
     result = evaluate_workboard_merge(
         autonomous_repo(tmp_path),

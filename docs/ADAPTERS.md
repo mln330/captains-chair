@@ -20,7 +20,7 @@ the corresponding registry still validates the adapter before any live operation
   while a concrete model/provider mismatch must fail closed
 - fail closed when structured output or sandbox guarantees are unavailable
 
-OpenClaw and Codex harness adapters are implemented. A Hermes harness should
+OpenClaw is the P0 harness and Codex is the P1 harness. A future harness should
 subclass `HarnessAdapter` and register a builder with `HarnessAdapterRegistry`;
 core planning, policy, prompts, and model-attempt auditing do not change. The
 registry validates the returned object before a model invocation begins, so a
@@ -31,13 +31,19 @@ kind is still unusable until a matching registry builder is installed.
 Direct model admission also accepts an optional runtime telemetry synchronizer.
 The OpenClaw CLI supplies one backed by `openclaw sessions`; it reconciles the
 previous call before the next direct Captain call is admitted and suppresses the call
-when the telemetry endpoint is degraded. A Hermes or standalone Codex runtime
+when the telemetry endpoint is degraded. A Codex or future runtime
 can provide the same callback from its native usage ledger without importing
 OpenClaw code into the engine.
 
-## Work Queue Adapter
+## Worker Orchestration And Tracking
 
-`WorkQueueAdapter` maps the portable workflow DAG onto a runtime's task primitives. It receives `QueueCardSpec` records containing stable idempotency keys, parent card IDs, assigned roles, isolated workspace references, retry limits, source links, and proof requirements.
+`WorkerOrchestratorAdapter` maps the portable workflow DAG onto a runtime's worker
+primitives. `WorkTrackerAdapter` is a separate optional boundary for boards,
+cards, and human-facing task views. The core can use `DirectOrchestrator` with
+SQLite and no board; OpenClaw may add its built-in Workboard through the tracker
+adapter. It receives work-item records containing stable idempotency keys, parent
+item IDs, assigned roles, isolated workspace references, retry limits, source
+links, and proof requirements.
 
 An adapter must implement:
 
@@ -86,22 +92,21 @@ repository operation. If a runtime preserves multiple passed proof records, the
 latest passed record must carry the policy marker and is authoritative; a newer
 passed record without that marker invalidates older reviewed SHAs.
 
-OpenClaw maps these operations only to the built-in Workboard Gateway RPC and
-its worker sessions. A future Hermes adapter may map them to Hermes tasks and
-worker sessions. A standalone Codex adapter may use SQLite queue rows plus
-disposable `codex exec` sessions. Neither adapter may move merge policy,
+OpenClaw maps worker dispatch to OpenClaw workers and may map task visibility to
+the built-in Workboard Gateway RPC. The P1 Codex adapter may use SQLite rows plus
+disposable `codex exec` sessions. A future runtime may provide either or both
+boundaries. Neither adapter may move merge policy,
 blocker classification, workflow topology, GitHub gates, or proof validation
 out of CAPTAINS_CHAIR core.
 
-Queue construction is centralized in `captains_chair.runtime.build_work_queue_adapter`
-and `build_work_queue_orchestrator`. The default registry contains OpenClaw;
-an integration can register a Hermes or standalone Codex builder with
-`RuntimeAdapterRegistry` (or `register_work_queue_adapter`) without changing
-the workflow engine or policy code. The adapter must implement the same
-`WorkQueueAdapter` and `WorkerLifecycleAdapter` contracts. The registry validates
-both surfaces when the adapter is constructed, so missing queue or claimed-worker
-operations fail before a live workflow starts. Its conformance fixtures should
-remain unchanged.
+Construction is centralized in `captains_chair.runtime` and the runtime-neutral
+registry. The default OpenClaw path can select Workboard-backed dispatch, while
+`DirectOrchestrator` is the board-free fallback. Codex and future integrations
+register builders without changing the workflow engine or policy code. The
+orchestrator must implement the `WorkerOrchestratorAdapter` and
+`WorkerLifecycleAdapter` contracts; a tracker, when present, implements
+`WorkTrackerAdapter`. The registry validates each selected surface before a live
+workflow starts. Conformance fixtures remain runtime-neutral.
 
 Packaged adapters may expose a callable registrar through the entry-point groups
 `captains_chair.runtime_adapters`, `captains_chair.harness_adapters`, and
@@ -117,10 +122,18 @@ and Discord webhook delivery remain unchanged. An extension may use
 `NotificationConfig.settings` for its own validated options; an unregistered
 notification kind fails closed instead of being guessed as a webhook.
 
+`NotifierAdapter` is the runtime-neutral delivery contract; `Notifier` remains a
+compatibility name. `SchedulerAdapter` is the corresponding install contract for
+cron and hosted schedulers. `UsageTelemetryAdapter` synchronizes provider-native
+usage before a model call, and `InteractionAdapter` owns planning handoffs and
+durable readiness/checkpoint answers. OpenClaw and Codex may provide different
+implementations without changing course or policy logic; the deterministic native
+implementations remain the default.
+
 Schedulers use the same registry boundary through `SchedulerAdapterRegistry` and
 the `captains_chair.scheduler_adapters` entry-point group. OpenClaw cron, system cron,
-systemd, and Windows Task Scheduler remain built in. A future Hermes or hosted
-Codex scheduler can register its own kind and reuse the same `ScheduleSpec`; the
+systemd, and Windows Task Scheduler remain built in. A future hosted runtime can
+register its own kind and reuse the same `ScheduleSpec`; the
 CLI no longer needs a new hard-coded branch for that runtime. Render-only
 behavior is reserved for the built-in portable renderers; registered runtime
 schedulers implement `install(spec)` and must preserve idempotency and the
@@ -130,16 +143,16 @@ For example, a future adapter package can publish these entry points:
 
 ```toml
 [project.entry-points."captains_chair.runtime_adapters"]
-hermes = "captains_chair_hermes:register_runtime"
+future_runtime = "captains_chair_future_runtime:register_runtime"
 
 [project.entry-points."captains_chair.harness_adapters"]
-hermes = "captains_chair_hermes:register_harness"
+future_runtime = "captains_chair_future_runtime:register_harness"
 
 [project.entry-points."captains_chair.notifier_adapters"]
-hermes = "captains_chair_hermes:register_notifier"
+future_runtime = "captains_chair_future_runtime:register_notifier"
 
 [project.entry-points."captains_chair.scheduler_adapters"]
-hermes = "captains_chair_hermes:register_scheduler"
+future_runtime = "captains_chair_future_runtime:register_scheduler"
 ```
 
 Each registrar receives its registry and registers only the adapter builder;
@@ -158,15 +171,28 @@ add-label, retarget (milestone and/or assignees), and close operations; these ar
 typed deterministic actions so a runtime adapter never needs to reimplement GitHub
 issue semantics.
 
+The provider also exposes `provision_greenfield` for the greenfield course path. It is
+called only after readiness and owner engagement have been recorded. The built-in
+implementation uses `gh repo create --source --push` after initializing a committed
+local seed, then reads the repository back to prove creation. Providers for other Git
+hosts can implement the same approval boundary without importing GitHub CLI behavior
+into the core.
+
 ## Runtime Mapping
 
-| Surface | OpenClaw V1 | Future Hermes | Standalone Codex |
+| Surface | OpenClaw P0 | Codex P1 | Future runtimes |
 | --- | --- | --- | --- |
-| Harness | `openclaw agent --json` | Hermes session/task runner | `codex exec --json` |
-| Queue | Built-in Workboard Gateway RPC | Hermes task board/session leases | SQLite queue with worker processes |
+| Harness | `openclaw agent --json` | `codex exec --json` | Runtime harness adapter |
+| Orchestration | OpenClaw workers | `DirectOrchestrator` plus worker processes | Runtime orchestrator adapter |
+| Tracking | Optional Workboard Gateway RPC | Optional tracker adapter | Optional board/tracker adapter |
 | GitHub | `GhGitHubProvider` | Same provider or App client | Same provider or App client |
-| Notifications | OpenClaw Discord route | Hermes/Discord adapter | Discord webhook/stdout |
-| Scheduler | OpenClaw cron | Hermes scheduler | cron/systemd/Task Scheduler |
+| Notifications | OpenClaw Discord route | Discord webhook/stdout | Runtime notifier adapter |
+| Scheduler | OpenClaw cron | cron/systemd/Task Scheduler | Runtime scheduler adapter |
+
+The Codex plugin's `scripts/mcp_server.py` and `scripts/serve_ui.py` are host
+adapters, not alternate policy engines. The MCP bridge delegates to the
+installed CLI, and the standalone UI delegates to the same sidecar methods used
+by the OpenClaw dashboard.
 
 The installed `captains_chair.conformance` module exposes the runtime-neutral workflow
 scenario. Each new production adapter should provide its queue factory plus a
@@ -183,7 +209,10 @@ unrelated ready work.
 
 ## Shared Configuration
 
-Runtime configuration should inherit `WorkerOrchestrationConfig`, then add only runtime-specific connection and dispatch fields. The schema already reserves typed `hermes_workboard` and `codex_workboard` entries, but the CLI fails clearly if either is selected until its adapter is installed. The worker roles and retry policy remain common:
+Runtime configuration should inherit `WorkerOrchestrationConfig`, then add only
+runtime-specific connection and dispatch fields. Workboard configuration belongs
+to the optional tracker adapter; it is never a required core field. The worker
+roles and retry policy remain common:
 
 - Captain recovery
 - coder/repair

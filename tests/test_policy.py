@@ -4,13 +4,19 @@ import pytest
 
 from captains_chair.models import (
     ActionKind,
+    ActionScope,
     CompletionPolicy,
     FinalVerdict,
     OperationMode,
     PlanDecision,
     PullRequestGate,
 )
-from captains_chair.policy import evaluate_action, evaluate_control_plane_completion, evaluate_merge
+from captains_chair.policy import (
+    evaluate_action,
+    evaluate_control_plane_completion,
+    evaluate_merge,
+    evaluate_owner_completion,
+)
 from tests.helpers import repo_config
 
 
@@ -40,6 +46,37 @@ def test_advisory_and_supervised_actions_require_policy_permission(tmp_path: Pat
     assert not evaluate_action(supervised, decision(), execute=True, shadow=False).allowed
     approved = evaluate_action(supervised, decision(), execute=True, shadow=False, approved=True)
     assert approved.allowed
+
+
+@pytest.mark.parametrize(
+    ("item", "execute", "shadow", "reason"),
+    (
+        (decision(ActionKind.REPORT_ONLY), True, False, "read-only action"),
+        (decision(ActionKind.NO_ACTION), True, False, "read-only action"),
+        (decision(), False, False, "live execution was not requested"),
+        (decision(), True, True, "shadow mode records decisions but never mutates"),
+        (
+            PlanDecision(
+                action=ActionKind.MAINTENANCE,
+                summary="Repair control-plane state",
+                reason="The control plane needs maintenance",
+                scope=ActionScope.CONTROL_PLANE,
+            ),
+            True,
+            False,
+            "control-plane system maintenance",
+        ),
+    ),
+)
+def test_non_mutating_action_paths_are_deterministic(
+    tmp_path: Path, item: PlanDecision, execute: bool, shadow: bool, reason: str
+) -> None:
+    result = evaluate_action(
+        repo_config(tmp_path, mode=OperationMode.AUTONOMOUS), item, execute=execute, shadow=shadow
+    )
+
+    assert result.allowed is (reason == "read-only action")
+    assert reason in result.reason
 
 
 def test_disabled_mode_fails_closed_without_owner_attention(tmp_path: Path) -> None:
@@ -246,6 +283,35 @@ def test_only_exact_auto_merge_verdict_can_merge(tmp_path: Path) -> None:
     assert not evaluate_merge(repo, FinalVerdict.AUTO_MERGE_ALLOWED, gate(current_review=False)).allowed
 
 
+@pytest.mark.parametrize(
+    "repo_update, verdict, pr_gate",
+    (
+        ({"operation_mode": OperationMode.DISABLED}, FinalVerdict.AUTO_MERGE_ALLOWED, gate()),
+        ({"completion_policy": CompletionPolicy.OWNER_APPROVAL}, FinalVerdict.AUTO_MERGE_ALLOWED, gate()),
+        ({"operation_mode": OperationMode.SUPERVISED}, FinalVerdict.AUTO_MERGE_ALLOWED, gate()),
+        ({"allow_autonomous_merge": False}, FinalVerdict.AUTO_MERGE_ALLOWED, gate()),
+        ({}, FinalVerdict.AUTO_MERGE_ALLOWED, gate().model_copy(update={"draft": True})),
+        ({}, FinalVerdict.AUTO_MERGE_ALLOWED, gate().model_copy(update={"mergeable": False})),
+        ({}, FinalVerdict.AUTO_MERGE_ALLOWED, gate().model_copy(update={"merge_state": "BEHIND"})),
+        ({}, FinalVerdict.AUTO_MERGE_ALLOWED, gate().model_copy(update={"unresolved_threads": 1})),
+    ),
+)
+def test_merge_fails_closed_for_every_gate(
+    tmp_path: Path,
+    repo_update: dict[str, object],
+    verdict: FinalVerdict,
+    pr_gate: PullRequestGate,
+) -> None:
+    repo = repo_config(tmp_path, mode=OperationMode.AUTONOMOUS, completion=CompletionPolicy.AUTO_MERGE).model_copy(
+        update=repo_update
+    )
+
+    result = evaluate_merge(repo, verdict, pr_gate)
+
+    assert not result.allowed
+    assert result.reason
+
+
 def test_disabled_mode_blocks_all_completion_policies(tmp_path: Path) -> None:
     repo = repo_config(tmp_path, mode=OperationMode.DISABLED, completion=CompletionPolicy.OWNER_APPROVAL)
     assert not evaluate_control_plane_completion(repo, FinalVerdict.CONTROL_PLANE_COMPLETE, gate()).allowed
@@ -256,3 +322,59 @@ def test_control_plane_complete_is_distinct_from_merge(tmp_path: Path) -> None:
     assert evaluate_control_plane_completion(repo, FinalVerdict.CONTROL_PLANE_COMPLETE, gate()).allowed
     assert not evaluate_merge(repo, FinalVerdict.CONTROL_PLANE_COMPLETE, gate()).allowed
     assert not evaluate_control_plane_completion(repo, FinalVerdict.CONTROL_PLANE_COMPLETE, gate(green=False)).allowed
+
+
+@pytest.mark.parametrize(
+    "repo_update, verdict, pr_gate",
+    (
+        ({"completion_policy": CompletionPolicy.OWNER_APPROVAL}, FinalVerdict.CONTROL_PLANE_COMPLETE, gate()),
+        ({}, FinalVerdict.READY_FOR_OWNER, gate()),
+        ({}, FinalVerdict.CONTROL_PLANE_COMPLETE, gate().model_copy(update={"draft": True})),
+        ({}, FinalVerdict.CONTROL_PLANE_COMPLETE, gate().model_copy(update={"mergeable": False})),
+        ({}, FinalVerdict.CONTROL_PLANE_COMPLETE, gate().model_copy(update={"merge_state": "BEHIND"})),
+        ({}, FinalVerdict.CONTROL_PLANE_COMPLETE, gate().model_copy(update={"unresolved_threads": 1})),
+        ({}, FinalVerdict.CONTROL_PLANE_COMPLETE, gate(current_review=False)),
+    ),
+)
+def test_control_plane_completion_fails_closed_for_every_gate(
+    tmp_path: Path,
+    repo_update: dict[str, object],
+    verdict: FinalVerdict,
+    pr_gate: PullRequestGate,
+) -> None:
+    repo = repo_config(
+        tmp_path, mode=OperationMode.AUTONOMOUS, completion=CompletionPolicy.CONTROL_PLANE_COMPLETE
+    ).model_copy(update=repo_update)
+
+    result = evaluate_control_plane_completion(repo, verdict, pr_gate)
+
+    assert not result.allowed
+    assert result.reason
+
+
+@pytest.mark.parametrize(
+    "repo_update, verdict, pr_gate",
+    (
+        ({"completion_policy": CompletionPolicy.CONTROL_PLANE_COMPLETE}, FinalVerdict.READY_FOR_OWNER, gate()),
+        ({}, FinalVerdict.READY_FOR_OWNER, gate().model_copy(update={"draft": True})),
+        ({}, FinalVerdict.READY_FOR_OWNER, gate().model_copy(update={"mergeable": False})),
+        ({}, FinalVerdict.READY_FOR_OWNER, gate().model_copy(update={"merge_state": "BEHIND"})),
+        ({}, FinalVerdict.READY_FOR_OWNER, gate().model_copy(update={"checks_green": False})),
+        ({}, FinalVerdict.READY_FOR_OWNER, gate().model_copy(update={"unresolved_threads": 1})),
+        ({}, FinalVerdict.READY_FOR_OWNER, gate(current_review=False)),
+    ),
+)
+def test_owner_completion_fails_closed_for_every_gate(
+    tmp_path: Path,
+    repo_update: dict[str, object],
+    verdict: FinalVerdict,
+    pr_gate: PullRequestGate,
+) -> None:
+    repo = repo_config(tmp_path, mode=OperationMode.AUTONOMOUS, completion=CompletionPolicy.OWNER_APPROVAL).model_copy(
+        update=repo_update
+    )
+
+    result = evaluate_owner_completion(repo, verdict, pr_gate)
+
+    assert not result.allowed
+    assert result.reason

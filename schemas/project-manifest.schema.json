@@ -1,0 +1,152 @@
+{
+  "$defs": {
+    "ApplicationSurface": {
+      "enum": [
+        "web_ui",
+        "cli",
+        "api",
+        "library",
+        "data_pipeline",
+        "infrastructure_release",
+        "custom"
+      ],
+      "title": "ApplicationSurface",
+      "type": "string"
+    },
+    "QAProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": 1,
+          "default": 1,
+          "title": "Version",
+          "type": "integer"
+        },
+        "key": {
+          "minLength": 1,
+          "title": "Key",
+          "type": "string"
+        },
+        "title": {
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "surfaces": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ApplicationSurface"
+          },
+          "title": "Surfaces",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "checks": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Checks",
+          "type": "array"
+        },
+        "required_tools": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Required Tools",
+          "type": "array"
+        },
+        "reviewer_role": {
+          "default": "qa_assistant",
+          "title": "Reviewer Role",
+          "type": "string"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "key",
+        "title"
+      ],
+      "title": "QAProfile",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "const": 1,
+      "title": "Version",
+      "type": "integer"
+    },
+    "goal": {
+      "minLength": 10,
+      "title": "Goal",
+      "type": "string"
+    },
+    "canonical_docs": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Canonical Docs",
+      "type": "array"
+    },
+    "planning_doc": {
+      "title": "Planning Doc",
+      "type": "string"
+    },
+    "checks": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Checks",
+      "type": "array"
+    },
+    "required_check_names": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Required Check Names",
+      "type": "array"
+    },
+    "later_phase": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Later Phase",
+      "type": "array"
+    },
+    "surfaces": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ApplicationSurface"
+      },
+      "title": "Surfaces",
+      "type": "array",
+      "uniqueItems": true
+    },
+    "qa_profiles": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/QAProfile"
+      },
+      "title": "Qa Profiles",
+      "type": "array"
+    }
+  },
+  "required": [
+    "version",
+    "goal",
+    "canonical_docs",
+    "planning_doc",
+    "checks"
+  ],
+  "title": "ProjectManifest",
+  "type": "object"
+}

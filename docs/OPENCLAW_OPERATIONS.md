@@ -2,8 +2,9 @@
 
 This is the V1 operating sequence for CAPTAINS_CHAIR on OpenClaw. Repository plans and
 requirements stay in the managed repository. CAPTAINS_CHAIR state, queue evidence, usage
-records, and leases stay in the configured state directory. The Workboard is
-the only V1 worker queue.
+records, and leases stay in the configured state directory. OpenClaw Workboard
+is the preferred P0 worker tracker and orchestration adapter, but the core can
+fall back to `DirectOrchestrator` with no board.
 
 ## Pause Guarantee
 
@@ -36,14 +37,25 @@ expensive evidence collection or model work. If another pass is active, the
 command reports `busy` and exits successfully; the next scheduled pass retries
 without duplicating model calls.
 
+## Greenfield Onboarding
+
+Use **Create from the Chair** in the dashboard for a repository that does not exist
+yet. This creates a local readiness review only. It does not call GitHub, create a
+remote, or push source. The owner answers the course questions and explicitly engages
+the course; only then does `course.approve` seed the README, implementation plan, and
+`.captains-chair/project.yaml`, initialize a committed local source, and ask the GitHub
+provider to create and verify the remote repository. A failed provider call is reported
+as a greenfield provisioning error and the course remains unengaged for retry or repair.
+
 ## Resume Gates
 
 Resume one repository at a time. The following sequence is the minimum gate
 before unattended work:
 
-1. Reconcile usage metadata and inspect `cost_hotspots`, unknown telemetry,
-   stale aggregate totals, route mismatches, failed attempts, and large-context
-   warnings. A hard daily budget is recommended before autonomous mode.
+1. Reconcile usage metadata and inspect `token_hotspots`, unknown telemetry,
+   stale aggregate totals, route mismatches, failed attempts, repeated prompts,
+   and large-context warnings. Configure authoritative daily or per-model token
+   limits before autonomous mode when the runtime exposes complete telemetry.
 2. Confirm `orchestrate health` reports every configured worker model correctly and
    `orchestrate preflight` confirms the configured worker-protocol helper can start.
    This check does not invoke a model. Run `model-check` separately only when
@@ -92,8 +104,9 @@ not suppress unrelated ready work.
 
 ## Runtime Portability
 
-OpenClaw maps this sequence to built-in Workboard Gateway calls. Hermes and
-standalone Codex adapters must implement the same queue and claimed-worker
+OpenClaw maps this sequence to built-in Workboard Gateway calls when enabled;
+otherwise it uses the board-free direct adapter. Direct Codex and
+future adapters must implement the same orchestration and claimed-worker
 contracts, then reuse the shared conformance scenario. They must not copy
 OpenClaw policy into the adapter or change workflow, GitHub gates, blocker
 classification, proof validation, or usage accounting.

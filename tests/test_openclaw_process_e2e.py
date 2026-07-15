@@ -53,10 +53,10 @@ if args[:3] == ["agents", "list", "--json"]:
     emit(
         [
             {"id": "captain", "model": "openai/gpt-5.5"},
-            {"id": "coder", "model": "openai/gpt-5.3-codex"},
+            {"id": "coder", "model": "openai/gpt-5.3-codex-spark"},
             {"id": "reviewer", "model": "openai/gpt-5.5"},
-            {"id": "tester", "model": "openai/gpt-5.3-codex"},
-            {"id": "ux", "model": "openai/gpt-5.3-codex"},
+            {"id": "tester", "model": "openai/gpt-5.3-codex-spark"},
+            {"id": "ux", "model": "openai/gpt-5.3-codex-spark"},
             {"id": "final", "model": "openai/gpt-5.5"},
             {"id": "merge", "model": "openai/gpt-5.5"},
             {"id": "verify", "model": "openai/gpt-5.5"},
@@ -146,10 +146,10 @@ if args[:3] == ["agents", "list", "--json"]:
     emit(
         [
             {"id": "captain", "model": "codex/gpt-5.5"},
-            {"id": "coder", "model": "codex/gpt-5.3-codex"},
+            {"id": "coder", "model": "codex/gpt-5.3-codex-spark"},
             {"id": "reviewer", "model": "codex/gpt-5.5"},
-            {"id": "tester", "model": "codex/gpt-5.3-codex"},
-            {"id": "ux", "model": "codex/gpt-5.3-codex"},
+            {"id": "tester", "model": "codex/gpt-5.3-codex-spark"},
+            {"id": "ux", "model": "codex/gpt-5.3-codex-spark"},
             {"id": "final", "model": "codex/gpt-5.5"},
             {"id": "merge", "model": "codex/gpt-5.5"},
             {"id": "verify", "model": "codex/gpt-5.5"},

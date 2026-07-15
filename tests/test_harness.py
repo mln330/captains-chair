@@ -5,6 +5,7 @@ from typing import Any, TypeVar, cast
 import pytest
 from pydantic import BaseModel
 
+import captains_chair.harness as harness_module
 from captains_chair.command import CommandResult, CommandRunner
 from captains_chair.harness import (
     CodexAdapter,
@@ -30,6 +31,17 @@ from captains_chair.plugins import PluginDiscoveryError
 
 class Output(BaseModel):
     value: str
+
+
+def empty_runner(
+    command: Sequence[str],
+    *,
+    cwd: Path | None = None,
+    input_text: str | None = None,
+    timeout: int = 60,
+) -> CommandResult:
+    del command, cwd, input_text, timeout
+    return CommandResult(0, "", "")
 
 
 OutputModel = TypeVar("OutputModel", bound=BaseModel)
@@ -141,20 +153,20 @@ def test_harness_fails_closed_when_provider_reports_a_different_model() -> None:
 
 def test_harness_accepts_unqualified_provider_model_name() -> None:
     harness = ReportedModelHarness(
-        HarnessConfig(kind="codex", executable="codex"), "gpt-5.3-codex"
+        HarnessConfig(kind="codex", executable="codex"), "gpt-5.3-codex-spark"
     )
 
     result = harness.run(
         prompt="test",
-        models=RoleModels(primary=ModelTarget(model="codex/gpt-5.3-codex")),
+        models=RoleModels(primary=ModelTarget(model="codex/gpt-5.3-codex-spark")),
         role="coder",
         output_model=Output,
         cwd=Path.cwd(),
         writable=False,
     )
 
-    assert result.resolved_model == "codex/gpt-5.3-codex"
-    assert result.attempts[0].reported_model == "gpt-5.3-codex"
+    assert result.resolved_model == "codex/gpt-5.3-codex-spark"
+    assert result.attempts[0].reported_model == "gpt-5.3-codex-spark"
 
 
 def test_openclaw_prompt_contains_exact_output_schema(tmp_path: Path) -> None:
@@ -340,6 +352,142 @@ def test_openclaw_refuses_writable_execution(tmp_path: Path) -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("stdout", "message"),
+    (
+        ('{"result":{"payloads":[]}}', "did not contain text"),
+        ('{"result":{"payloads":[{"text":"not-json"}]}}', "did not contain a JSON object"),
+        ('{"result":{"payloads":[{"text":"{invalid}"}]}}', "invalid OpenClaw structured response"),
+        ('[1, 2]', "not a JSON object"),
+    ),
+)
+def test_openclaw_rejects_malformed_structured_responses(
+    tmp_path: Path,
+    stdout: str,
+    message: str,
+) -> None:
+    def runner(
+        command: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        input_text: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        del command, cwd, input_text, timeout
+        return CommandResult(0, stdout, "")
+
+    adapter = OpenClawAdapter(HarnessConfig(kind="openclaw", executable="openclaw"), runner)
+    with pytest.raises(HarnessExecutionError, match=message):
+        adapter.run(
+            prompt="Return structured output.",
+            models=RoleModels(primary=ModelTarget(model="test")),
+            role="reviewer",
+            output_model=Output,
+            cwd=tmp_path,
+            writable=False,
+        )
+
+
+def test_openclaw_rejects_command_failures_and_oversized_prompts(tmp_path: Path) -> None:
+    def failed_runner(
+        command: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        input_text: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        del command, cwd, input_text, timeout
+        return CommandResult(1, "", "agent failed")
+
+    adapter = OpenClawAdapter(HarnessConfig(kind="openclaw", executable="openclaw"), failed_runner)
+    with pytest.raises(HarnessExecutionError, match="agent failed"):
+        adapter.invoke(
+            prompt="short",
+            model=ModelTarget(model="test"),
+            role="reviewer",
+            output_model=Output,
+            cwd=tmp_path,
+            writable=False,
+            session_id="session",
+        )
+
+    adapter = OpenClawAdapter(HarnessConfig(kind="openclaw", executable="openclaw"), failed_runner)
+    with pytest.raises(HarnessExecutionError, match="command-argument limit"):
+        adapter.invoke(
+            prompt="x" * 111_000,
+            model=ModelTarget(model="test"),
+            role="reviewer",
+            output_model=Output,
+            cwd=tmp_path,
+            writable=False,
+            session_id="session",
+        )
+
+
+def test_codex_rejects_failed_missing_and_invalid_responses(tmp_path: Path) -> None:
+    def runner(
+        command: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        input_text: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        del cwd, timeout
+        args = list(command)
+        output_path = Path(args[args.index("--output-last-message") + 1])
+        if input_text == "failed":
+            return CommandResult(1, "", "codex failed")
+        if input_text == "missing":
+            return CommandResult(0, "", "")
+        output_path.write_text("{invalid}" if input_text == "json-invalid" else "not-json", encoding="utf-8")
+        return CommandResult(0, "", "")
+
+    adapter = CodexAdapter(HarnessConfig(kind="codex", executable="codex"), runner)
+    common: dict[str, Any] = {
+        "models": RoleModels(primary=ModelTarget(model="test")),
+        "role": "coder",
+        "output_model": Output,
+        "cwd": tmp_path,
+        "writable": False,
+    }
+    with pytest.raises(HarnessExecutionError, match="codex failed"):
+        adapter.run(**common, prompt="failed")
+    with pytest.raises(HarnessExecutionError, match="did not write"):
+        adapter.run(**common, prompt="missing")
+    with pytest.raises(HarnessExecutionError, match="response did not contain"):
+        adapter.run(**common, prompt="invalid")
+    with pytest.raises(HarnessExecutionError, match="invalid Codex structured response"):
+        adapter.run(**common, prompt="json-invalid")
+
+
+def test_harness_usage_and_json_helpers_cover_nested_provider_shapes() -> None:
+    assert harness_module._extract_json("```json\n{\"value\": \"ok\"}\n```") == '{"value": "ok"}'  # pyright: ignore[reportPrivateUsage]
+    with pytest.raises(HarnessExecutionError, match="did not contain"):
+        harness_module._extract_json("plain text")  # pyright: ignore[reportPrivateUsage]
+    assert harness_module._nonnegative_int(True) is None  # pyright: ignore[reportPrivateUsage]
+    assert harness_module._nonnegative_int(2.0) == 2  # pyright: ignore[reportPrivateUsage]
+    assert harness_module._nonnegative_int(-1) is None  # pyright: ignore[reportPrivateUsage]
+
+    nested = harness_module._find_usage(  # pyright: ignore[reportPrivateUsage]
+        {
+            "model": "provider/model",
+            "output_tokens_details": {"reasoning_tokens": 4},
+            "inputTokens": 10,
+            "outputTokens": 6,
+            "totalTokens": 16,
+        },
+        source="test",
+    )
+    assert nested is not None and nested.reasoning_tokens == 4
+    candidates = harness_module._find_usage_from_lines(  # pyright: ignore[reportPrivateUsage]
+        "not-json\n{\"usage\":{\"total_tokens\":3}}\n{\"usage\":{\"total_tokens\":9}}",
+        source="test",
+    )
+    assert candidates is not None and candidates.total_tokens == 9
+    assert harness_module._find_usage([], source="test", inherited_model="fallback") is not None  # pyright: ignore[reportPrivateUsage]
+    assert harness_module._find_usage({}, source="test") is None  # pyright: ignore[reportPrivateUsage]
+
+
 def test_hermes_harness_shape_fails_until_adapter_is_installed() -> None:
     with pytest.raises(ValueError, match="no installed adapter"):
         build_harness(HarnessConfig(kind="hermes", executable="hermes"))
@@ -360,6 +508,26 @@ def test_future_harness_can_register_without_changing_harness_core() -> None:
     assert isinstance(adapter, FallbackHarness)
     with pytest.raises(ValueError, match="already registered"):
         registry.register("hermes", build_hermes)
+
+
+def test_harness_registry_rejects_empty_kind_and_wrong_builtin_config() -> None:
+    registry = HarnessAdapterRegistry()
+
+    def builder(config: HarnessConfig, runner: CommandRunner) -> HarnessAdapter:
+        return FallbackHarness(config, runner)
+
+    with pytest.raises(ValueError, match="must not be empty"):
+        registry.register(" ", builder)
+    registry.register("replaceable", builder)
+    registry.register("replaceable", builder, replace=True)
+    with pytest.raises(TypeError, match="openclaw HarnessConfig"):
+        harness_module._build_openclaw_harness(  # pyright: ignore[reportPrivateUsage]
+            HarnessConfig(kind="codex", executable="codex"), empty_runner
+        )
+    with pytest.raises(TypeError, match="codex HarnessConfig"):
+        harness_module._build_codex_harness(  # pyright: ignore[reportPrivateUsage]
+            HarnessConfig(kind="openclaw", executable="openclaw"), empty_runner
+        )
 
 
 def test_external_harness_kind_can_register_without_core_model_changes() -> None:

@@ -30,6 +30,10 @@ CAPTAINS_CHAIR tests are organized around evidence, not implementation shape.
 - a real disposable Git repository workflow that pushes an implementation branch,
   fast-forwards the default branch, and verifies the resulting merge commit
 - workspace references round-trip through OpenClaw cards and survive retry/repair creation
+- empty courses cannot be approved, and cyclic work-package graphs are rejected
+- planning-session handoffs preserve unresolved questions and the course-approval mutation gate
+- greenfield repository registration remains local-only until course approval, then seeds
+  and commits the plan/manifest before the GitHub provider creates and verifies the remote
 
 ## Integration Tests
 
@@ -66,9 +70,38 @@ Each supported production runtime must eventually pass the same conformance scen
 9. verify the actual default-branch merge commit
 10. prove that technical recovery, a separate user-blocked card, and their coexistence do not stop unblocked work
 
-OpenClaw is the only required V1 runtime implementation. Hermes and standalone Codex adapters must pass adapter contract tests when added; they should reuse the same core fixtures and conformance suite.
+The OpenClaw plugin CI job also installs the built plugin into an isolated OpenClaw
+profile, inspects the live registration, runs plugin doctor, and removes that profile.
+OpenClaw is the required P0 runtime implementation and Codex is the P1 host
+boundary. The Codex plugin delegates to the frozen Python core through its MCP
+bridge and uses `DirectOrchestrator` without requiring a task board. Both must
+pass the adapter contract tests; future runtimes should reuse the same core
+fixtures and conformance suite without importing runtime-specific assumptions
+into the core.
 
-CI enforces at least 75% package-wide coverage and at least 80% aggregate coverage across the portable policy/orchestration/state/runtime boundary. New adapter code must add its own failure-path tests without lowering either gate.
+CI enforces at least 85% package-wide line coverage and a branch-coverage gate
+for the portable policy/orchestration/state/runtime boundary. New adapter code
+must add its own failure-path tests without lowering either gate. The product
+target remains 90% line and 85% branch coverage; the gap is reported explicitly
+by the verification job rather than hidden by synthetic exclusions. Linux CI also
+runs a focused mutation suite over model routing, merge gates, policy, state, and
+orchestration. Native Windows mutation runs are reported as unsupported by mutmut;
+the normal unit and integration suite remains required on Windows.
+
+## Current Verification Status
+
+The local implementation currently verifies 586 Python tests, OpenClaw plugin
+typecheck/tests/build, repository QA and token-safeguard dashboard controls, four
+Playwright dashboard tests across desktop and mobile Chromium with keyboard,
+accessibility, and visual snapshot checks, Codex plugin manifest validation,
+Python package build, portable-core coverage at 90%, zero high-severity frontend
+audit findings, and an isolated OpenClaw host registration check.
+Package-wide coverage is 88.70% statements and 76.04% branches, so the product
+target is not yet met. Broader Playwright accessibility and visual coverage and
+the live PrintHub canary remain explicit acceptance work.
+Mutation testing is configured for Linux CI and remains environment-limited on
+this Windows development host; disposable fixtures must pass before any live run
+is treated as validated.
 
 ## Live Canary Gates
 

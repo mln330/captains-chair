@@ -262,6 +262,101 @@ def test_missing_pr_link_fails_closed(tmp_path: Path) -> None:
     assert "pull-request URL" in result.reason
 
 
+@pytest.mark.parametrize(
+    ("card", "workflow_cards", "message"),
+    (
+        (
+            QueueCard(
+                id="implementation-card",
+                title="Implementation",
+                status=QueueStatus.DONE,
+                labels=("stage:implementation",),
+            ),
+            [],
+            "final-review card",
+        ),
+        (
+            QueueCard(
+                id="final-card",
+                title="Final review",
+                status=QueueStatus.DONE,
+                labels=("stage:final_review",),
+                metadata={"proof": [{"status": "failed", "note": "AUTO_MERGE_ALLOWED:abcdef1"}]},
+            ),
+            [],
+            "proof is missing",
+        ),
+    ),
+)
+def test_completion_validator_rejects_invalid_final_review_cards(
+    tmp_path: Path,
+    card: QueueCard,
+    workflow_cards: list[QueueCard],
+    message: str,
+) -> None:
+    repo = repo_config(tmp_path, mode=OperationMode.AUTONOMOUS, completion=CompletionPolicy.AUTO_MERGE)
+    result = GitHubCompletionValidator(FakeGitHub(green_gate())).validate(repo, card, workflow_cards)
+    assert result.allowed is False
+    assert message in result.reason
+
+
+def test_completion_validator_rejects_non_list_proof_and_unknown_stage(tmp_path: Path) -> None:
+    repo = repo_config(tmp_path, mode=OperationMode.AUTONOMOUS, completion=CompletionPolicy.AUTO_MERGE)
+    non_list = final_card("AUTO_MERGE_ALLOWED:abcdef1").model_copy(
+        update={"metadata": {"proof": "not-a-list"}}
+    )
+    result = GitHubCompletionValidator(FakeGitHub(green_gate())).validate(
+        repo,
+        non_list,
+        [non_list.model_copy(update={"source_url": "https://github.com/example/project/pull/42"})],
+    )
+    assert result.allowed is False
+    assert "proof is missing" in result.reason
+
+    unknown_stage = final_card("AUTO_MERGE_ALLOWED:abcdef1").model_copy(
+        update={"labels": ("stage:not-a-real-stage",)}
+    )
+    result = GitHubCompletionValidator(FakeGitHub(green_gate())).validate(repo, unknown_stage, [])
+    assert result.allowed is False
+    assert "final-review card" in result.reason
+
+
+def test_completion_validator_rejects_multiple_prs_and_provider_failures(tmp_path: Path) -> None:
+    repo = repo_config(tmp_path, mode=OperationMode.SUPERVISED)
+    final = final_card("READY_FOR_OWNER:abcdef1")
+    first = QueueCard(
+        id="first",
+        title="First PR",
+        status=QueueStatus.DONE,
+        labels=("stage:implementation",),
+        source_url="https://github.com/example/project/pull/41",
+    )
+    second = QueueCard(
+        id="second",
+        title="Second PR",
+        status=QueueStatus.DONE,
+        labels=("stage:repair",),
+        source_url="https://github.com/example/project/pull/42",
+    )
+    result = GitHubCompletionValidator(FakeGitHub(green_gate())).validate(repo, final, [first, second, final])
+    assert result.allowed is False
+    assert "inconsistent" in result.reason
+
+    class FailingProvider:
+        def gate(self, repo: object, number: int, review_head_sha: str | None) -> PullRequestGate:
+            del repo, number, review_head_sha
+            raise RuntimeError("GitHub API is unavailable")
+
+    repo = repo_config(tmp_path / "provider", mode=OperationMode.SUPERVISED)
+    result = GitHubCompletionValidator(FailingProvider()).validate(
+        repo,
+        final,
+        [final.model_copy(update={"source_url": "https://github.com/example/project/pull/42"})],
+    )
+    assert result.allowed is False
+    assert "unavailable" in result.reason
+
+
 class FixedCompletionValidator:
     def __init__(self, allowed: bool, reason: str = "test completion result") -> None:
         self.allowed = allowed

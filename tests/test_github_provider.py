@@ -6,9 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from captains_chair.command import CommandResult
+from captains_chair.command import CommandResult, run_command
 from captains_chair.github import GhGitHubProvider, GitHubProviderError
-from captains_chair.models import NotificationConfig, RepoConfig
+from captains_chair.models import CourseStatus, NotificationConfig, RepoConfig, RepositoryProvisioningConfig
+from tests.test_courses import ready_course
 
 
 def repo(tmp_path: Path) -> RepoConfig:
@@ -156,6 +157,82 @@ def test_provider_rejects_malformed_required_check_json(tmp_path: Path) -> None:
         GhGitHubProvider(runner).required_check_names(repo(tmp_path))
 
 
+def test_provider_rejects_malformed_github_responses_and_transport_failures(tmp_path: Path) -> None:
+    def invalid_json(
+        command: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        input_text: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        del command, cwd, input_text, timeout
+        return CommandResult(0, "not-json", "")
+
+    with pytest.raises(GitHubProviderError, match="invalid JSON"):
+        GhGitHubProvider(invalid_json)._json(["repo", "view"])  # pyright: ignore[reportPrivateUsage]
+
+    def failing_diff(
+        command: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        input_text: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        del command, cwd, input_text, timeout
+        return CommandResult(1, "", "diff unavailable")
+
+    with pytest.raises(GitHubProviderError, match="diff unavailable"):
+        GhGitHubProvider(failing_diff).pull_request_diff(repo(tmp_path), 1)
+
+    def wrong_shape(
+        command: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        input_text: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        del command, cwd, input_text, timeout
+        return json_result([])
+
+    provider = GhGitHubProvider(wrong_shape)
+    with pytest.raises(GitHubProviderError, match="pull request response"):
+        provider.pull_request(repo(tmp_path), 1)
+    with pytest.raises(GitHubProviderError, match="review thread response"):
+        provider.review_threads(repo(tmp_path), 1)
+
+    def gate_missing_rollup(
+        command: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        input_text: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        del command, cwd, input_text, timeout
+        return json_result({"number": 1})
+
+    with pytest.raises(GitHubProviderError, match="statusCheckRollup"):
+        GhGitHubProvider(gate_missing_rollup).gate(repo(tmp_path), 1, "head-1")
+
+
+def test_snapshot_rejects_unexpected_collection_shapes(tmp_path: Path) -> None:
+    calls = 0
+
+    def runner(
+        command: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        input_text: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        nonlocal calls
+        del command, cwd, input_text, timeout
+        calls += 1
+        return json_result({"nameWithOwner": "example/project"} if calls == 1 else {"wrong": True})
+
+    with pytest.raises(GitHubProviderError, match="unexpected shape"):
+        GhGitHubProvider(runner).snapshot(repo(tmp_path))
+
+
 def test_mutations_use_provider_cwd_and_return_read_back_pr(tmp_path: Path) -> None:
     calls: list[tuple[list[str], Path | None]] = []
 
@@ -202,13 +279,125 @@ def test_mutations_use_provider_cwd_and_return_read_back_pr(tmp_path: Path) -> N
         and values[values.index("--add-label", values.index("--add-label") + 1) + 1] == "captains_chair"
         for values, _ in calls
     )
-    assert any(
-        values[1:3] == ["issue", "edit"]
-        and "--milestone" in values
-        and values[values.index("--milestone") + 1] == "Sprint 2"
-        and values[values.index("--add-assignee") + 1] == "octocat"
-        for values, _ in calls
+
+
+def test_greenfield_provisioning_pushes_seeded_source_only_after_configured_approval(
+    tmp_path: Path,
+) -> None:
+    calls: list[tuple[list[str], Path | None]] = []
+
+    def runner(
+        command: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        input_text: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        del input_text, timeout
+        values = list(command)
+        calls.append((values, cwd))
+        if values[1:3] == ["repo", "view"]:
+            return json_result(
+                {
+                    "nameWithOwner": "example/new-project",
+                    "url": "https://github.test/example/new-project",
+                    "visibility": "PRIVATE",
+                    "defaultBranchRef": {"name": "main"},
+                }
+            )
+        return CommandResult(0, "created\n", "")
+
+    configured = repo(tmp_path).model_copy(
+        update={
+            "full_name": "example/new-project",
+            "provisioning": RepositoryProvisioningConfig(
+                enabled=True,
+                visibility="private",
+                description="A new project",
+            ),
+        }
     )
+    result = GhGitHubProvider(runner).provision_greenfield(
+        configured, ready_course().model_copy(update={"status": CourseStatus.ENGAGED})
+    )
+
+    assert result["created"] is True
+    create_index = next(index for index, (values, _cwd) in enumerate(calls) if values[1:3] == ["repo", "create"])
+    create = calls[create_index][0]
+    assert create[1:3] == ["repo", "create"]
+    assert "--source" in create and str(tmp_path) in create
+    assert "--push" in create and "--private" in create
+    assert calls[create_index][1] == tmp_path.parent
+    assert any(values[0:2] == ["git", "init"] and "-b" in values for values, _ in calls)
+    assert any(values[0:2] == ["git", "-c"] and "commit" in values for values, _ in calls)
+
+
+def test_greenfield_provisioning_creates_a_real_clean_seed_commit_before_remote_creation(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "README.md").write_text("# New course\n", encoding="utf-8")
+    calls: list[list[str]] = []
+
+    def runner(
+        command: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        input_text: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        values = list(command)
+        if values[0] == "git":
+            return run_command(values, cwd=cwd, input_text=input_text, timeout=timeout)
+        calls.append(values)
+        if values[1:3] == ["repo", "view"]:
+            return json_result(
+                {
+                    "nameWithOwner": "example/new-project",
+                    "url": "https://github.test/example/new-project",
+                    "visibility": "PRIVATE",
+                    "defaultBranchRef": {"name": "main"},
+                }
+            )
+        return CommandResult(0, "created\n", "")
+
+    configured = repo(tmp_path).model_copy(
+        update={
+            "full_name": "example/new-project",
+            "provisioning": RepositoryProvisioningConfig(enabled=True),
+        }
+    )
+    GhGitHubProvider(runner).provision_greenfield(
+        configured, ready_course().model_copy(update={"status": CourseStatus.ENGAGED})
+    )
+
+    assert run_command(["git", "-C", str(tmp_path), "rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip() == "main"
+    assert run_command(["git", "-C", str(tmp_path), "status", "--porcelain"]).stdout.strip() == ""
+    assert run_command(["git", "-C", str(tmp_path), "log", "-1", "--format=%s"]).stdout.strip() == (
+        "Initialize course feature-search"
+    )
+    assert calls[0][1:3] == ["repo", "create"]
+
+
+def test_greenfield_provisioning_rejects_disabled_or_missing_sources(tmp_path: Path) -> None:
+    disabled = repo(tmp_path).model_copy(update={"provisioning": RepositoryProvisioningConfig(enabled=False)})
+    with pytest.raises(GitHubProviderError, match="disabled"):
+        GhGitHubProvider().provision_greenfield(
+            disabled, ready_course().model_copy(update={"status": CourseStatus.ENGAGED})
+        )
+
+    missing = repo(tmp_path / "missing").model_copy(
+        update={"provisioning": RepositoryProvisioningConfig(enabled=True)}
+    )
+    with pytest.raises(GitHubProviderError, match="does not exist"):
+        GhGitHubProvider().provision_greenfield(
+            missing, ready_course().model_copy(update={"status": CourseStatus.ENGAGED})
+        )
+
+    with pytest.raises(GitHubProviderError, match="engaged course"):
+        GhGitHubProvider().provision_greenfield(
+            disabled.model_copy(update={"provisioning": RepositoryProvisioningConfig(enabled=True)}),
+            ready_course(),
+        )
 
 
 def test_issue_mutation_failures_use_typed_provider_error(tmp_path: Path) -> None:

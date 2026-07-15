@@ -1,0 +1,42 @@
+{
+  "id": "captains-chair",
+  "name": "Captain's Chair",
+  "description": "An SDLC control plane that puts the builder in command of an agent crew.",
+  "contracts": {
+    "tools": [
+      "captains_chair_course_status",
+      "captains_chair_resolve_checkpoint",
+      "captains_chair_answer_readiness",
+      "captains_chair_start_planning",
+      "captains_chair_ready_work"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "configPath": {
+        "type": "string",
+        "description": "Path to the Captain's Chair YAML configuration"
+      },
+      "pythonExecutable": {
+        "type": "string",
+        "default": "python3"
+      },
+      "sidecarCommand": {
+        "type": "array",
+        "items": { "type": "string" },
+        "default": ["-m", "captains_chair.sidecar"]
+      },
+      "openclawExecutable": {
+        "type": "string",
+        "default": "openclaw"
+      },
+      "installSchedules": {
+        "type": "boolean",
+        "default": false,
+        "description": "Allow the operator to install the two plugin-owned Gateway cron jobs"
+      }
+    }
+  }
+}

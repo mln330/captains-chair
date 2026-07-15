@@ -11,6 +11,8 @@ import yaml
 
 import captains_chair.cli as cli
 from captains_chair.canary import canary_board_id, canary_proof_marker
+from captains_chair.courses import CourseStore
+from captains_chair.direct_orchestrator import DirectOrchestrator
 from captains_chair.models import (
     ActionKind,
     AppConfig,
@@ -23,14 +25,14 @@ from captains_chair.models import (
     RepoConfig,
     RunState,
     UsageConfig,
-    UsageRate,
     WorkerAssignments,
 )
-from captains_chair.orchestration import QueueCard, QueueStatus, ReconcileResult
+from captains_chair.orchestration import QueueCard, QueueCardSpec, QueueStatus, ReconcileResult
 from captains_chair.runtime import RuntimeAdapterContractError
 from captains_chair.state import StateStore
 from tests.fakes import InMemoryWorkQueue
-from tests.helpers import model_policy, repo_config
+from tests.helpers import app_config, model_policy, repo_config
+from tests.test_courses import ready_course
 
 
 class FakeQueue:
@@ -151,6 +153,40 @@ def _write_config(tmp_path: Path, *, operation_mode: OperationMode = OperationMo
     return path
 
 
+def test_planning_session_cli_returns_native_host_handoff(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    repo = repo_config(tmp_path)
+    config = app_config(tmp_path, repo)
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+    CourseStore(repo.local_path).save(ready_course())
+
+    assert cli.main(
+        [
+            "--config",
+            str(config_path),
+            "planning-session",
+            "--repo",
+            repo.full_name,
+            "--course-key",
+            "feature-search",
+        ]
+    ) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["interaction"] == "host_agent_conversation"
+    assert payload["mutation_requires_course_approval"] is True
+
+
+def test_repo_without_orchestrator_uses_direct_runtime_by_default(tmp_path: Path) -> None:
+    config = app_config(tmp_path, repo_config(tmp_path))
+
+    orchestrator = cli._orchestrator(config, "example/project")  # pyright: ignore[reportPrivateUsage]
+
+    assert isinstance(orchestrator.adapter, DirectOrchestrator)
+    assert cli._board_id(  # pyright: ignore[reportPrivateUsage]
+        config, "example/project"
+    ) == "captains-chair-direct-example-project"
+
+
 def test_preflight_reports_ready_without_dispatching_workers(
     tmp_path: Path,
     monkeypatch: Any,
@@ -200,11 +236,11 @@ def test_preflight_reports_ready_without_dispatching_workers(
         == "Assigned card is ready but unclaimed"
     )
     assert payload["checks"]["workboard_diagnostics"].get("payload") is None
-    assert "no daily usage budget is configured" in payload["warnings"]
+    assert "no daily token limit is configured" in payload["warnings"]
     assert payload["warnings"] == [
         "runtime does not expose a worker model health check",
         "Workboard diagnostics returned 1 finding(s)",
-        "no daily usage budget is configured",
+        "no daily token limit is configured",
     ]
     assert "did not invoke a model or dispatch a worker" in payload["next_action"]
     assert orchestrator.adapter.dispatch_calls == 0
@@ -646,7 +682,7 @@ def test_canary_plan_run_and_check_use_only_workboard(
         orchestrator_executable: str | None,
     ) -> tuple[dict[str, Any], None]:
         del config, repo_name, state, orchestrator_executable
-        return {"allowed": True, "reason": "test", "budget_credits": 10}, None
+        return {"allowed": True, "reason": "test"}, None
 
     monkeypatch.setattr(cli, "_orchestrator", fake_orchestrator)
     monkeypatch.setattr(cli, "_usage_guard", allow_usage_guard)
@@ -1471,14 +1507,11 @@ def test_usage_guard_blocks_dispatch_when_telemetry_sync_is_degraded_without_bud
     assert "new worker sessions are suppressed" in budget["reason"]
 
 
-def test_usage_guard_uses_account_wide_budget_across_repositories(tmp_path: Path) -> None:
+def test_usage_guard_uses_account_wide_token_limit_across_repositories(tmp_path: Path) -> None:
     config_path = _write_config(tmp_path)
     config = cli.load_config(config_path).model_copy(
         update={
-            "usage": UsageConfig(
-                rates={"gpt-5.5": UsageRate(input_credits_per_million=10)},
-                daily_budget_credits=10,
-            )
+            "usage": UsageConfig(daily_token_limit=1_000_000)
         }
     )
     state = StateStore(config.state_dir / "state.db")
@@ -1500,7 +1533,7 @@ def test_usage_guard_uses_account_wide_budget_across_repositories(tmp_path: Path
 
     assert usage_sync is None
     assert budget["allowed"] is False
-    assert "daily usage budget" in budget["reason"]
+    assert "daily token limit" in budget["reason"]
 
 
 def test_usage_guard_imports_openclaw_sessions_for_every_managed_repository(
@@ -1772,6 +1805,47 @@ def test_worker_protocol_cli_rejects_completion_without_structured_proof(
         == 3
     )
     assert "complete requires --summary and --proof-note" in capsys.readouterr().err
+
+
+def test_worker_protocol_claims_next_card_from_default_direct_orchestrator(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = repo_config(tmp_path, mode=OperationMode.SUPERVISED)
+    config = app_config(tmp_path, repo)
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+    adapter = DirectOrchestrator(config.state_dir / "orchestrators" / "example-project.db")
+    board_id = "captains-chair-direct-example-project"
+    adapter.ensure_board(board_id, "Project", "Direct work", tmp_path)
+    card = adapter.create_card(
+        board_id,
+        QueueCardSpec(
+            key="package-1",
+            title="Implement package",
+            notes="Use the portable worker protocol.",
+            status=QueueStatus.READY,
+            agent_id="coder",
+        ),
+    )
+
+    assert cli.main(
+        [
+            "--config",
+            str(config_path),
+            "worker-protocol",
+            "claim",
+            "--repo",
+            repo.full_name,
+            "--owner-id",
+            "worker-1",
+            "--token",
+            "secret-token",
+        ]
+    ) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["id"] == card.id
+    assert payload["status"] == "running"
 
 
 def test_worker_protocol_does_not_mutate_disabled_repo(

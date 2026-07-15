@@ -4,9 +4,12 @@ canonical_docs:
   - README.md
   - docs/architecture.md
 planning_doc: docs/IMPLEMENTATION_PLAN.md
+provisioning:
+  enabled: false
+  visibility: private
+  description: ""
 checks:
   - pytest
 required_check_names:
   - test
 later_phase: []
-
