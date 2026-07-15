@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
 import yaml
 
 import captains_chair.cli as cli
@@ -18,10 +19,12 @@ from captains_chair.canary import (
 from captains_chair.command import CommandResult
 from captains_chair.completion_gate import GitHubCompletionValidator
 from captains_chair.conformance import (
+    RuntimeConformanceError,
     run_mixed_blocker_isolation,
     run_runtime_conformance,
     run_technical_recovery_isolation,
     run_user_blocker_isolation,
+    stage_card,
 )
 from captains_chair.models import (
     ActionKind,
@@ -37,6 +40,16 @@ from captains_chair.orchestration import WorkflowOrchestrator
 from tests.helpers import app_config, repo_config
 
 
+def test_stage_card_reports_missing_runtime_evidence() -> None:
+    class EmptyAdapter:
+        def list_cards(self, board_id: str) -> list[object]:
+            del board_id
+            return []
+
+    with pytest.raises(RuntimeConformanceError, match="no implementation card"):
+        stage_card(EmptyAdapter(), "board", "implementation")  # type: ignore[arg-type]
+
+
 class FakeGateway:
     """A JSON-RPC Workboard double used to exercise the real OpenClaw adapter."""
 
@@ -45,7 +58,7 @@ class FakeGateway:
         self.idempotency: dict[str, str] = {}
         self.ended_sessions: set[str] = set()
         self.session_inspection_error: str | None = None
-        self.coder_model = "codex/gpt-5.3-codex"
+        self.coder_model = "codex/gpt-5.3-codex-spark"
         self.next_id = 1
 
     def runner(
@@ -72,8 +85,8 @@ class FakeGateway:
                         {"id": "captains-chair", "model": "codex/gpt-5.5"},
                         {"id": "github-coder", "model": self.coder_model},
                         {"id": "github-reviewer", "model": "codex/gpt-5.5"},
-                        {"id": "github-tester", "model": "codex/gpt-5.3-codex"},
-                        {"id": "github-ux", "model": "codex/gpt-5.3-codex"},
+                        {"id": "github-tester", "model": "codex/gpt-5.3-codex-spark"},
+                        {"id": "github-ux", "model": "codex/gpt-5.3-codex-spark"},
                         {"id": "github-final", "model": "codex/gpt-5.5"},
                         {"id": "github-merge", "model": "codex/gpt-5.5"},
                         {"id": "github-verify", "model": "codex/gpt-5.5"},
@@ -503,7 +516,7 @@ def test_openclaw_cli_canary_uses_real_adapter_without_model_calls(
         orchestrator_executable: str | None,
     ) -> tuple[dict[str, Any], None]:
         del config, repo_name, state, orchestrator_executable
-        return {"allowed": True, "reason": "test", "budget_credits": 1}, None
+        return {"allowed": True, "reason": "test"}, None
 
     monkeypatch.setattr(cli, "_usage_guard", allow_usage_guard)
 

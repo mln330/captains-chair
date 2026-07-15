@@ -73,6 +73,7 @@ class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
             "parents": list(spec.parents),
             "maxRuntimeSeconds": spec.max_runtime_seconds,
             "maxRetries": spec.max_retries,
+            "metadata": spec.metadata,
         }
         if spec.source_url:
             params["sourceUrl"] = spec.source_url

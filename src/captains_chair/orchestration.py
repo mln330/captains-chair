@@ -18,6 +18,7 @@ from captains_chair.models import (
     StrictModel,
     WorkerAssignments,
 )
+from captains_chair.qa import select_qa
 
 
 class WorkStage(enum.StrEnum):
@@ -101,6 +102,7 @@ class QueueCardSpec(StrictModel):
     workspace: WorkspaceRef | None = None
     max_runtime_seconds: int = 3600
     max_retries: int = 2
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class WorkflowSpec(StrictModel):
@@ -159,7 +161,14 @@ class CompletionValidator(Protocol):
 
 
 @runtime_checkable
-class WorkQueueAdapter(Protocol):
+class WorkerOrchestratorAdapter(Protocol):
+    """Worker execution boundary implemented by OpenClaw or another runtime.
+
+    The existing card-shaped operations describe portable claims, dependencies,
+    retries, and proof. A board UI is not required; DirectOrchestrator implements
+    the same contract against durable local workflow state.
+    """
+
     def ensure_board(self, board_id: str, name: str, description: str, workspace: Path) -> None: ...
 
     def list_cards(self, board_id: str) -> list[QueueCard]: ...
@@ -194,6 +203,72 @@ class WorkQueueAdapter(Protocol):
     def dispatch(self, board_id: str) -> dict[str, Any]: ...
 
     def diagnostics(self) -> dict[str, Any]: ...
+
+
+# Compatibility name for extension packages built before the product reorientation.
+WorkQueueAdapter = WorkerOrchestratorAdapter
+
+
+@runtime_checkable
+class WorkTrackerAdapter(Protocol):
+    """Optional mirror for an external project or kanban system."""
+
+    def mirror_work(
+        self,
+        work_id: str,
+        *,
+        title: str,
+        summary: str,
+        status: str,
+        source_url: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> str | None: ...
+
+    def update_work(
+        self,
+        external_id: str,
+        *,
+        status: str,
+        summary: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None: ...
+
+    def remove_work(self, external_id: str) -> None: ...
+
+    def diagnostics(self) -> dict[str, Any]: ...
+
+
+class NullWorkTracker:
+    """No-op tracker used when workflow state should not be mirrored elsewhere."""
+
+    def mirror_work(
+        self,
+        work_id: str,
+        *,
+        title: str,
+        summary: str,
+        status: str,
+        source_url: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        del work_id, title, summary, status, source_url, metadata
+        return None
+
+    def update_work(
+        self,
+        external_id: str,
+        *,
+        status: str,
+        summary: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        del external_id, status, summary, metadata
+
+    def remove_work(self, external_id: str) -> None:
+        del external_id
+
+    def diagnostics(self) -> dict[str, Any]:
+        return {"status": "healthy", "kind": "null", "enabled": False}
 
 
 @runtime_checkable
@@ -891,6 +966,7 @@ def build_workflow(
         source_url=source_url,
         max_runtime_seconds=config.max_runtime_seconds,
         max_retries=config.max_retries,
+        metadata=_course_metadata(decision),
     )
     stages = _stage_sequence(repo, decision)
     specs: list[QueueCardSpec] = []
@@ -910,6 +986,7 @@ def build_workflow(
                 workspace=stage_workspace,
                 max_runtime_seconds=config.max_runtime_seconds,
                 max_retries=config.max_retries,
+                metadata=_course_metadata(decision),
             )
         )
     return WorkflowSpec(
@@ -1008,6 +1085,15 @@ def _root_notes(repo: RepoConfig, decision: PlanDecision, action_id: str) -> str
     )
 
 
+def _course_metadata(decision: PlanDecision) -> dict[str, str]:
+    metadata: dict[str, str] = {}
+    if decision.course_key:
+        metadata["courseKey"] = decision.course_key
+    if decision.work_package_key:
+        metadata["workPackageKey"] = decision.work_package_key
+    return metadata
+
+
 def _stage_notes(
     repo: RepoConfig,
     decision: PlanDecision,
@@ -1056,6 +1142,19 @@ def _stage_notes(
         "EXTERNAL_ACCESS:, or HIGH_RISK_DECISION:. Use TECHNICAL: for repairable failures so the supervisor can retry or route repair work. "
         "A blocked card must not prevent workers from completing unrelated ready cards."
     )
+    qa_note = ""
+    if stage in {WorkStage.TEST, WorkStage.UX_REVIEW}:
+        qa_selection = select_qa(repo, ())
+        qa_note = (
+            "\nCapability-selected QA profiles:\n"
+            + "\n".join(
+                f"- {profile.key}: {profile.title} (worker={qa_selection.worker_roles[profile.key]})"
+                for profile in qa_selection.profiles
+            )
+            + "\nDetected/configured surfaces: "
+            + ", ".join(sorted(surface.value for surface in qa_selection.surfaces))
+            + "\n"
+        )
     return (
         f"Repository: {repo.full_name}\n"
         f"CAPTAINS_CHAIR workflow: {action_id}\n"
@@ -1063,7 +1162,7 @@ def _stage_notes(
         f"Goal: {decision.summary}\n"
         f"Reason: {decision.reason}\n\n"
         + _workspace_notes(workspace)
-        + f"Stage contract: {contracts[stage]}\n\n"
+        + f"Stage contract: {contracts[stage]}{qa_note}\n"
         f"Worker protocol: claim the card, heartbeat during long work, and call Workboard complete with a concise summary and proof, "
         f"or Workboard block with a specific reason. {blocker_rules}"
     )

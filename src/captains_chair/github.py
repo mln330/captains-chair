@@ -5,8 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, cast
 
-from captains_chair.command import CommandRunner, run_command
-from captains_chair.models import CheckResult, PullRequestGate, RepoConfig
+from captains_chair.command import CommandResult, CommandRunner, run_command
+from captains_chair.models import CheckResult, Course, CourseStatus, PullRequestGate, RepoConfig
 
 
 class GitHubProviderError(RuntimeError):
@@ -73,6 +73,8 @@ class GitHubProvider(Protocol):
     ) -> None: ...
 
     def close_issue(self, repo: RepoConfig, number: int, reason: str) -> None: ...
+
+    def provision_greenfield(self, repo: RepoConfig, course: Course) -> dict[str, Any]: ...
 
 
 class GhGitHubProvider:
@@ -326,6 +328,69 @@ class GhGitHubProvider:
         if not isinstance(prs, list) or not prs:
             raise GitHubProviderError("pull request creation succeeded but the PR could not be read back")
         return _object_list(cast(object, prs), "created pull requests")[0]
+
+    def provision_greenfield(self, repo: RepoConfig, course: Course) -> dict[str, Any]:
+        """Create and push a seeded local greenfield repository after approval."""
+        if not repo.provisioning.enabled:
+            raise GitHubProviderError("greenfield repository provisioning is disabled")
+        if course.status != CourseStatus.ENGAGED:
+            raise GitHubProviderError("greenfield repository provisioning requires an engaged course")
+        if not repo.local_path.is_dir():
+            raise GitHubProviderError(f"greenfield source directory does not exist: {repo.local_path}")
+
+        # `gh repo create --source --push` expects a committed local repository.
+        # Keep this bootstrap inside the GitHub adapter so the core never assumes
+        # a particular Git CLI or remote-host implementation.
+        if not (repo.local_path / ".git").exists():
+            self._run_git(repo, ["init", "-b", repo.default_branch])
+        self._run_git(repo, ["add", "--all"])
+        status = self._run_git(repo, ["status", "--porcelain"])
+        if status.stdout.strip():
+            self._run_git(
+                repo,
+                [
+                    "-c",
+                    "user.name=Captain's Chair",
+                    "-c",
+                    "user.email=captains-chair@localhost",
+                    "commit",
+                    "-m",
+                    f"Initialize course {course.key}",
+                ],
+            )
+        visibility_flag = f"--{repo.provisioning.visibility}"
+        args = [
+            "repo",
+            "create",
+            repo.full_name,
+            "--source",
+            str(repo.local_path),
+            "--push",
+            visibility_flag,
+            "--description",
+            repo.provisioning.description or course.title,
+        ]
+        result = self.runner(["gh", *args], cwd=repo.local_path.parent, timeout=300)
+        if result.returncode:
+            raise GitHubProviderError((result.stderr or result.stdout).strip()[:3000])
+        value = self._json(
+            [
+                "repo",
+                "view",
+                repo.full_name,
+                "--json",
+                "nameWithOwner,url,visibility,defaultBranchRef",
+            ]
+        )
+        if not isinstance(value, dict):
+            raise GitHubProviderError("created repository response was not an object")
+        return {"created": True, **cast(dict[str, Any], value)}
+
+    def _run_git(self, repo: RepoConfig, args: list[str]) -> CommandResult:
+        result = self.runner(["git", *args], cwd=repo.local_path, timeout=180)
+        if result.returncode:
+            raise GitHubProviderError((result.stderr or result.stdout).strip()[:3000])
+        return result
 
     def mark_ready(self, repo: RepoConfig, number: int) -> None:
         result = self.runner(

@@ -1,27 +1,38 @@
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TypeVar, cast
 
 import pytest
 from pydantic import BaseModel
 
+from captains_chair.courses import CourseStore
 from captains_chair.engine import ControlPlaneEngine, WorkerBlockedError
 from captains_chair.github import GhGitHubProvider, RepositorySnapshot
 from captains_chair.harness import HarnessAdapter
 from captains_chair.models import (
     ActionKind,
+    CommentDisposition,
+    CommentTriage,
     CompletionPolicy,
+    Course,
+    CourseKind,
+    CourseStatus,
     EventRecord,
     FinalReview,
     FinalVerdict,
+    Finding,
     HarnessConfig,
     IndependentReview,
+    ModelProfile,
     ModelTarget,
     OperationMode,
     PlanDecision,
     PullRequestGate,
+    ReviewCommentDecision,
     ReviewVerdict,
     RunState,
     UXReview,
+    WorkPackage,
 )
 from captains_chair.notifications import NotificationError, Notifier
 from captains_chair.orchestration import EnqueuedWorkflow
@@ -33,12 +44,13 @@ OutputModel = TypeVar("OutputModel", bound=BaseModel)
 
 
 class ActivePrGitHub:
-    def __init__(self, *, checks_green: bool = True) -> None:
+    def __init__(self, *, checks_green: bool = True, threads: list[dict[str, Any]] | None = None) -> None:
         self.calls: list[str] = []
         self.merged: list[int] = []
         self.head_sha = "head-1"
         self.checks_green = checks_green
         self.files: list[dict[str, str]] = []
+        self.threads = threads or []
 
     def snapshot(self, repo: object) -> RepositorySnapshot:
         del repo
@@ -87,7 +99,7 @@ class ActivePrGitHub:
     def review_threads(self, repo: object, number: int) -> list[dict[str, Any]]:
         del repo
         self.calls.append(f"threads:{number}")
-        return []
+        return self.threads
 
     def mark_ready(self, repo: object, number: int) -> None:
         del repo
@@ -106,6 +118,19 @@ class ActivePrGitHub:
         del repo
         self.calls.append("default_branch_sha")
         return "merged-main-head"
+
+
+class GateChangesAfterReviewGitHub(ActivePrGitHub):
+    def __init__(self) -> None:
+        super().__init__()
+        self.gate_calls = 0
+
+    def gate(self, repo: object, number: int, review_head_sha: str | None) -> PullRequestGate:
+        self.gate_calls += 1
+        gate = super().gate(repo, number, review_head_sha)
+        if self.gate_calls > 1:
+            return gate.model_copy(update={"checks_green": False})
+        return gate
 
 
 class ReviewHarness(HarnessAdapter):
@@ -177,6 +202,31 @@ class FailingUxReviewHarness(ReviewHarness):
     def invoke(self, **kwargs: Any) -> dict[str, Any]:
         if kwargs.get("role") == "ux-review":
             raise RuntimeError("UX browser process crashed")
+        return super().invoke(**kwargs)
+
+
+class CommentTriageHarness(ReviewHarness):
+    def invoke(self, **kwargs: Any) -> dict[str, Any]:
+        if kwargs.get("role") == "comment-adjudicator":
+            return CommentTriage(
+                head_sha="head-1",
+                verdict=ReviewVerdict.REQUEST_CHANGES,
+                summary="The authentication comment identifies a real gap.",
+                decisions=(
+                    ReviewCommentDecision(
+                        thread_id="thread-1",
+                        disposition=CommentDisposition.ADDRESS,
+                        rationale="The requested authorization check is absent.",
+                    ),
+                ),
+                accepted_findings=(
+                    Finding(
+                        priority="P1",
+                        title="Authorization check missing",
+                        detail="Add the check before returning the protected resource.",
+                    ),
+                ),
+            ).model_dump(mode="json")
         return super().invoke(**kwargs)
 
 
@@ -343,6 +393,104 @@ def test_active_pr_continues_to_review_and_auto_merge_without_replanning(tmp_pat
     assert all(event.event_type != "ACTION_PROPOSED" for event in notifier.events)
 
 
+def test_unapproved_course_blocks_cycle_before_github_or_model_work(tmp_path: Path) -> None:
+    (tmp_path / "ISSUES_EXECUTION_PLAN.md").write_text("# Durable plan\n", encoding="utf-8")
+    repo = repo_config(tmp_path, mode=OperationMode.AUTONOMOUS)
+    config = app_config(tmp_path, repo)
+    state = StateStore(config.state_dir / "state.db")
+    state.save_baseline(repo.full_name, "baseline", tmp_path / "baseline.json", analyzed=True)
+    state.transition(repo.full_name, RunState.BASELINE_REVIEW)
+    state.transition(repo.full_name, RunState.READY)
+    CourseStore(tmp_path).save(
+        Course(
+            key="feature-search",
+            repository=repo.full_name,
+            kind=CourseKind.FEATURE,
+            title="Search improvements",
+            goal="Make repository search faster and easier for existing users.",
+        )
+    )
+    github = ActivePrGitHub()
+    harness = ReviewHarness()
+    engine = ControlPlaneEngine(
+        config,
+        state,
+        cast(GhGitHubProvider, github),
+        harness,
+        cast(Notifier, MemoryNotifier()),
+        model_policy(),
+    )
+
+    result = engine.cycle(repo, shadow=False, execute=True)
+
+    assert result.event.event_type == "COURSE_APPROVAL_REQUIRED"
+    assert result.exit_code == 2
+    assert harness.roles == []
+    assert github.calls == []
+    assert state.current_state(repo.full_name) == RunState.BLOCKED
+
+
+def test_model_routes_apply_course_package_and_stage_precedence(tmp_path: Path) -> None:
+    repo = repo_config(tmp_path, mode=OperationMode.AUTONOMOUS).model_copy(
+        update={
+            "model_profiles": {
+                "coder": ModelProfile(primary=ModelTarget(model="repo-coder")),
+                "stage:implementation": ModelProfile(
+                    primary=ModelTarget(model="repo-stage-coder")
+                ),
+            }
+        }
+    )
+    config = app_config(tmp_path, repo)
+    state = StateStore(config.state_dir / "state.db")
+    course = Course(
+        key="feature-search",
+        repository=repo.full_name,
+        kind=CourseKind.FEATURE,
+        title="Search improvements",
+        goal="Make repository search faster and easier to use for existing users.",
+        work_packages=(
+            WorkPackage(
+                key="index",
+                title="Index",
+                objective="Build the index.",
+                model_profiles={
+                    "coder": ModelProfile(primary=ModelTarget(model="package-coder")),
+                    "stage:implementation": ModelProfile(
+                        primary=ModelTarget(model="package-stage-coder")
+                    ),
+                },
+            ),
+        ),
+        status=CourseStatus.ENGAGED,
+        approved_by="owner@example.com",
+        approved_at=datetime.now(UTC),
+    )
+    CourseStore(tmp_path).save(course)
+    engine = ControlPlaneEngine(
+        config,
+        state,
+        cast(GhGitHubProvider, ActivePrGitHub()),
+        ReviewHarness(),
+        cast(Notifier, MemoryNotifier()),
+        model_policy(),
+    )
+    decision = PlanDecision(
+        action=ActionKind.IMPLEMENT,
+        summary="Implement the index",
+        reason="The course selected the package.",
+        target_issue=1,
+        course_key=course.key,
+        work_package_key="index",
+    )
+
+    selected = engine._models_for(  # pyright: ignore[reportPrivateUsage]
+        repo, "coder", decision=decision, stage="implementation"
+    )
+
+    assert selected.primary.model == "package-stage-coder"
+
+
 def test_ux_review_failure_preserves_original_error_and_discards_disposable_worktree(
     tmp_path: Path,
 ) -> None:
@@ -418,7 +566,7 @@ def test_ux_review_cleanup_fallback_is_visible_and_does_not_block_completion(
     github = ActivePrGitHub()
     github.files = [{"path": "frontend/App.tsx"}]
     worktrees = UxCleanupFallbackWorktrees(tmp_path / "ux-cleanup")
-    harness = ReviewHarness()
+    harness = ReviewHarness(final_verdict=FinalVerdict.READY_FOR_OWNER)
     engine = ControlPlaneEngine(
         config,
         state,
@@ -781,6 +929,50 @@ def test_active_pr_reuses_completion_wait_without_repeating_reviews(tmp_path: Pa
     ]
 
 
+def test_final_review_cannot_surface_owner_completion_when_live_gate_fails(tmp_path: Path) -> None:
+    (tmp_path / "ISSUES_EXECUTION_PLAN.md").write_text("# Durable plan\n", encoding="utf-8")
+    repo = repo_config(tmp_path, mode=OperationMode.AUTONOMOUS)
+    config = app_config(tmp_path, repo)
+    state = StateStore(config.state_dir / "state.db")
+    state.save_baseline(repo.full_name, "baseline", tmp_path / "baseline.json", analyzed=True)
+    state.transition(repo.full_name, RunState.BASELINE_REVIEW)
+    state.transition(repo.full_name, RunState.READY)
+    decision = PlanDecision(
+        action=ActionKind.IMPLEMENT,
+        summary="Implement the authorization slice",
+        reason="The implementation worker opened a PR.",
+        target_issue=39,
+    )
+    state.save_active_work(
+        repo.full_name,
+        action_id="action-owner-gate",
+        pr_number=35,
+        branch="captains_chair/work/39",
+        head_sha="head-1",
+        status="pr_open",
+        decision=decision.model_dump(mode="json"),
+    )
+    state.transition(repo.full_name, RunState.PR_OPEN)
+    github = GateChangesAfterReviewGitHub()
+    harness = ReviewHarness(final_verdict=FinalVerdict.READY_FOR_OWNER)
+    engine = ControlPlaneEngine(
+        config,
+        state,
+        cast(GhGitHubProvider, github),
+        harness,
+        cast(Notifier, MemoryNotifier()),
+        model_policy(),
+    )
+
+    result = engine.cycle(repo, shadow=False, execute=True)
+
+    assert result.event.event_type == "REVIEW_WAITING"
+    assert "required checks" in result.event.reason
+    assert result.exit_code == 2
+    assert github.merged == []
+    assert state.current_state(repo.full_name) == RunState.PR_OPEN
+
+
 def test_notification_failure_does_not_repeat_active_pr_review_work(tmp_path: Path) -> None:
     (tmp_path / "ISSUES_EXECUTION_PLAN.md").write_text("# Durable plan\n", encoding="utf-8")
     repo = repo_config(tmp_path, mode=OperationMode.AUTONOMOUS)
@@ -865,6 +1057,55 @@ def test_active_pr_review_findings_are_repaired_without_owner_attention(tmp_path
     assert state.current_state(repo.full_name) == RunState.REPAIRING
     assert github.merged == []
     assert not any(event.event_type == "ATTENTION_REQUIRED" for event in notifier.events)
+
+
+def test_active_pr_comment_triage_dispatches_repair_for_actionable_threads(tmp_path: Path) -> None:
+    (tmp_path / "ISSUES_EXECUTION_PLAN.md").write_text("# Durable plan\n", encoding="utf-8")
+    repo = repo_config(tmp_path, mode=OperationMode.AUTONOMOUS)
+    config = app_config(tmp_path, repo)
+    state = StateStore(config.state_dir / "state.db")
+    state.save_baseline(repo.full_name, "baseline", tmp_path / "baseline.json", analyzed=True)
+    state.transition(repo.full_name, RunState.BASELINE_REVIEW)
+    state.transition(repo.full_name, RunState.READY)
+    decision = PlanDecision(
+        action=ActionKind.IMPLEMENT,
+        summary="Implement the authorization slice",
+        reason="The documented work item is ready for review.",
+        target_issue=39,
+    )
+    state.save_active_work(
+        repo.full_name,
+        action_id="action-1",
+        pr_number=35,
+        branch="captains_chair/work/39",
+        head_sha="head-1",
+        status="pr_open",
+        decision=decision.model_dump(mode="json"),
+    )
+    state.transition(repo.full_name, RunState.PR_OPEN)
+    github = ActivePrGitHub(
+        threads=[
+            {
+                "id": "thread-1",
+                "isResolved": False,
+                "isOutdated": False,
+                "comments": [{"body": "The protected endpoint needs an authorization check."}],
+            }
+        ]
+    )
+    notifier = MemoryNotifier()
+    result = ControlPlaneEngine(
+        config,
+        state,
+        cast(GhGitHubProvider, github),
+        CommentTriageHarness(),
+        cast(Notifier, notifier),
+        model_policy(),
+    ).cycle(repo, shadow=False, execute=True)
+
+    assert result.event.event_type == "COMMENT_TRIAGE_BLOCKED"
+    assert state.current_state(repo.full_name) == RunState.REPAIRING
+    assert "comment-adjudicator" in github.calls or "comment:35" in github.calls
 
 
 def test_active_pr_unclassified_final_blocker_is_repairable(tmp_path: Path) -> None:

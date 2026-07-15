@@ -11,7 +11,14 @@ from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any, cast
 
+from captains_chair.adapters import UsageTelemetryAdapter
 from captains_chair.command import CommandRunner, require_success, run_command
+from captains_chair.courses import (
+    CourseError,
+    CourseStore,
+    eligible_work_packages,
+    set_work_package_status,
+)
 from captains_chair.documents import assert_durable_document
 from captains_chair.github import GitHubProvider, RepositorySnapshot
 from captains_chair.harness import HarnessAdapter, HarnessExecutionError
@@ -19,7 +26,10 @@ from captains_chair.models import (
     ActionKind,
     ActionScope,
     AppConfig,
+    CommentTriage,
     CompletionPolicy,
+    Course,
+    CourseStatus,
     EventRecord,
     FinalReview,
     FinalVerdict,
@@ -33,6 +43,8 @@ from captains_chair.models import (
     RunState,
     UXReview,
     WorkerResult,
+    WorkPackage,
+    WorkPackageStatus,
 )
 from captains_chair.notifications import NotificationError, Notifier, requires_owner_attention
 from captains_chair.orchestration import (
@@ -42,18 +54,35 @@ from captains_chair.orchestration import (
     WorkspaceRef,
     classify_blocker,
 )
-from captains_chair.policy import evaluate_action, evaluate_control_plane_completion, evaluate_merge
+from captains_chair.policy import (
+    evaluate_action,
+    evaluate_control_plane_completion,
+    evaluate_merge,
+    evaluate_owner_completion,
+)
 from captains_chair.prompting import load_prompt
 from captains_chair.security import safe_changed_paths, scan_secrets
 from captains_chair.state import StateStore
 from captains_chair.usage import dispatch_budget
 from captains_chair.worktrees import Worktree, WorktreeManager
 
-UsageSynchronizer = Callable[[StateStore, RepoConfig], dict[str, Any]]
+LegacyUsageSynchronizer = Callable[[StateStore, RepoConfig], dict[str, Any]]
+UsageSynchronizer = UsageTelemetryAdapter | LegacyUsageSynchronizer
 _DIRECT_CONTROL_PLANE_ACTIONS = frozenset(
     {
         ActionKind.REPORT_ONLY,
         ActionKind.NO_ACTION,
+        ActionKind.CREATE_ISSUE,
+        ActionKind.UPDATE_ISSUE,
+        ActionKind.LABEL_ISSUE,
+        ActionKind.RETARGET_ISSUE,
+        ActionKind.CLOSE_ISSUE,
+    }
+)
+_COURSE_SCOPED_ACTIONS = frozenset(
+    {
+        ActionKind.IMPLEMENT,
+        ActionKind.UPDATE_PLAN,
         ActionKind.CREATE_ISSUE,
         ActionKind.UPDATE_ISSUE,
         ActionKind.LABEL_ISSUE,
@@ -130,9 +159,87 @@ class ControlPlaneEngine:
         self.usage_sync = usage_sync
         self.worktrees = WorktreeManager(config.state_dir / "worktrees", runner)
 
+    def _synchronize_usage(self, repo: RepoConfig) -> dict[str, Any]:
+        usage_sync = self.usage_sync
+        if usage_sync is None:
+            return {}
+        synchronize = getattr(usage_sync, "synchronize", None)
+        if callable(synchronize):
+            return cast(dict[str, Any], synchronize(self.state, repo))
+        return cast(LegacyUsageSynchronizer, usage_sync)(self.state, repo)
+
     def _runtime_name(self) -> str:
         value = getattr(getattr(self.harness, "config", None), "kind", None)
         return str(value).strip() if value else "unknown"
+
+    def _models_for(
+        self,
+        repo: RepoConfig,
+        role: str,
+        *,
+        course: Course | None = None,
+        decision: PlanDecision | None = None,
+        stage: str | None = None,
+    ) -> RoleModels:
+        """Resolve global, repo, course, package, and stage model layers."""
+        try:
+            selected = self.models.for_role(role)
+        except ValueError:
+            selected = self.models.reviewer if role == "comment_adjudicator" else self.models.coder
+        try:
+            if course is None:
+                courses = CourseStore(repo.local_path).list()
+                course = next(
+                    (item for item in courses if item.status == CourseStatus.ENGAGED),
+                    None,
+                )
+        except CourseError:
+            course = None
+        package: WorkPackage | None = None
+        if course is not None and decision is not None and decision.work_package_key:
+            package = next(
+                (item for item in course.work_packages if item.key == decision.work_package_key),
+                None,
+            )
+        layers = [repo.model_profiles]
+        if course is not None:
+            layers.append(course.model_profiles)
+        if package is not None:
+            layers.append(package.model_profiles)
+        for layer in layers:
+            if role in layer:
+                selected = layer[role]
+        if stage:
+            stage_keys = (f"stage:{stage}", stage)
+            for layer in layers:
+                for key in stage_keys:
+                    if key in layer:
+                        selected = layer[key]
+        return selected
+
+    def _set_course_package_status(
+        self,
+        repo: RepoConfig,
+        decision: PlanDecision,
+        status: WorkPackageStatus,
+    ) -> None:
+        """Keep durable course state aligned with the worker workflow boundary."""
+        if not decision.course_key or not decision.work_package_key:
+            return
+        store = CourseStore(repo.local_path)
+        course = store.load(decision.course_key)
+        if course.status != CourseStatus.ENGAGED:
+            raise CourseError(f"course {course.key!r} is not engaged")
+        package = next(
+            (item for item in course.work_packages if item.key == decision.work_package_key),
+            None,
+        )
+        if package is None:
+            raise CourseError(
+                f"course {course.key!r} has no work package {decision.work_package_key!r}"
+            )
+        if package.status != status:
+            store.save(set_work_package_status(course, package.key, status))
 
     def _record_model_call(
         self,
@@ -173,13 +280,17 @@ class ControlPlaneEngine:
                 {
                     "allowed": False,
                     "reason": "repository Captain is disabled; model invocation was skipped",
-                    "budget_credits": self.config.usage.daily_budget_credits,
+                    "daily_token_limit": self.config.usage.daily_token_limit,
                 },
             )
-        if self.config.usage.daily_budget_credits is not None or self.config.usage.block_on_unknown:
+        if (
+            self.config.usage.daily_token_limit is not None
+            or self.config.usage.model_daily_token_limits
+            or self.config.usage.block_on_unknown
+        ):
             if self.usage_sync is not None:
                 try:
-                    sync_result = self.usage_sync(self.state, repo)
+                    sync_result = self._synchronize_usage(repo)
                 except Exception as exc:
                     raise ModelCallSuppressedError(
                         repo.full_name,
@@ -188,7 +299,7 @@ class ControlPlaneEngine:
                             "allowed": False,
                             "reason": "usage telemetry sync failed; direct model call was suppressed",
                             "error": str(exc)[:1000],
-                            "budget_credits": self.config.usage.daily_budget_credits,
+                            "daily_token_limit": self.config.usage.daily_token_limit,
                         },
                     ) from exc
                 if sync_result.get("status") == "degraded":
@@ -199,12 +310,12 @@ class ControlPlaneEngine:
                             "allowed": False,
                             "reason": "usage telemetry sync was degraded; direct model call was suppressed",
                             "usage_sync": sync_result,
-                            "budget_credits": self.config.usage.daily_budget_credits,
+                            "daily_token_limit": self.config.usage.daily_token_limit,
                         },
                     )
             since = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
             decision = dispatch_budget(
-                # The configured budget protects the provider/account, not one
+                # Configured token limits protect the provider/account, not one
                 # repository. Keep repo filtering for reports, but admit calls
                 # against the global same-day ledger.
                 self.state.usage_summary(since=since),
@@ -288,6 +399,60 @@ class ControlPlaneEngine:
             notify=notify,
         )
 
+    def _course_context(self, repo: RepoConfig) -> tuple[Course | None, str | None]:
+        """Return the one active course and fail closed while it is not engaged."""
+        try:
+            courses = [
+                course
+                for course in CourseStore(repo.local_path).list()
+                if course.status != CourseStatus.COMPLETED
+            ]
+        except CourseError as exc:
+            return None, f"course state is invalid: {str(exc)[:1000]}"
+        if len(courses) > 1:
+            keys = ", ".join(course.key for course in courses)
+            return None, f"multiple active courses are present ({keys}); only one course may be engaged per repository"
+        if not courses:
+            return None, None
+        course = courses[0]
+        if course.status == CourseStatus.ENGAGED:
+            return course, None
+        if course.status == CourseStatus.PAUSED:
+            return course, f"course {course.key!r} is paused"
+        if course.status == CourseStatus.BLOCKED:
+            return course, f"course {course.key!r} is blocked"
+        return course, f"course {course.key!r} must pass readiness review and receive owner approval before work begins"
+
+    def _course_blocked_result(
+        self,
+        repo: RepoConfig,
+        run_id: str,
+        course: Course | None,
+        reason: str,
+    ) -> CycleResult:
+        current = course.status.value if course is not None else "invalid"
+        event_type = "COURSE_PAUSED" if current == CourseStatus.PAUSED.value else "COURSE_APPROVAL_REQUIRED"
+        fingerprint = _fingerprint({"course": course.model_dump(mode="json") if course else None, "reason": reason})
+        event = self._emit(
+            repo,
+            run_id,
+            RunState.BLOCKED,
+            event_type,
+            "Course work is waiting for its next human decision.",
+            reason,
+            fingerprint,
+            {
+                "course_key": course.key if course else None,
+                "course_status": current,
+                "next_action": (
+                    "Complete readiness answers and approve the course in the dashboard."
+                    if current not in {CourseStatus.PAUSED.value, CourseStatus.BLOCKED.value}
+                    else "Resume the course or resolve its blocker in the dashboard."
+                ),
+            },
+        )
+        return CycleResult(event, 2)
+
     def watch(
         self, repo: RepoConfig, *, shadow: bool = False, execute: bool = True
     ) -> CycleResult | None:
@@ -298,6 +463,9 @@ class ControlPlaneEngine:
                 return self._disabled_result(repo, run_id, "watch")
             if self.state.baseline(repo.full_name) is None:
                 return None
+            course, course_blocker = self._course_context(repo)
+            if course_blocker is not None:
+                return self._course_blocked_result(repo, run_id, course, course_blocker)
             self._sync_default_branch_if_clean(repo)
             snapshot = self.github.snapshot(repo)
             snapshot_fingerprint = _fingerprint(snapshot.as_dict())
@@ -355,6 +523,9 @@ class ControlPlaneEngine:
                 )
                 return CycleResult(event, 2)
 
+            course, course_blocker = self._course_context(repo)
+            if course_blocker is not None:
+                return self._course_blocked_result(repo, run_id, course, course_blocker)
             default_branch_synced = self._sync_default_branch_if_clean(repo)
             snapshot = self.github.snapshot(repo)
             snapshot_fingerprint = _fingerprint(snapshot.as_dict())
@@ -518,6 +689,7 @@ class ControlPlaneEngine:
                     },
                 )
                 return CycleResult(event, 2)
+
             recent_event = self.state.latest_operational_event(repo.full_name)
             recent = [recent_event] if recent_event is not None else []
             active_workflow_count: int | None = None
@@ -554,6 +726,7 @@ class ControlPlaneEngine:
                     "repo_policy": repo_policy_fingerprint,
                     "active_workflow_count": active_workflow_count,
                     "planning_document": planning_document.fingerprint,
+                    "course": course.model_dump(mode="json") if course is not None else None,
                 }
             )
             if not force_replan and recent:
@@ -655,6 +828,7 @@ class ControlPlaneEngine:
                     run_id,
                     snapshot,
                     planning_document=planning_document,
+                    course=course,
                 )
             except ModelCallSuppressedError as exc:
                 return self._model_suppressed_result(repo, run_id, exc)
@@ -732,6 +906,29 @@ class ControlPlaneEngine:
                     },
                 )
                 return CycleResult(event, 2)
+
+            if course is not None and decision.action in _COURSE_SCOPED_ACTIONS:
+                eligible = {item.key for item in eligible_work_packages(course)}
+                if decision.course_key != course.key or decision.work_package_key not in eligible:
+                    event = self._emit(
+                        repo,
+                        run_id,
+                        RunState.BLOCKED,
+                        "COURSE_WORK_PACKAGE_REQUIRED",
+                        decision.summary,
+                        "The planner selected course-scoped work without an eligible work-package identity.",
+                        cycle_fingerprint,
+                        {
+                            "course_key": course.key,
+                            "selected_course_key": decision.course_key,
+                            "selected_work_package_key": decision.work_package_key,
+                            "eligible_work_packages": sorted(eligible),
+                            "next_action": "Replan against the eligible course work packages or update the course charter.",
+                            "decision": decision.model_dump(mode="json"),
+                            **model_evidence,
+                        },
+                    )
+                    return CycleResult(event, 2)
 
             self.state.save_proposal(
                 repo.full_name,
@@ -1038,6 +1235,7 @@ class ControlPlaneEngine:
             return CycleResult(event, 0)
         try:
             queued = self._queue_workflow(repo, decision, action_id)
+            self._set_course_package_status(repo, decision, WorkPackageStatus.EXECUTING)
         except Exception as exc:
             self.state.set_proposal_status(repo.full_name, action_id, "failed")
             event = self._emit(
@@ -1259,6 +1457,7 @@ class ControlPlaneEngine:
         snapshot: RepositorySnapshot,
         *,
         planning_document: PlanningDocument,
+        course: Course | None = None,
     ) -> tuple[PlanDecision, dict[str, Any]]:
         baseline = self.state.baseline(repo.full_name)
         baseline_evidence: dict[str, Any] | None = baseline
@@ -1285,6 +1484,7 @@ class ControlPlaneEngine:
                 "planning_document": planning_document.text,
                 "planning_document_source": planning_document.source,
                 "planning_document_fingerprint": planning_document.fingerprint,
+                "course": course.model_dump(mode="json") if course is not None else None,
             },
             indent=2,
             sort_keys=True,
@@ -1296,7 +1496,7 @@ class ControlPlaneEngine:
             run_id,
             "planner",
             prompt=prompt,
-            models=self.models.planner,
+            models=self._models_for(repo, "planner", course=course, stage="planning"),
             output_model=PlanDecision,
             cwd=repo.local_path,
             writable=False,
@@ -1875,6 +2075,7 @@ class ControlPlaneEngine:
         model_evidence: dict[str, Any],
     ) -> CycleResult:
         self.state.transition(repo.full_name, RunState.EXECUTING)
+        self._set_course_package_status(repo, decision, WorkPackageStatus.EXECUTING)
         work_id = decision.work_item_id or run_id[:8]
         lane = "docs" if decision.action == ActionKind.UPDATE_PLAN else "work"
         worktree = self.worktrees.create(repo, work_id, lane=lane)
@@ -1885,7 +2086,7 @@ class ControlPlaneEngine:
                 run_id,
                 "coder",
                 prompt=prompt,
-                models=self.models.coder,
+                models=self._models_for(repo, "coder", decision=decision, stage="implementation"),
                 output_model=WorkerResult,
                 cwd=worktree.path,
                 writable=True,
@@ -1980,6 +2181,7 @@ class ControlPlaneEngine:
         if not remote_branch:
             raise ValueError("pull request head branch is missing")
         self.state.transition(repo.full_name, RunState.REPAIRING)
+        self._set_course_package_status(repo, decision, WorkPackageStatus.REVIEWING)
         worktree = self.worktrees.checkout_existing(
             repo, f"pr-{decision.target_pr}-{run_id[:8]}", remote_branch
         )
@@ -1998,7 +2200,7 @@ class ControlPlaneEngine:
                 run_id,
                 "repair",
                 prompt=prompt,
-                models=self.models.coder,
+                models=self._models_for(repo, "coder", decision=decision, stage="repair"),
                 output_model=WorkerResult,
                 cwd=worktree.path,
                 writable=True,
@@ -2078,6 +2280,57 @@ class ControlPlaneEngine:
             )
         return events
 
+    def _triage_comments(
+        self,
+        repo: RepoConfig,
+        run_id: str,
+        decision: PlanDecision,
+        pr: dict[str, Any],
+        diff: str,
+        threads: list[dict[str, Any]],
+    ) -> tuple[CommentTriage, str] | None:
+        head_sha = str(pr.get("headRefOid") or "")
+        active: list[dict[str, Any]] = []
+        for thread in threads:
+            if thread.get("isResolved") or thread.get("isOutdated"):
+                continue
+            comments = thread.get("comments")
+            if not isinstance(comments, list) or not comments:
+                continue
+            active.append(thread)
+        if not active:
+            return None
+        prompt = (
+            load_prompt("comment-adjudicator.md")
+            + "\n\n"
+            + json.dumps(
+                {"repo": repo.model_dump(mode="json"), "pr": pr, "head_sha": head_sha, "threads": active, "diff": diff},
+                default=str,
+            )[:250_000]
+        )
+        models = self._models_for(
+            repo,
+            "comment_adjudicator",
+            decision=decision,
+            stage="review",
+        )
+        result = self.run_model(
+            repo,
+            run_id,
+            "comment-adjudicator",
+            prompt=prompt,
+            models=models,
+            output_model=CommentTriage,
+            cwd=repo.local_path,
+            writable=False,
+        )
+        triage = CommentTriage.model_validate(result.output)
+        if triage.head_sha != head_sha:
+            raise RuntimeError(
+                f"comment adjudicator returned stale head {triage.head_sha}; current PR head is {head_sha}"
+            )
+        return triage, result.resolved_model
+
     def _requires_ux_review(
         self, repo: RepoConfig, pr: dict[str, Any], decision: PlanDecision
     ) -> bool:
@@ -2107,6 +2360,7 @@ class ControlPlaneEngine:
         repo: RepoConfig,
         run_id: str,
         number: int,
+        decision: PlanDecision,
         pr: dict[str, Any],
         diff: str,
         threads: list[dict[str, Any]],
@@ -2130,7 +2384,12 @@ class ControlPlaneEngine:
                     default=str,
                 )[:300_000]
             )
-            models = self.models.ux_reviewer or self.models.reviewer
+            models = self._models_for(
+                repo,
+                "ux_reviewer",
+                decision=decision,
+                stage="ux_review",
+            )
             result = self.run_model(
                 repo,
                 run_id,
@@ -2158,15 +2417,84 @@ class ControlPlaneEngine:
         model_evidence: dict[str, Any],
     ) -> CycleResult:
         self.state.transition(repo.full_name, RunState.REVIEWING)
+        self._set_course_package_status(repo, decision, WorkPackageStatus.REVIEWING)
         pr = self.github.pull_request(repo, number)
         diff = self.github.pull_request_diff(repo, number)
         threads = self.github.review_threads(repo, number)
         head_sha = str(pr.get("headRefOid") or "")
+        comment_triage = self._triage_comments(repo, run_id, decision, pr, diff, threads)
+        comment_evidence: dict[str, Any] = {}
+        if comment_triage is not None:
+            triage, triage_model = comment_triage
+            comment_evidence = {"comment_triage": triage.model_dump(mode="json"), "comment_triage_model": triage_model}
+            if triage.owner_decisions:
+                self.github.comment_pull_request(
+                    repo,
+                    number,
+                    _comment_triage_comment("Owner decision required for review comments", head_sha, triage),
+                )
+                self.state.update_active_work(repo.full_name, status="owner_blocked", head_sha=head_sha)
+                self.state.transition(repo.full_name, RunState.BLOCKED)
+                return CycleResult(
+                    self._emit(
+                        repo,
+                        run_id,
+                        RunState.BLOCKED,
+                        "ATTENTION_REQUIRED",
+                        triage.summary,
+                        "Review-comment adjudication identified a decision that cannot be safely automated.",
+                        fingerprint,
+                        {
+                            "next_action": "Resolve the review-comment decision, then rerun the current-head review.",
+                            "links": [pr.get("url")],
+                            "pr": number,
+                            "head_sha": head_sha,
+                            **comment_evidence,
+                            **model_evidence,
+                        },
+                    ),
+                    2,
+                )
+            if triage.verdict == ReviewVerdict.REQUEST_CHANGES:
+                self.github.comment_pull_request(
+                    repo,
+                    number,
+                    _comment_triage_comment("Review-comment triage requested changes", head_sha, triage),
+                )
+                self.state.update_active_work(repo.full_name, status="repair_requested", head_sha=head_sha)
+                self.state.transition(repo.full_name, RunState.REPAIRING)
+                return CycleResult(
+                    self._emit(
+                        repo,
+                        run_id,
+                        RunState.REPAIRING,
+                        "COMMENT_TRIAGE_BLOCKED",
+                        triage.summary,
+                        "The independent comment adjudicator accepted actionable review findings on the current head.",
+                        fingerprint,
+                        {
+                            "next_action": "Queue a repair limited to the accepted review comments.",
+                            "links": [pr.get("url")],
+                            "pr": number,
+                            "head_sha": head_sha,
+                            "findings": [item.model_dump(mode="json") for item in triage.accepted_findings],
+                            **comment_evidence,
+                            **model_evidence,
+                        },
+                    ),
+                    2,
+                )
         review_prompt = (
             load_prompt("reviewer.md")
             + "\n\n"
             + json.dumps(
-                {"decision": decision.model_dump(mode="json"), "pr": pr, "threads": threads, "diff": diff},
+                {
+                    "decision": decision.model_dump(mode="json"),
+                    "pr": pr,
+                    "threads": threads,
+                    "comment_triage": comment_evidence,
+                    "diff": diff,
+                },
                 default=str,
             )[:300_000]
         )
@@ -2175,7 +2503,7 @@ class ControlPlaneEngine:
             run_id,
             "independent-review",
             prompt=review_prompt,
-            models=self.models.reviewer,
+            models=self._models_for(repo, "reviewer", decision=decision, stage="review"),
             output_model=IndependentReview,
             cwd=repo.local_path,
             writable=False,
@@ -2210,7 +2538,9 @@ class ControlPlaneEngine:
 
         ux_evidence: dict[str, Any] = {}
         if self._requires_ux_review(repo, pr, decision):
-            ux, ux_model, ux_cleanup_warning = self._ux_review(repo, run_id, number, pr, diff, threads)
+            ux, ux_model, ux_cleanup_warning = self._ux_review(
+                repo, run_id, number, decision, pr, diff, threads
+            )
             ux_evidence = {"ux_review": ux.model_dump(mode="json"), "ux_model": ux_model}
             if ux_cleanup_warning:
                 ux_evidence["ux_worktree_cleanup_warning"] = ux_cleanup_warning
@@ -2257,6 +2587,7 @@ class ControlPlaneEngine:
                     "pr": pr,
                     "threads": threads,
                     "independent_review": independent.model_dump(mode="json"),
+                    **comment_evidence,
                     **ux_evidence,
                 },
                 default=str,
@@ -2267,7 +2598,7 @@ class ControlPlaneEngine:
             run_id,
             "final-review",
             prompt=final_prompt,
-            models=self.models.final_reviewer,
+            models=self._models_for(repo, "final_reviewer", decision=decision, stage="final_review"),
             output_model=FinalReview,
             cwd=repo.local_path,
             writable=False,
@@ -2358,35 +2689,14 @@ class ControlPlaneEngine:
             )
 
         gate = self.github.gate(repo, number, review_head_sha=head_sha)
-        if repo.completion_policy == CompletionPolicy.CONTROL_PLANE_COMPLETE:
+        if repo.completion_policy == CompletionPolicy.OWNER_APPROVAL:
+            completion = evaluate_owner_completion(repo, final.verdict, gate)
+        elif repo.completion_policy == CompletionPolicy.CONTROL_PLANE_COMPLETE:
             completion = evaluate_control_plane_completion(repo, final.verdict, gate)
-            if completion.allowed:
-                self.github.comment_pull_request(
-                    repo,
-                    number,
-                    _final_review_comment("Captain completion gates passed", head_sha, final),
-                )
-                self.state.update_active_work(repo.full_name, status="control_plane_completed", head_sha=head_sha)
-                self.state.transition(repo.full_name, RunState.COMPLETION_READY)
-                return CycleResult(
-                    self._emit(
-                        repo,
-                        run_id,
-                        RunState.COMPLETION_READY,
-                        "CONTROL_PLANE_COMPLETED",
-                        final.summary,
-                        completion.reason,
-                        fingerprint,
-                        {
-                        "next_action": "The Captain work item is complete; merge remains an owner action.",
-                        "links": [pr.get("url")],
-                        **ux_evidence,
-                    },
-                ),
-                0,
-                )
-        merge_policy = evaluate_merge(repo, final.verdict, gate)
-        if merge_policy.allowed:
+        else:
+            completion = evaluate_merge(repo, final.verdict, gate)
+
+        if completion.allowed and repo.completion_policy == CompletionPolicy.AUTO_MERGE:
             self.github.comment_pull_request(
                 repo,
                 number,
@@ -2412,40 +2722,53 @@ class ControlPlaneEngine:
                         "links": [pr.get("url")],
                         "merged_head_sha": merge_commit_sha,
                         "pr_head_sha": head_sha,
+                        "course_key": decision.course_key,
+                        "work_package_key": decision.work_package_key,
                         **ux_evidence,
                     },
                 ),
                 0,
             )
 
-        if (
-            final.verdict in {FinalVerdict.READY_FOR_OWNER, FinalVerdict.CONTROL_PLANE_COMPLETE}
-            or merge_policy.requires_owner
-        ):
+        if completion.allowed:
+            owner_completion = repo.completion_policy == CompletionPolicy.OWNER_APPROVAL
+            event_type = "COMPLETION_READY" if owner_completion else "CONTROL_PLANE_COMPLETED"
+            next_action = (
+                "Apply the configured owner completion decision."
+                if owner_completion
+                else "The Captain work item is complete; merge remains an owner action."
+            )
             self.github.comment_pull_request(
                 repo,
                 number,
                 _final_review_comment("Ready for configured completion decision", head_sha, final),
             )
             self.state.update_active_work(repo.full_name, status="completion_ready", head_sha=head_sha)
+            self._set_course_package_status(
+                repo,
+                decision,
+                WorkPackageStatus.COMPLETE
+                if repo.completion_policy == CompletionPolicy.CONTROL_PLANE_COMPLETE
+                else WorkPackageStatus.REVIEWING,
+            )
             self.state.transition(repo.full_name, RunState.COMPLETION_READY)
             return CycleResult(
                 self._emit(
                     repo,
                     run_id,
-                    RunState.COMPLETION_READY,
-                    "COMPLETION_READY",
+                RunState.COMPLETION_READY,
+                    event_type,
                     final.summary,
-                    merge_policy.reason,
+                    completion.reason,
                     fingerprint,
                     {
-                        "next_action": "Apply the configured owner or completion decision.",
+                        "next_action": next_action,
                         "links": [pr.get("url")],
-                        "owner_required": merge_policy.requires_owner,
+                        "owner_required": owner_completion,
                         **ux_evidence,
                     },
                 ),
-                2 if merge_policy.requires_owner else 0,
+                2 if owner_completion else 0,
             )
 
         self.state.transition(repo.full_name, RunState.PR_OPEN)
@@ -2457,11 +2780,13 @@ class ControlPlaneEngine:
                 RunState.PR_OPEN,
                 "REVIEW_WAITING",
                 final.summary,
-                merge_policy.reason,
+                completion.reason,
                 fingerprint,
                 {
                     "next_action": "Wait for the missing gate evidence, then rerun current-head review.",
                     "links": [pr.get("url")],
+                    "completion_gate": completion.reason,
+                    **comment_evidence,
                     **ux_evidence,
                 },
             ),
@@ -2535,6 +2860,20 @@ class ControlPlaneEngine:
             )
             return CycleResult(event, 2)
         self.state.transition(repo.full_name, RunState.READY)
+        course_key = merge_event.evidence.get("course_key")
+        work_package_key = merge_event.evidence.get("work_package_key")
+        if isinstance(course_key, str) and isinstance(work_package_key, str):
+            self._set_course_package_status(
+                repo,
+                PlanDecision(
+                    action=ActionKind.IMPLEMENT,
+                    summary="post-merge course package",
+                    reason="post-merge verification",
+                    course_key=course_key,
+                    work_package_key=work_package_key,
+                ),
+                WorkPackageStatus.COMPLETE,
+            )
         event = self._emit(
             repo,
             run_id,
@@ -2870,6 +3209,23 @@ def _review_comment(title: str, head_sha: str, review: IndependentReview) -> str
     if review.residual_risks:
         lines.extend(["", "### Residual risks", ""])
         lines.extend(f"- {risk}" for risk in review.residual_risks)
+    return "\n".join(lines)
+
+
+def _comment_triage_comment(title: str, head_sha: str, triage: CommentTriage) -> str:
+    lines = [f"## {title}", "", f"Adjudicated head: `{head_sha}`", "", triage.summary]
+    if triage.decisions:
+        lines.extend(["", "### Decisions", ""])
+        for decision in triage.decisions:
+            lines.append(f"- `{decision.thread_id}`: **{decision.disposition.value}**: {decision.rationale}")
+    if triage.accepted_findings:
+        lines.extend(["", "### Accepted findings", ""])
+        for finding in triage.accepted_findings:
+            location = f" ({finding.path}:{finding.line})" if finding.path else ""
+            lines.append(f"- **{finding.priority} {finding.title}**{location}: {finding.detail}")
+    if triage.owner_decisions:
+        lines.extend(["", "### Owner decisions", ""])
+        lines.extend(f"- {item}" for item in triage.owner_decisions)
     return "\n".join(lines)
 
 

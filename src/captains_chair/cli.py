@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
+from captains_chair.adapters import CallbackUsageTelemetryAdapter, UsageTelemetryAdapter
 from captains_chair.baseline import DeepBaselineCollector
 from captains_chair.canary import (
     build_canary_spec,
@@ -23,6 +24,7 @@ from captains_chair.canary import (
 from captains_chair.command import run_command
 from captains_chair.completion_gate import GitHubCompletionValidator
 from captains_chair.config import load_config, write_json_schema
+from captains_chair.courses import CourseStore, planning_session
 from captains_chair.engine import ControlPlaneEngine, ModelCallSuppressedError
 from captains_chair.github import GhGitHubProvider
 from captains_chair.harness import build_harness
@@ -30,6 +32,7 @@ from captains_chair.merge_gate import evaluate_workboard_merge, final_review_hea
 from captains_chair.models import (
     ActionKind,
     AppConfig,
+    DirectOrchestratorConfig,
     EventRecord,
     HarnessHealth,
     OpenClawWorkboardConfig,
@@ -37,6 +40,7 @@ from captains_chair.models import (
     PlanDecision,
     RepoConfig,
     RunState,
+    WorkerAssignments,
 )
 from captains_chair.notifications import NotificationError, Notifier, build_notifier, render_event
 from captains_chair.openclaw_runtime import OpenClawRuntimeInstaller
@@ -166,9 +170,13 @@ def _parser() -> argparse.ArgumentParser:
     status.add_argument("--repo", required=True)
     status.add_argument("--limit", type=int, default=10)
 
+    planning = sub.add_parser("planning-session", help="print the host-agent planning conversation handoff")
+    planning.add_argument("--repo", required=True)
+    planning.add_argument("--course-key", required=True)
+
     usage = sub.add_parser("usage", help="report or import model usage without transcripts")
     usage_action = usage.add_subparsers(dest="usage_action", required=True)
-    usage_report = usage_action.add_parser("report", help="show measured token usage and credit estimates")
+    usage_report = usage_action.add_parser("report", help="show provider-reported token usage")
     usage_report.add_argument("--repo")
     usage_report.add_argument("--since", help="ISO-8601 lower bound for usage records")
     usage_report.add_argument(
@@ -282,7 +290,7 @@ def _runtime(config: AppConfig, repo_name: str, harness_name: str) -> tuple[Cont
     state = StateStore(config.state_dir / "state.db")
     github = GhGitHubProvider(cwd=repo.local_path)
     harness = build_harness(harness_config)
-    models = config.model_policy(harness_name)
+    models = config.model_policy(harness_name, repo_profiles=repo.model_profiles)
     notifier = build_notifier(repo.notification)
     orchestrator = _orchestrator(config, repo_name)
     engine = ControlPlaneEngine(
@@ -302,7 +310,7 @@ def _usage_synchronizer(
     config: AppConfig,
     repo: RepoConfig,
     harness_kind: str,
-) -> Callable[[StateStore, RepoConfig], dict[str, Any]] | None:
+) -> UsageTelemetryAdapter | None:
     """Attach runtime telemetry without coupling the engine to OpenClaw."""
     if harness_kind != "openclaw":
         return None
@@ -317,14 +325,43 @@ def _usage_synchronizer(
             fallback_executable=executable,
         )
 
-    return synchronize
+    return CallbackUsageTelemetryAdapter(synchronize)
 
 
-def _orchestrator(config: AppConfig, repo_name: str) -> WorkflowOrchestrator | None:
-    repo = config.repo(repo_name)
+def _default_direct_orchestrator_config(config: AppConfig, repo: RepoConfig) -> DirectOrchestratorConfig:
+    """Build the board-free runtime used when a repo omits an orchestrator."""
+    slug = repo.full_name.lower().replace("/", "-").replace(".", "-")
+    workers = WorkerAssignments(
+        **{
+            role: f"captains-chair-{slug}-{role}"
+            for role in (
+                "captain",
+                "coder",
+                "reviewer",
+                "tester",
+                "ux_reviewer",
+                "final_reviewer",
+                "merger",
+                "verifier",
+            )
+        }
+    )
+    return DirectOrchestratorConfig(
+        database_path=config.state_dir / "orchestrators" / f"{slug}.db",
+        board_prefix="captains-chair-direct",
+        workers=workers,
+    )
+
+
+def _orchestrator_config(config: AppConfig, repo: RepoConfig) -> Any:
     if repo.orchestrator is None:
-        return None
-    value = config.orchestrators[repo.orchestrator]
+        return _default_direct_orchestrator_config(config, repo)
+    return config.orchestrators[repo.orchestrator]
+
+
+def _orchestrator(config: AppConfig, repo_name: str) -> WorkflowOrchestrator:
+    repo = config.repo(repo_name)
+    value = _orchestrator_config(config, repo)
     try:
         worktrees = WorktreeManager(config.state_dir / "worktrees")
 
@@ -345,9 +382,7 @@ def _orchestrator(config: AppConfig, repo_name: str) -> WorkflowOrchestrator | N
 
 def _board_id(config: AppConfig, repo_name: str) -> str:
     repo = config.repo(repo_name)
-    if repo.orchestrator is None:
-        raise ValueError(f"repository has no orchestrator configured: {repo.full_name}")
-    value = config.orchestrators[repo.orchestrator]
+    value = _orchestrator_config(config, repo)
     return repo.orchestration_board or (f"{value.board_prefix}-{repo.full_name.replace('/', '-').lower()}")
 
 
@@ -476,13 +511,13 @@ def _usage_guard(
                 fallback_executable=orchestrator_executable,
             )
         except Exception as exc:
-            # Telemetry must never prevent recovery, but a configured hard budget
+            # Telemetry must never prevent recovery, but a configured hard limit
             # fails closed when the latest usage cannot be reconciled.
             usage_sync = {"status": "degraded", "error": str(exc)[:1000]}
     state.prune_usage(config.usage.retention_days)
     since = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
     budget = dispatch_budget(
-        # Worker dispatch shares the account-wide budget across all managed
+        # Worker dispatch shares account-wide token limits across all managed
         # repositories; per-repo filtering remains available in usage reports.
         state.usage_summary(since=since),
         config.usage,
@@ -490,7 +525,11 @@ def _usage_guard(
     if (
         usage_sync is not None
         and usage_sync.get("status") == "degraded"
-        and (config.usage.daily_budget_credits is not None or config.usage.block_on_unknown)
+        and (
+            config.usage.daily_token_limit is not None
+            or config.usage.model_daily_token_limits
+            or config.usage.block_on_unknown
+        )
     ):
         budget = {
             **budget,
@@ -614,27 +653,23 @@ def _orchestration_preflight(
             state,
             orchestrator_executable=executable,
         )
-        checks["usage_budget"] = budget
+        checks["usage_limits"] = budget
         checks["usage_sync"] = usage_sync or {"status": "not_requested"}
         if not budget.get("allowed", False):
             failures.append(str(budget.get("reason") or "usage guard denied worker dispatch"))
         elif isinstance(usage_sync, dict) and usage_sync.get("status") == "degraded":
-            warnings.append("usage telemetry sync is degraded; the configured budget is not currently hard-blocking")
-        if budget.get("budget_credits") is None:
-            warnings.append("no daily usage budget is configured")
-        telemetry_gaps = int(budget.get("unknown_records") or 0) + int(
-            budget.get("incomplete_cost_groups") or 0
-        ) + int(budget.get("unpriced_groups") or 0)
+            warnings.append("usage telemetry sync is degraded; configured token limits are not currently hard-blocking")
+        if budget.get("daily_token_limit") is None and not budget.get("model_limits"):
+            warnings.append("no daily token limit is configured")
+        telemetry_gaps = int(budget.get("unknown_records") or 0)
         if telemetry_gaps:
             warnings.append(
-                "usage telemetry is incomplete; estimates may be lower bounds "
-                f"(unknown={budget.get('unknown_records', 0)}, "
-                f"incomplete={budget.get('incomplete_cost_groups', 0)}, "
-                f"unpriced={budget.get('unpriced_groups', 0)})"
+                "usage telemetry is incomplete; missing tokens remain unknown "
+                f"(unknown={budget.get('unknown_records', 0)})"
             )
     except Exception as exc:
         detail = str(exc)[:2000]
-        checks["usage_budget"] = {"status": "failed", "error": detail}
+        checks["usage_limits"] = {"status": "failed", "error": detail}
         failures.append(f"usage preflight failed: {detail}")
 
     if repo.operation_mode == OperationMode.DISABLED:
@@ -1199,6 +1234,11 @@ def main(argv: list[str] | None = None) -> int:
                 )
             )
             return 2 if state.current_state(args.repo) in {RunState.BLOCKED, RunState.DEGRADED} else 0
+        if args.command == "planning-session":
+            repo = config.repo(args.repo)
+            course = CourseStore(repo.local_path).load(args.course_key)
+            print(json.dumps(planning_session(course), indent=2, default=str))
+            return 0
         if args.command == "usage":
             state = StateStore(config.state_dir / "state.db")
             if args.usage_action == "report":
@@ -1402,8 +1442,6 @@ def main(argv: list[str] | None = None) -> int:
                     print(json.dumps(mode_block, indent=2))
                     return 0
             orchestrator = _orchestrator(config, args.repo)
-            if orchestrator is None:
-                raise ValueError(f"repository has no orchestrator configured: {args.repo}")
             board_id = _board_id(config, args.repo)
             state = StateStore(config.state_dir / "state.db")
             orchestrator_config = config.orchestrators[repo.orchestrator] if repo.orchestrator else None
@@ -1642,8 +1680,6 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 return 0
             orchestrator = _orchestrator(config, repo.full_name)
-            if orchestrator is None:
-                raise ValueError(f"repository has no orchestrator configured: {repo.full_name}")
             cards = orchestrator.adapter.list_cards(_board_id(config, repo.full_name))
             final_card = next((card for card in cards if card.id == args.final_card), None)
             if final_card is None:
@@ -1747,7 +1783,10 @@ def main(argv: list[str] | None = None) -> int:
                 f"model-check:{time.time_ns()}",
                 "model-health",
                 prompt,
-                models=config.model_policy(args.harness).for_role(args.role),
+                models=config.model_policy(
+                    args.harness,
+                    repo_profiles=repo.model_profiles,
+                ).for_role(args.role),
                 output_model=HarnessHealth,
                 cwd=repo.local_path,
                 writable=False,

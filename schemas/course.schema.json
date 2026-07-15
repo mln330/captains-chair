@@ -1,0 +1,810 @@
+{
+  "$defs": {
+    "ApplicationSurface": {
+      "enum": [
+        "web_ui",
+        "cli",
+        "api",
+        "library",
+        "data_pipeline",
+        "infrastructure_release",
+        "custom"
+      ],
+      "title": "ApplicationSurface",
+      "type": "string"
+    },
+    "Checkpoint": {
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": 1,
+          "default": 1,
+          "title": "Version",
+          "type": "integer"
+        },
+        "key": {
+          "minLength": 1,
+          "title": "Key",
+          "type": "string"
+        },
+        "title": {
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/CheckpointKind",
+          "default": "human_decision"
+        },
+        "reason": {
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "blocks_work_packages": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Blocks Work Packages",
+          "type": "array"
+        },
+        "status": {
+          "$ref": "#/$defs/CheckpointStatus",
+          "default": "pending"
+        },
+        "required": {
+          "default": true,
+          "title": "Required",
+          "type": "boolean"
+        },
+        "owner_decision_required": {
+          "default": true,
+          "title": "Owner Decision Required",
+          "type": "boolean"
+        },
+        "resolved_by": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resolved By"
+        },
+        "resolved_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resolved At"
+        },
+        "evidence": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence",
+          "type": "array"
+        }
+      },
+      "required": [
+        "key",
+        "title",
+        "reason"
+      ],
+      "title": "Checkpoint",
+      "type": "object"
+    },
+    "CheckpointKind": {
+      "enum": [
+        "course_approval",
+        "architecture",
+        "milestone_demo",
+        "human_decision",
+        "release"
+      ],
+      "title": "CheckpointKind",
+      "type": "string"
+    },
+    "CheckpointStatus": {
+      "enum": [
+        "pending",
+        "approved",
+        "blocked",
+        "resolved",
+        "waived"
+      ],
+      "title": "CheckpointStatus",
+      "type": "string"
+    },
+    "CourseKind": {
+      "enum": [
+        "greenfield",
+        "takeover",
+        "feature"
+      ],
+      "title": "CourseKind",
+      "type": "string"
+    },
+    "CourseStatus": {
+      "enum": [
+        "draft",
+        "readiness_review",
+        "awaiting_approval",
+        "engaged",
+        "paused",
+        "completed",
+        "blocked"
+      ],
+      "title": "CourseStatus",
+      "type": "string"
+    },
+    "ModelCapability": {
+      "additionalProperties": false,
+      "properties": {
+        "structured_output": {
+          "default": false,
+          "title": "Structured Output",
+          "type": "boolean"
+        },
+        "tool_access": {
+          "default": false,
+          "title": "Tool Access",
+          "type": "boolean"
+        },
+        "token_telemetry": {
+          "default": false,
+          "title": "Token Telemetry",
+          "type": "boolean"
+        },
+        "supported_efforts": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ReasoningEffort"
+          },
+          "title": "Supported Efforts",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "supported_execution_modes": {
+          "default": [
+            "standard"
+          ],
+          "items": {
+            "$ref": "#/$defs/ModelExecutionMode"
+          },
+          "title": "Supported Execution Modes",
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "title": "ModelCapability",
+      "type": "object"
+    },
+    "ModelExecutionMode": {
+      "enum": [
+        "standard",
+        "pro"
+      ],
+      "title": "ModelExecutionMode",
+      "type": "string"
+    },
+    "ModelProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "primary": {
+          "$ref": "#/$defs/ModelTarget"
+        },
+        "fallbacks": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ModelTarget"
+          },
+          "title": "Fallbacks",
+          "type": "array"
+        },
+        "allow_fallback": {
+          "default": true,
+          "title": "Allow Fallback",
+          "type": "boolean"
+        },
+        "max_attempts": {
+          "default": 2,
+          "maximum": 10,
+          "minimum": 1,
+          "title": "Max Attempts",
+          "type": "integer"
+        },
+        "escalation_conditions": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Escalation Conditions",
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "primary"
+      ],
+      "title": "ModelProfile",
+      "type": "object"
+    },
+    "ModelQualification": {
+      "enum": [
+        "untested",
+        "shadow",
+        "canary",
+        "certified",
+        "autonomous"
+      ],
+      "title": "ModelQualification",
+      "type": "string"
+    },
+    "ModelTarget": {
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "minLength": 1,
+          "title": "Model",
+          "type": "string"
+        },
+        "agent": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Agent"
+        },
+        "runtime": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Runtime"
+        },
+        "provider": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider"
+        },
+        "thinking": {
+          "$ref": "#/$defs/ReasoningEffort",
+          "default": "high"
+        },
+        "execution_mode": {
+          "$ref": "#/$defs/ModelExecutionMode",
+          "default": "standard"
+        },
+        "qualification": {
+          "$ref": "#/$defs/ModelQualification",
+          "default": "untested"
+        },
+        "capability": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelCapability"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "max_input_tokens": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Input Tokens"
+        },
+        "max_output_tokens": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Output Tokens"
+        },
+        "max_total_tokens": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Total Tokens"
+        },
+        "local": {
+          "default": false,
+          "title": "Local",
+          "type": "boolean"
+        },
+        "autonomous_eligible": {
+          "default": false,
+          "title": "Autonomous Eligible",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "model"
+      ],
+      "title": "ModelTarget",
+      "type": "object"
+    },
+    "QAProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": 1,
+          "default": 1,
+          "title": "Version",
+          "type": "integer"
+        },
+        "key": {
+          "minLength": 1,
+          "title": "Key",
+          "type": "string"
+        },
+        "title": {
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "surfaces": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ApplicationSurface"
+          },
+          "title": "Surfaces",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "checks": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Checks",
+          "type": "array"
+        },
+        "required_tools": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Required Tools",
+          "type": "array"
+        },
+        "reviewer_role": {
+          "default": "qa_assistant",
+          "title": "Reviewer Role",
+          "type": "string"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "key",
+        "title"
+      ],
+      "title": "QAProfile",
+      "type": "object"
+    },
+    "ReadinessRequirement": {
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": 1,
+          "default": 1,
+          "title": "Version",
+          "type": "integer"
+        },
+        "key": {
+          "minLength": 1,
+          "title": "Key",
+          "type": "string"
+        },
+        "category": {
+          "minLength": 1,
+          "title": "Category",
+          "type": "string"
+        },
+        "question": {
+          "minLength": 1,
+          "title": "Question",
+          "type": "string"
+        },
+        "required": {
+          "default": true,
+          "title": "Required",
+          "type": "boolean"
+        },
+        "status": {
+          "$ref": "#/$defs/RequirementStatus",
+          "default": "unknown"
+        },
+        "answer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Answer"
+        },
+        "evidence": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "owner_decision_required": {
+          "default": false,
+          "title": "Owner Decision Required",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "key",
+        "category",
+        "question"
+      ],
+      "title": "ReadinessRequirement",
+      "type": "object"
+    },
+    "ReasoningEffort": {
+      "enum": [
+        "off",
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "title": "ReasoningEffort",
+      "type": "string"
+    },
+    "RequirementStatus": {
+      "enum": [
+        "unknown",
+        "answered",
+        "verified",
+        "waived",
+        "blocked"
+      ],
+      "title": "RequirementStatus",
+      "type": "string"
+    },
+    "WorkPackage": {
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": 1,
+          "default": 1,
+          "title": "Version",
+          "type": "integer"
+        },
+        "key": {
+          "minLength": 1,
+          "title": "Key",
+          "type": "string"
+        },
+        "title": {
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "objective": {
+          "minLength": 1,
+          "title": "Objective",
+          "type": "string"
+        },
+        "dependencies": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Dependencies",
+          "type": "array"
+        },
+        "acceptance_criteria": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Acceptance Criteria",
+          "type": "array"
+        },
+        "checks": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Checks",
+          "type": "array"
+        },
+        "qa_profiles": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Qa Profiles",
+          "type": "array"
+        },
+        "checkpoint_keys": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Checkpoint Keys",
+          "type": "array"
+        },
+        "model_profiles": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelProfile"
+          },
+          "title": "Model Profiles",
+          "type": "object"
+        },
+        "risk": {
+          "default": "medium",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ],
+          "title": "Risk",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/WorkPackageStatus",
+          "default": "planned"
+        },
+        "source_issue": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Issue"
+        }
+      },
+      "required": [
+        "key",
+        "title",
+        "objective"
+      ],
+      "title": "WorkPackage",
+      "type": "object"
+    },
+    "WorkPackageStatus": {
+      "enum": [
+        "planned",
+        "ready",
+        "executing",
+        "reviewing",
+        "blocked",
+        "complete"
+      ],
+      "title": "WorkPackageStatus",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "const": 1,
+      "default": 1,
+      "title": "Version",
+      "type": "integer"
+    },
+    "key": {
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+      "title": "Key",
+      "type": "string"
+    },
+    "repository": {
+      "pattern": "^[^/\\s]+/[^/\\s]+$",
+      "title": "Repository",
+      "type": "string"
+    },
+    "kind": {
+      "$ref": "#/$defs/CourseKind"
+    },
+    "title": {
+      "minLength": 1,
+      "title": "Title",
+      "type": "string"
+    },
+    "goal": {
+      "minLength": 10,
+      "title": "Goal",
+      "type": "string"
+    },
+    "non_goals": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Non Goals",
+      "type": "array"
+    },
+    "scope": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Scope",
+      "type": "array"
+    },
+    "users": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Users",
+      "type": "array"
+    },
+    "architecture_constraints": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Architecture Constraints",
+      "type": "array"
+    },
+    "acceptance_criteria": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Acceptance Criteria",
+      "type": "array"
+    },
+    "exit_criteria": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Exit Criteria",
+      "type": "array"
+    },
+    "readiness": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ReadinessRequirement"
+      },
+      "title": "Readiness",
+      "type": "array"
+    },
+    "work_packages": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/WorkPackage"
+      },
+      "title": "Work Packages",
+      "type": "array"
+    },
+    "checkpoints": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Checkpoint"
+      },
+      "title": "Checkpoints",
+      "type": "array"
+    },
+    "qa_profiles": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/QAProfile"
+      },
+      "title": "Qa Profiles",
+      "type": "array"
+    },
+    "model_profiles": {
+      "additionalProperties": {
+        "$ref": "#/$defs/ModelProfile"
+      },
+      "title": "Model Profiles",
+      "type": "object"
+    },
+    "status": {
+      "$ref": "#/$defs/CourseStatus",
+      "default": "draft"
+    },
+    "approved_by": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Approved By"
+    },
+    "approved_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Approved At"
+    }
+  },
+  "required": [
+    "key",
+    "repository",
+    "kind",
+    "title",
+    "goal"
+  ],
+  "title": "Course",
+  "type": "object"
+}

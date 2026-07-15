@@ -1,5 +1,7 @@
 from pathlib import Path
+from typing import Any, cast
 
+import captains_chair.queue_events as queue_events
 from captains_chair.notifications import render_event
 from captains_chair.orchestration import QueueCard, QueueStatus
 from captains_chair.queue_events import project_queue_events
@@ -371,3 +373,35 @@ def test_worker_recovery_warning_is_reported_without_owner_attention(tmp_path: P
     assert message.startswith("Captain HANDLING\n")
     assert "gateway timeout" in message
     assert "unrelated ready work continues" in message
+
+
+def test_queue_event_helpers_handle_runtime_specific_payload_edges() -> None:
+    diagnostic_rows = cast(Any, queue_events._diagnostic_rows)  # pyright: ignore[reportPrivateUsage]
+    diagnostic_action = cast(Any, queue_events._diagnostic_action)  # pyright: ignore[reportPrivateUsage]
+    latest_comment = cast(Any, queue_events._latest_comment)  # pyright: ignore[reportPrivateUsage]
+    card_block_reason = cast(Any, queue_events._card_block_reason)  # pyright: ignore[reportPrivateUsage]
+    dispatch_count = cast(Any, queue_events._dispatch_count)  # pyright: ignore[reportPrivateUsage]
+    failure_count = cast(Any, queue_events._failure_count)  # pyright: ignore[reportPrivateUsage]
+
+    assert diagnostic_rows({"diagnostics": "not-a-list"}) == []
+    assert diagnostic_rows({"diagnostics": [{"diagnostics": ["ignore", {"kind": "nested"}]}]}) == [
+        {"kind": "nested"}
+    ]
+    assert diagnostic_action({"actions": ["retry"]}, "unknown") == "retry"
+    assert "CAPTAINS_CHAIR" in diagnostic_action({}, "missing_proof")
+    assert "inspect" in diagnostic_action({}, "unknown").lower()
+
+    card = QueueCard(id="edge", title="Edge", status=QueueStatus.BLOCKED, metadata={})
+    assert card_block_reason(card) == ""
+    assert latest_comment(card) == "The previous worker ended without structured completion proof."
+    assert not cast(Any, queue_events._has_protocol_recovery_comment)(  # pyright: ignore[reportPrivateUsage]
+        card
+    )
+    assert dispatch_count(card) == 0
+    assert failure_count(card) == 0
+
+    comment_card = card.model_copy(
+        update={"metadata": {"comments": [{"body": "latest"}], "automation": {"dispatchCount": 3}}}
+    )
+    assert latest_comment(comment_card) == "latest"
+    assert dispatch_count(comment_card) == 3

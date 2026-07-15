@@ -1,6 +1,6 @@
 # Architecture
 
-CAPTAINS_CHAIR separates project-management policy from the runtime that executes worker stages.
+Captain's Chair separates SDLC control policy from the runtime that executes worker stages.
 
 ## Ownership
 
@@ -11,13 +11,25 @@ CAPTAINS_CHAIR separates project-management policy from the runtime that execute
 
 ## Portable Boundary
 
-`WorkQueueAdapter` is the runtime boundary. `OrchestrationPolicy` is the structural policy boundary, and `WorkerOrchestrationConfig` provides a reusable typed configuration base. The core emits `WorkflowSpec` and `QueueCardSpec` values with stable idempotency keys, role assignments, dependencies, workspace metadata, retry budgets, and proof requirements.
+`WorkerOrchestratorAdapter` is the runtime boundary; `WorkQueueAdapter` remains a compatibility alias. `WorkTrackerAdapter` is an optional external-project mirror and `NullWorkTracker` keeps tracking disabled. `OrchestrationPolicy` is the structural policy boundary, and `WorkerOrchestrationConfig` provides a reusable typed configuration base. The core emits `WorkflowSpec` and `QueueCardSpec` values with stable idempotency keys, role assignments, dependencies, workspace metadata, retry budgets, and proof requirements.
 
 `WorkerLifecycleAdapter` is the separate claimed-worker boundary. It standardizes
 heartbeats, passed proof, and explicit blockers while leaving claim acquisition
 and lease storage to the runtime.
 
-The OpenClaw implementation maps this contract to the bundled Workboard Gateway RPC API. A future Hermes or Codex implementation can map the same contract to its task/session primitives without changing workflow construction, policy, GitHub gates, or blocker rules.
+OpenClaw maps this contract to the bundled Workboard Gateway RPC API. `DirectOrchestrator` maps it to durable SQLite workflow state without a board. Future integrations use the generic adapter registry without changing workflow construction, policy, GitHub gates, or blocker rules.
+
+Course-scoped workflow cards carry `courseKey` and `workPackageKey` metadata. The
+durable course file remains canonical for package status; Workboard or a direct
+runtime is only the worker execution view. Queue admission moves an approved
+package to `executing`, review moves it to `reviewing`, and successful completion
+or post-merge verification moves it to `complete`.
+
+Model profiles resolve in this order: global/runtime policy, repository profile,
+engaged course profile, selected work-package profile, then stage profile. Stage
+profiles use the explicit `stage:<stage-name>` key (for example,
+`stage:implementation`), which keeps provider names out of workflow code while
+allowing a course to route implementation and review differently.
 
 Runtime adapters must provide:
 
@@ -53,6 +65,14 @@ if the checkout is dirty, on another branch, or cannot be synchronized, CAPTAINS
 document from `origin/<default-branch>` instead. If that remote document cannot be
 read from a real Git checkout, the cycle records degraded planning context and makes
 no model call. This prevents stale local plans from silently driving new work.
+
+Greenfield onboarding is an approval-gated exception to the normal existing-repository
+flow. The dashboard's `repo.create` action records a local course intent and readiness
+questions without calling GitHub. After the course is approved, the GitHub adapter seeds
+the README, durable implementation plan, and `.captains-chair/project.yaml`, initializes
+and commits the local source, then invokes the provider's repository-provisioning method.
+The core depends only on that provider method; GitHub CLI flags, visibility, and remote
+creation remain outside the workflow engine.
 
 ## OpenClaw Runtime
 
@@ -189,4 +209,4 @@ next scheduled pass can retry. Worker card claims remain a separate Workboard
 lease: worker heartbeats and completions can proceed while the Captain reconciler is
 running.
 
-See `docs/ADAPTERS.md` for the conformance path for Hermes, standalone Codex, and future runtimes.
+See `docs/ADAPTERS.md` for the conformance path for Codex and future runtimes.

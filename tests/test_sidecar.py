@@ -1,0 +1,659 @@
+import os
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any, cast
+
+import pytest
+import yaml
+
+from captains_chair.config import load_config
+from captains_chair.models import (
+    CourseKind,
+    HarnessConfig,
+    OperationMode,
+    RepoConfig,
+    RepositoryProvisioningConfig,
+)
+from captains_chair.sidecar import SidecarError, SidecarServer
+from tests.helpers import app_config, repo_config
+from tests.test_courses import ready_course
+
+
+class GreenfieldProvider:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    def provision_greenfield(self, repo: RepoConfig, course: Any) -> dict[str, Any]:
+        self.calls.append((repo.full_name, course.key))
+        return {
+            "created": True,
+            "nameWithOwner": repo.full_name,
+            "url": f"https://github.test/{repo.full_name}",
+        }
+
+
+def test_sidecar_reports_health_portfolio_and_schedule_contract(tmp_path: Path) -> None:
+    config = app_config(tmp_path, repo_config(tmp_path))
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+    server = SidecarServer(config_path)
+
+    assert server.request("health")["status"] == "healthy"
+    status = server.request("portfolio.status")
+    assert status["repos"][0]["full_name"] == "example/project"
+    assert status["repos"][0]["state"] == "unbaselined"
+    assert status["repos"][0]["events"] == []
+    assert "model_totals" in status["repos"][0]["usage_detail"]
+    schedule = server.request("schedule.describe")
+    assert schedule["source_of_truth"] == "openclaw_gateway_cron"
+    assert [job["name"] for job in schedule["jobs"]] == [
+        "captains-chair-reconcile",
+        "captains-chair-course-review",
+    ]
+    assert [job["kind"] for job in schedule["jobs"]] == ["reconcile", "review"]
+
+
+def test_sidecar_registers_and_updates_repositories_atomically(tmp_path: Path) -> None:
+    config = app_config(tmp_path, repo_config(tmp_path))
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+    server = SidecarServer(config_path)
+
+    registered = server.request(
+        "repo.register",
+        {
+            "full_name": "example/second",
+            "local_path": str(tmp_path / "second"),
+            "planning_doc": "PLAN.md",
+            "checks": ["pytest"],
+        },
+    )
+    assert registered["status"] == "registered"
+    assert len(load_config(config_path).repos) == 2
+
+    updated = server.request(
+        "repo.update",
+        {"full_name": "example/second", "operation_mode": "supervised"},
+    )
+    assert updated["repo"]["operation_mode"] == "supervised"
+    assert load_config(config_path).repo("example/second").operation_mode.value == "supervised"
+
+
+def test_sidecar_validates_model_routes_without_spending_model_tokens(tmp_path: Path) -> None:
+    config = app_config(tmp_path, repo_config(tmp_path))
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+    server = SidecarServer(config_path)
+
+    unverified = server.request(
+        "models.validate",
+        {
+            "full_name": "example/project",
+            "model_profiles": {"coder": {"primary": {"model": "codex/gpt-5.3-codex-spark"}}},
+        },
+    )
+    assert unverified["status"] == "unverified"
+    assert unverified["can_save"] is True
+    assert "route test" in unverified["warnings"][0]["warning"]
+
+    invalid = server.request(
+        "models.validate",
+        {"full_name": "example/project", "model_profiles": {"coder": {"primary": {}}}},
+    )
+    assert invalid["status"] == "invalid"
+    assert invalid["can_save"] is False
+
+
+def test_sidecar_reads_and_updates_global_and_runtime_model_layers(tmp_path: Path) -> None:
+    config = app_config(tmp_path, repo_config(tmp_path))
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+    server = SidecarServer(config_path)
+
+    current = server.request("models.config")
+    assert "baseline" in current["global_profiles"]
+    assert "test" in current["runtimes"]
+    assert current["usage"]["block_on_unknown"] is False
+
+    global_update = server.request(
+        "models.update",
+        {
+            "scope": "global",
+            "model_profiles": {"coder": {"primary": {"model": "global-coder", "thinking": "medium"}}},
+        },
+    )
+    assert global_update["status"] == "updated"
+    assert global_update["global_profiles"]["coder"]["primary"]["model"] == "global-coder"
+
+    runtime_update = server.request(
+        "models.update",
+        {
+            "scope": "runtime",
+            "runtime": "test",
+            "model_profiles": {"coder": {"primary": {"model": "runtime-coder", "thinking": "low"}}},
+        },
+    )
+    assert runtime_update["runtime_profiles"]["test"]["coder"]["primary"]["model"] == "runtime-coder"
+    assert load_config(config_path).harness_model_overrides["test"].profiles["coder"].primary.model == "runtime-coder"
+
+    usage_update = server.request(
+        "usage.update",
+        {
+            "daily_token_limit": 1000,
+            "model_daily_token_limits": {"codex/gpt-5.3-codex-spark": 600},
+            "block_on_unknown": True,
+        },
+    )
+    assert usage_update["usage"] == {
+        "daily_token_limit": 1000,
+        "model_daily_token_limits": {"codex/gpt-5.3-codex-spark": 600},
+        "block_on_unknown": True,
+        "allow_incomplete_telemetry": False,
+        "retention_days": 90,
+    }
+    assert load_config(config_path).usage.daily_token_limit == 1000
+
+    with pytest.raises(SidecarError, match="invalid usage configuration"):
+        server.request("usage.update", {"model_daily_token_limits": {"": -1}})
+
+    with pytest.raises(SidecarError, match="unknown model runtime"):
+        server.request(
+            "models.update",
+            {"scope": "runtime", "runtime": "missing", "model_profiles": {}},
+        )
+
+
+def test_sidecar_exposes_course_creation_readiness_approval_and_ready_work(tmp_path: Path) -> None:
+    config = app_config(tmp_path, repo_config(tmp_path))
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+    server = SidecarServer(config_path)
+    course = ready_course().model_dump(mode="json")
+
+    created = server.request(
+        "course.create",
+        {"full_name": "example/project", "course": course},
+    )
+    assert created["status"] == "created"
+    assert created["readiness"]["ready"] is True
+    assert server.request("courses.list")["courses"][0]["course"]["key"] == "feature-search"
+
+    approved = server.request(
+        "course.approve",
+        {"full_name": "example/project", "course_key": "feature-search", "approved_by": "owner"},
+    )
+    assert approved["course"]["status"] == "engaged"
+    ready = server.request(
+        "course.ready_work",
+        {"full_name": "example/project", "course_key": "feature-search"},
+    )
+    assert {item["key"] for item in ready["work_packages"]} == {"index", "docs"}
+
+
+def test_greenfield_repo_creation_waits_for_course_approval_and_seeds_durable_files(
+    tmp_path: Path,
+) -> None:
+    config = app_config(tmp_path, repo_config(tmp_path))
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+    provider = GreenfieldProvider()
+    server = SidecarServer(config_path, github=cast(Any, provider))
+    local_path = tmp_path / "new-project"
+    course = ready_course().model_copy(
+        update={"key": "first-course", "kind": CourseKind.GREENFIELD, "title": "New project"}
+    ).model_dump(mode="json")
+
+    pending = server.request(
+        "repo.create",
+        {
+            "full_name": "example/new-project",
+            "local_path": str(local_path),
+            "description": "A new project",
+            "visibility": "private",
+            "course": course,
+        },
+    )
+
+    assert pending["status"] == "awaiting_course_approval"
+    assert provider.calls == []
+    assert (local_path / ".captains-chair" / "courses" / "first-course.yaml").is_file()
+
+    engaged = server.request(
+        "course.approve",
+        {"full_name": "example/new-project", "course_key": "first-course", "approved_by": "owner"},
+    )
+
+    assert engaged["status"] == "engaged"
+    assert engaged["provisioning"]["created"] is True
+    assert provider.calls == [("example/new-project", "first-course")]
+    assert (local_path / "README.md").is_file()
+    assert (local_path / "docs" / "IMPLEMENTATION_PLAN.md").is_file()
+    assert (local_path / ".captains-chair" / "project.yaml").is_file()
+    assert load_config(config_path).repo("example/new-project").provisioning.enabled is True
+
+
+@pytest.mark.parametrize("kind", tuple(CourseKind))
+def test_sidecar_supports_all_onboarding_course_kinds(tmp_path: Path, kind: CourseKind) -> None:
+    repo = repo_config(tmp_path)
+    if kind == CourseKind.GREENFIELD:
+        repo = repo.model_copy(update={"provisioning": RepositoryProvisioningConfig(enabled=True)})
+    config = app_config(tmp_path, repo)
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+    server = SidecarServer(config_path, github=cast(Any, GreenfieldProvider()))
+    course_key = f"{kind.value}-course"
+    course = ready_course().model_copy(update={"key": course_key, "kind": kind}).model_dump(mode="json")
+
+    created = server.request("course.create", {"full_name": "example/project", "course": course})
+    assert created["course"]["kind"] == kind.value
+    planning = server.request(
+        "course.planning_session",
+        {"full_name": "example/project", "course_key": course_key},
+    )
+    assert planning["next_questions"] == []
+    assert planning["mutation_requires_course_approval"] is True
+    approved = server.request(
+        "course.approve",
+        {"full_name": "example/project", "course_key": course_key, "approved_by": "owner"},
+    )
+    assert approved["course"]["status"] == "engaged"
+    ready = server.request(
+        "course.ready_work",
+        {"full_name": "example/project", "course_key": course_key},
+    )
+    assert ready["work_packages"]
+
+
+def test_sidecar_run_once_executes_the_bounded_review_entrypoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = app_config(tmp_path, repo_config(tmp_path))
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+    server = SidecarServer(config_path)
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        del kwargs
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "review complete", "")
+
+    monkeypatch.setattr("captains_chair.sidecar.subprocess.run", fake_run)
+    result = server.request("run.once", {"kind": "review"})
+
+    assert result["status"] == "completed"
+    assert result["model_invocations"] is None
+    assert calls[0][-2:] == ["--live", "--continue-run"]
+    assert result["execution"][0]["output"] == "review complete"
+
+
+def test_sidecar_reconcile_does_not_skip_board_free_repositories(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = app_config(tmp_path, repo_config(tmp_path))
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+    server = SidecarServer(config_path)
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        del kwargs
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "reconcile complete", "")
+
+    monkeypatch.setattr("captains_chair.sidecar.subprocess.run", fake_run)
+    result = server.request("run.once", {"kind": "reconcile"})
+
+    assert result["status"] == "completed"
+    assert calls[0][-2:] == ["--repo", "example/project"]
+    assert result["execution"][0]["output"] == "reconcile complete"
+
+
+def test_sidecar_course_lifecycle_and_surface_configuration(tmp_path: Path) -> None:
+    config = app_config(tmp_path, repo_config(tmp_path))
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+    server = SidecarServer(config_path)
+    course = ready_course().model_dump(mode="json")
+
+    server.request("course.create", {"full_name": "example/project", "course": course})
+    params = {"full_name": "example/project", "course_key": "feature-search"}
+    assert server.request("course.get", params)["course"]["key"] == "feature-search"
+    assert server.request("course.readiness", params)["readiness"]["ready"] is True
+    planning = server.request("course.planning_session", params)
+    assert planning["interaction"] == "host_agent_conversation"
+    assert planning["next_questions"] == []
+    answered = server.request(
+        "course.requirement",
+        {
+            **params,
+            "requirement_key": "success",
+            "status": "verified",
+            "answer": "The search flow is fast and ranked.",
+            "evidence": ["dashboard"],
+        },
+    )
+    assert answered["status"] == "verified"
+    approved = server.request("course.approve", {**params, "approved_by": "owner"})
+    assert approved["course"]["status"] == "engaged"
+    assert server.request("course.ready_work", params)["work_packages"]
+    resolved = server.request(
+        "course.checkpoint",
+        {
+            **params,
+            "checkpoint_key": "ui-demo",
+            "status": "resolved",
+            "resolved_by": "owner",
+            "evidence": ["demo.png"],
+        },
+    )
+    assert resolved["status"] == "resolved"
+    assert server.request("course.pause", params)["status"] == "paused"
+    assert server.request("course.resume", params)["status"] == "engaged"
+
+    updated = server.request(
+        "repo.update",
+        {"full_name": "example/project", "surfaces": ["cli"], "notification_route": "notifications"},
+    )
+    assert updated["repo"]["surfaces"] == ["cli"]
+    assert updated["repo"]["orchestrator"] == "direct"
+
+    with pytest.raises(SidecarError, match="unknown sidecar method"):
+        server.request("unknown")
+    with pytest.raises(SidecarError, match="unsupported one-shot"):
+        server.request("run.once", {"kind": "invalid"})
+
+
+def test_sidecar_updates_course_and_work_package_model_routes(tmp_path: Path) -> None:
+    config = app_config(tmp_path, repo_config(tmp_path))
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+    server = SidecarServer(config_path)
+    course = ready_course().model_dump(mode="json")
+    params = {"full_name": "example/project", "course_key": "feature-search"}
+    server.request("course.create", {"full_name": "example/project", "course": course})
+
+    course_update = server.request(
+        "course.models",
+        {
+            **params,
+            "layer": "course",
+            "model_profiles": {
+                "coder": {"primary": {"model": "codex/course-coder", "thinking": "medium"}},
+            },
+        },
+    )
+    assert course_update["status"] == "updated"
+    assert course_update["layer"] == "course"
+    assert course_update["course"]["model_profiles"]["coder"]["primary"]["model"] == "codex/course-coder"
+
+    package_update = server.request(
+        "course.models",
+        {
+            **params,
+            "layer": "work_package",
+            "work_package_key": "index",
+            "model_profiles": {
+                "coder": {"primary": {"model": "codex/package-coder", "thinking": "low"}},
+            },
+        },
+    )
+    assert package_update["work_package_key"] == "index"
+    index = next(item for item in package_update["course"]["work_packages"] if item["key"] == "index")
+    assert index["model_profiles"]["coder"]["primary"]["model"] == "codex/package-coder"
+    assert package_update["course"]["model_profiles"]["coder"]["primary"]["model"] == "codex/course-coder"
+
+    stage_update = server.request(
+        "course.models",
+        {
+            **params,
+            "layer": "stage",
+            "stage_name": "implementation",
+            "stage_scope": "course",
+            "stage_profile": {"primary": {"model": "codex/stage-coder", "thinking": "medium"}},
+        },
+    )
+    assert stage_update["stage_name"] == "implementation"
+    assert stage_update["course"]["model_profiles"]["stage:implementation"]["primary"]["model"] == "codex/stage-coder"
+
+    package_stage = server.request(
+        "course.models",
+        {
+            **params,
+            "layer": "stage",
+            "stage_name": "review",
+            "stage_scope": "work_package",
+            "work_package_key": "index",
+            "stage_profile": {"primary": {"model": "codex/stage-reviewer", "thinking": "high"}},
+        },
+    )
+    index = next(item for item in package_stage["course"]["work_packages"] if item["key"] == "index")
+    assert index["model_profiles"]["stage:review"]["primary"]["model"] == "codex/stage-reviewer"
+
+    with pytest.raises(SidecarError, match="requires work_package_key"):
+        server.request(
+            "course.models",
+            {**params, "layer": "work_package", "model_profiles": {}},
+        )
+    with pytest.raises(SidecarError, match="not defined"):
+        server.request(
+            "course.models",
+            {**params, "layer": "package", "work_package_key": "missing", "model_profiles": {}},
+        )
+    with pytest.raises(SidecarError, match="requires stage_name"):
+        server.request(
+            "course.models",
+            {**params, "layer": "stage", "stage_profile": {"primary": {"model": "stage"}}},
+        )
+
+
+def _sidecar(
+    tmp_path: Path,
+    *,
+    repo: RepoConfig | None = None,
+    harnesses: dict[str, HarnessConfig] | None = None,
+) -> SidecarServer:
+    config = app_config(tmp_path, repo_config(tmp_path))
+    if repo is not None:
+        config = config.model_copy(update={"repos": (repo,)})
+    if harnesses is not None:
+        config = config.model_copy(update={"harnesses": harnesses})
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+    return SidecarServer(config_path)
+
+
+def test_sidecar_rejects_invalid_repository_and_model_requests(tmp_path: Path) -> None:
+    server = _sidecar(tmp_path)
+
+    invalid_requests: tuple[tuple[str, dict[str, Any], str], ...] = (
+        ("repo.register", {}, "requires full_name and local_path"),
+        ("repo.update", {}, "requires full_name"),
+        ("repo.update", {"full_name": "missing/repo"}, "not registered"),
+        ("models.validate", {}, "requires full_name or model_profiles"),
+        ("models.validate", {"full_name": "missing/repo"}, "not registered"),
+        ("models.update", {"scope": "global", "model_profiles": []}, "requires a model_profiles object"),
+        (
+            "models.update",
+            {"scope": "invalid", "model_profiles": {}},
+            "scope must be global or runtime",
+        ),
+        ("models.update", {"scope": "runtime", "model_profiles": {}}, "requires runtime"),
+    )
+    for method, params, message in invalid_requests:
+        with pytest.raises(SidecarError, match=message):
+            server.request(method, params)
+
+    with pytest.raises(SidecarError, match="already registered"):
+        server.request("repo.register", {"full_name": "example/project", "local_path": str(tmp_path)})
+
+    invalid_route = server.request(
+        "models.validate",
+        {
+            "full_name": "example/project",
+            "model_profiles": {
+                "bad_shape": "not-an-object",
+                "bad_profile": {"primary": {}},
+            },
+        },
+    )
+    assert invalid_route["status"] == "invalid"
+    assert {item["role"] for item in invalid_route["errors"]} == {"bad_shape", "bad_profile"}
+    fallback_route = server.request("models.validate", {"full_name": "example/project"})
+    assert fallback_route["repository"] == "example/project"
+
+    with pytest.raises(SidecarError, match="invalid model profile"):
+        server.request("models.update", {"scope": "global", "model_profiles": {"coder": {"primary": {}}}})
+
+
+def test_sidecar_course_validation_errors_are_actionable(tmp_path: Path) -> None:
+    server = _sidecar(tmp_path)
+
+    with pytest.raises(SidecarError, match="requires full_name and course_key"):
+        server.request("course.get", {})
+    with pytest.raises(SidecarError, match="missing/repo"):
+        server.request("course.get", {"full_name": "missing/repo", "course_key": "course"})
+    with pytest.raises(SidecarError, match="requires full_name and a course object"):
+        server.request("course.create", {})
+    with pytest.raises(SidecarError, match="requires full_name and a course object"):
+        server.request("course.create", {"full_name": "example/project", "course": []})
+    with pytest.raises(SidecarError):
+        server.request("course.create", {"full_name": "example/project", "course": {"key": "bad"}})
+
+    server.request(
+        "course.create",
+        {"full_name": "example/project", "course": ready_course().model_dump(mode="json")},
+    )
+    with pytest.raises(SidecarError, match="requires requirement_key and status"):
+        server.request(
+            "course.requirement", {"full_name": "example/project", "course_key": "feature-search"}
+        )
+    with pytest.raises(SidecarError, match="requires checkpoint_key and status"):
+        server.request(
+            "course.checkpoint", {"full_name": "example/project", "course_key": "feature-search"}
+        )
+    with pytest.raises(SidecarError):
+        server.request(
+            "course.requirement",
+            {"full_name": "example/project", "course_key": "feature-search", "requirement_key": "success", "status": "invalid"},
+        )
+    with pytest.raises(SidecarError):
+        server.request(
+            "course.checkpoint",
+            {"full_name": "example/project", "course_key": "feature-search", "checkpoint_key": "ui-demo", "status": "invalid"},
+        )
+
+
+def test_sidecar_covers_stage_and_package_route_validation_errors(tmp_path: Path) -> None:
+    server = _sidecar(tmp_path)
+    course = ready_course().model_dump(mode="json")
+    params = {"full_name": "example/project", "course_key": "feature-search"}
+    server.request("course.create", {"full_name": "example/project", "course": course})
+
+    with pytest.raises(SidecarError, match="stage_scope must be"):
+        server.request(
+            "course.models",
+            {
+                **params,
+                "layer": "stage",
+                "stage_name": "review",
+                "stage_scope": "invalid",
+                "stage_profile": {"primary": {"model": "stage"}},
+            },
+        )
+    with pytest.raises(SidecarError, match="invalid stage model profile"):
+        server.request(
+            "course.models",
+            {**params, "layer": "stage", "stage_name": "review", "stage_profile": {"primary": {}}},
+        )
+    with pytest.raises(SidecarError, match="stage work-package scope requires"):
+        server.request(
+            "course.models",
+            {
+                **params,
+                "layer": "stage",
+                "stage_name": "review",
+                "stage_scope": "work_package",
+                "stage_profile": {"primary": {"model": "stage"}},
+            },
+        )
+    with pytest.raises(SidecarError, match="layer must be"):
+        server.request("course.models", {**params, "layer": "unknown", "model_profiles": {}})
+    with pytest.raises(SidecarError, match="work package is not defined"):
+        server.request(
+            "course.models",
+            {**params, "layer": "work_package", "work_package_key": "missing", "model_profiles": {}},
+        )
+
+
+def test_sidecar_reports_dirty_git_and_one_shot_failures(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo_path = tmp_path / "repo"
+    (repo_path / ".git").mkdir(parents=True)
+    server = _sidecar(tmp_path, repo=repo_config(repo_path))
+
+    def dirty_run(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        del kwargs
+        return subprocess.CompletedProcess(args, 0, " M README.md\n", "")
+
+    monkeypatch.setattr("captains_chair.sidecar.subprocess.run", dirty_run)
+    assert server.request("repos.list")["repos"][0]["dirty"] is True
+
+    def unavailable_git(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        del args, kwargs
+        raise OSError("git unavailable")
+
+    monkeypatch.setattr("captains_chair.sidecar.subprocess.run", unavailable_git)
+    assert server.request("repos.list")["repos"][0]["dirty"] is True
+
+    def fail_run(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        del args, kwargs
+        raise subprocess.TimeoutExpired("review", 1)
+
+    monkeypatch.setattr("captains_chair.sidecar.subprocess.run", fail_run)
+    result = server.request("run.once", {"kind": "review"})
+    assert result["status"] == "degraded"
+    assert result["execution"][0]["status"] == "failed"
+
+
+def test_sidecar_run_once_skips_disabled_repositories_and_requires_review_harness(tmp_path: Path) -> None:
+    disabled = repo_config(tmp_path / "disabled", mode=OperationMode.DISABLED)
+    server = _sidecar(tmp_path, repo=disabled, harnesses={})
+
+    with pytest.raises(SidecarError, match="requires at least one configured harness"):
+        server.request("run.once", {"kind": "review"})
+
+    result = server.request("run.once", {"kind": "reconcile"})
+    assert result["status"] == "completed"
+    assert result["execution"] == [{"repo": "example/project", "status": "disabled", "exit_code": 0}]
+
+
+def test_sidecar_stdio_protocol_returns_jsonrpc_errors_without_stopping(tmp_path: Path) -> None:
+    config = app_config(tmp_path, repo_config(tmp_path))
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+    environment = dict(os.environ)
+    environment["PYTHONPATH"] = os.pathsep.join(
+        [str(Path(__file__).parents[1] / "src"), environment.get("PYTHONPATH", "")]
+    )
+    completed = subprocess.run(
+        [sys.executable, "-m", "captains_chair.sidecar", "--config", str(config_path)],
+        input=(
+            '{"jsonrpc":"2.0","id":1,"method":"health","params":{}}\n'
+            "not-json\n"
+            "[]\n"
+            '{"jsonrpc":"2.0","id":2,"method":"missing","params":{}}\n'
+        ),
+        capture_output=True,
+        text=True,
+        env=environment,
+        check=False,
+        timeout=20,
+    )
+
+    responses = [yaml.safe_load(line) for line in completed.stdout.splitlines()]
+    assert completed.returncode == 0
+    assert responses[0]["result"]["status"] == "healthy"
+    assert responses[1]["error"]["code"] == "SIDECAR_ERROR"
+    assert responses[2]["error"]["code"] == "SIDECAR_ERROR"
+    assert responses[3]["error"]["code"] == "SIDECAR_ERROR"

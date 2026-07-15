@@ -3,11 +3,13 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from captains_chair.command import CommandRunner, run_command
-from captains_chair.models import OpenClawWorkboardConfig, OrchestratorConfig
+from captains_chair.direct_orchestrator import DirectOrchestrator
+from captains_chair.models import DirectOrchestratorConfig, OpenClawWorkboardConfig, OrchestratorConfig
 from captains_chair.openclaw_workboard import OpenClawWorkboardAdapter
 from captains_chair.orchestration import (
     CompletionValidator,
     WorkerLifecycleAdapter,
+    WorkerOrchestratorAdapter,
     WorkflowOrchestrator,
     WorkQueueAdapter,
     WorkspaceCleanup,
@@ -26,7 +28,7 @@ class RuntimeAdapterContractError(RuntimeError):
 RUNTIME_ADAPTER_ENTRYPOINT_GROUP = "captains_chair.runtime_adapters"
 
 
-QueueAdapterBuilder = Callable[[OrchestratorConfig, CommandRunner], WorkQueueAdapter]
+QueueAdapterBuilder = Callable[[OrchestratorConfig, CommandRunner], WorkerOrchestratorAdapter]
 
 _QUEUE_METHODS = (
     "ensure_board",
@@ -42,7 +44,9 @@ _QUEUE_METHODS = (
 )
 
 
-def validate_work_queue_adapter(adapter: WorkQueueAdapter) -> WorkQueueAdapter:
+def validate_worker_orchestrator_adapter(
+    adapter: WorkerOrchestratorAdapter,
+) -> WorkerOrchestratorAdapter:
     missing = [name for name in _QUEUE_METHODS if not callable(getattr(adapter, name, None))]
     if not isinstance(adapter, WorkerLifecycleAdapter):
         missing.extend(
@@ -55,6 +59,10 @@ def validate_work_queue_adapter(adapter: WorkQueueAdapter) -> WorkQueueAdapter:
             "runtime adapter is missing required operations: " + ", ".join(sorted(set(missing)))
         )
     return adapter
+
+
+# Compatibility entry point for existing extension packages.
+validate_work_queue_adapter = validate_worker_orchestrator_adapter
 
 
 class RuntimeAdapterRegistry:
@@ -87,24 +95,34 @@ class RuntimeAdapterRegistry:
             loaded=self._loaded_plugins,
         )
 
-    def build(self, config: OrchestratorConfig, runner: CommandRunner) -> WorkQueueAdapter:
+    def build(self, config: OrchestratorConfig, runner: CommandRunner) -> WorkerOrchestratorAdapter:
         builder = self._builders.get(config.kind)
         if builder is None:
             raise RuntimeAdapterUnavailable(
                 f"orchestrator kind {config.kind} has no installed queue adapter; "
-                "register a WorkQueueAdapter with RuntimeAdapterRegistry"
+                "register a WorkerOrchestratorAdapter with RuntimeAdapterRegistry"
             )
-        return validate_work_queue_adapter(builder(config, runner))
+        return validate_worker_orchestrator_adapter(builder(config, runner))
 
 
-def _build_openclaw_queue(config: OrchestratorConfig, runner: CommandRunner) -> WorkQueueAdapter:
+def _build_openclaw_queue(config: OrchestratorConfig, runner: CommandRunner) -> WorkerOrchestratorAdapter:
     if not isinstance(config, OpenClawWorkboardConfig):
         raise TypeError("openclaw_workboard adapter requires OpenClawWorkboardConfig")
     return OpenClawWorkboardAdapter(config, runner)
 
 
+def _build_direct_orchestrator(
+    config: OrchestratorConfig, runner: CommandRunner
+) -> WorkerOrchestratorAdapter:
+    del runner
+    if not isinstance(config, DirectOrchestratorConfig):
+        raise TypeError("direct adapter requires DirectOrchestratorConfig")
+    return DirectOrchestrator(config.database_path)
+
+
 DEFAULT_RUNTIME_ADAPTERS = RuntimeAdapterRegistry()
 DEFAULT_RUNTIME_ADAPTERS.register("openclaw_workboard", _build_openclaw_queue)
+DEFAULT_RUNTIME_ADAPTERS.register("direct", _build_direct_orchestrator)
 
 
 def register_work_queue_adapter(
@@ -155,6 +173,7 @@ __all__ = [
     "RuntimeAdapterContractError",
     "RuntimeAdapterRegistry",
     "RUNTIME_ADAPTER_ENTRYPOINT_GROUP",
+    "validate_worker_orchestrator_adapter",
     "validate_work_queue_adapter",
     "register_work_queue_adapter",
     "build_work_queue_adapter",

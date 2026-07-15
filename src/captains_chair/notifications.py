@@ -16,8 +16,12 @@ class NotificationError(RuntimeError):
 
 
 @runtime_checkable
-class Notifier(Protocol):
+class NotifierAdapter(Protocol):
     def send(self, event: EventRecord) -> None: ...
+
+
+# Compatibility name for existing engine and adapter packages.
+Notifier = NotifierAdapter
 
 
 class NotifierAdapterContractError(RuntimeError):

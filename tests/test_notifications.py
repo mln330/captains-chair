@@ -1,6 +1,9 @@
+from collections.abc import Sequence
+from pathlib import Path
+
 import pytest
 
-from captains_chair.command import CommandRunner
+from captains_chair.command import CommandResult, CommandRunner
 from captains_chair.models import EventRecord, NotificationConfig, RunState
 from captains_chair.notifications import (
     NotificationError,
@@ -10,6 +13,20 @@ from captains_chair.notifications import (
     build_notifier,
     render_event,
 )
+
+
+def notification_event() -> EventRecord:
+    return EventRecord(
+        event_id="delivery-event",
+        repo="example/project",
+        run_id="delivery-run",
+        state=RunState.READY,
+        event_type="ACTION_PROPOSED",
+        summary="A bounded action is ready.",
+        reason="The evidence is current.",
+        fingerprint="delivery-fingerprint",
+        evidence={"next_action": "Review the proposal."},
+    )
 
 
 def test_completion_summary_includes_done_proof_next_and_link() -> None:
@@ -186,6 +203,114 @@ def test_lowercase_owner_blocker_still_pages_owner() -> None:
     )
 
     assert render_event(event).startswith("ACTION NEEDED")
+
+
+@pytest.mark.parametrize(
+    ("level", "prefix"),
+    ((3, "third ping"), (4, "polite flare")),
+)
+def test_escalation_ladder_keeps_humor_at_higher_attention_levels(level: int, prefix: str) -> None:
+    event = notification_event().model_copy(
+        update={
+            "state": RunState.BLOCKED,
+            "event_type": "ATTENTION_REQUIRED",
+            "evidence": {
+                "attention_level": level,
+                "owner_required": True,
+                "next_action": "Review the proposal.",
+            },
+        }
+    )
+    assert prefix in render_event(event)
+
+
+def test_openclaw_discord_notifier_sends_and_surfaces_gateway_failure() -> None:
+    calls: list[list[str]] = []
+
+    def runner(
+        command: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        input_text: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        del cwd, input_text, timeout
+        calls.append(list(command))
+        return CommandResult(0, "", "")
+
+    from captains_chair.notifications import OpenClawDiscordNotifier
+
+    notifier = OpenClawDiscordNotifier(
+        NotificationConfig(kind="openclaw_discord", route="channel-1", executable="openclaw"),
+        runner,
+    )
+    notifier.send(notification_event())
+    assert calls[0][0:4] == ["openclaw", "message", "send", "--channel"]
+    assert "channel-1" in calls[0]
+
+    def failing_runner(
+        command: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        input_text: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        del command, cwd, input_text, timeout
+        return CommandResult(1, "", "gateway unavailable")
+
+    failing = OpenClawDiscordNotifier(
+        NotificationConfig(kind="openclaw_discord", route="channel-1", executable="openclaw"),
+        failing_runner,
+    )
+    with pytest.raises(NotificationError, match="gateway unavailable"):
+        failing.send(notification_event())
+
+
+def test_discord_webhook_notifier_handles_missing_success_http_and_os_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from captains_chair.notifications import DiscordWebhookNotifier
+
+    config = NotificationConfig(kind="discord_webhook", webhook_env="CAPTAINS_CHAIR_TEST_WEBHOOK")
+    notifier = DiscordWebhookNotifier(config)
+    monkeypatch.delenv("CAPTAINS_CHAIR_TEST_WEBHOOK", raising=False)
+    with pytest.raises(NotificationError, match="is not set"):
+        notifier.send(notification_event())
+
+    monkeypatch.setenv("CAPTAINS_CHAIR_TEST_WEBHOOK", "https://discord.test/webhook")
+
+    class Response:
+        def __init__(self, status: int) -> None:
+            self.status = status
+
+        def __enter__(self) -> "Response":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            del args
+
+    def success(request: object, timeout: int) -> Response:
+        del request, timeout
+        return Response(204)
+
+    monkeypatch.setattr("captains_chair.notifications.urllib.request.urlopen", success)
+    notifier.send(notification_event())
+
+    def unavailable_http(request: object, timeout: int) -> Response:
+        del request, timeout
+        return Response(503)
+
+    monkeypatch.setattr("captains_chair.notifications.urllib.request.urlopen", unavailable_http)
+    with pytest.raises(NotificationError, match="HTTP 503"):
+        notifier.send(notification_event())
+
+    def unavailable(request: object, timeout: int) -> None:
+        del request, timeout
+        raise OSError("network unavailable")
+
+    monkeypatch.setattr("captains_chair.notifications.urllib.request.urlopen", unavailable)
+    with pytest.raises(NotificationError, match="network unavailable"):
+        notifier.send(notification_event())
 
 
 class MemoryNotifier:

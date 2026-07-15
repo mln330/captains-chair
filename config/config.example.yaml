@@ -33,10 +33,10 @@ orchestrators:
       # Validate coding models against the selected auth source with
       # `captains-chair model-check --role coder`. Spark is an optional Codex OAuth
       # coding canary; keep planning and review on the stronger model.
-      coder: codex/gpt-5.3-codex
-      tester: codex/gpt-5.3-codex
+      coder: codex/gpt-5.3-codex-spark
+      tester: codex/gpt-5.3-codex-spark
       reviewer: codex/gpt-5.5
-      ux_reviewer: codex/gpt-5.3-codex
+      ux_reviewer: codex/gpt-5.3-codex-spark
       final_reviewer: codex/gpt-5.5
       merger: codex/gpt-5.5
       verifier: codex/gpt-5.5
@@ -57,11 +57,11 @@ models:
     fallbacks: []
     allow_fallback: true
   coder:
-    primary: {model: codex/gpt-5.3-codex, agent: codex-harness, thinking: medium}
+    primary: {model: codex/gpt-5.3-codex-spark, agent: codex-harness, thinking: medium}
     fallbacks: []
     allow_fallback: true
   tester:
-    primary: {model: codex/gpt-5.3-codex, agent: codex-harness, thinking: medium}
+    primary: {model: codex/gpt-5.3-codex-spark, agent: codex-harness, thinking: medium}
     fallbacks: []
     allow_fallback: true
   reviewer:
@@ -73,7 +73,7 @@ models:
     fallbacks: []
     allow_fallback: false
   ux_reviewer:
-    primary: {model: codex/gpt-5.3-codex, agent: codex-harness, thinking: medium}
+    primary: {model: codex/gpt-5.3-codex-spark, agent: codex-harness, thinking: medium}
     fallbacks: []
     allow_fallback: true
 harness_model_overrides:
@@ -83,40 +83,26 @@ harness_model_overrides:
     planner:
       primary: {model: gpt-5.5, thinking: high}
     coder:
-      primary: {model: gpt-5.3-codex, thinking: medium}
+      primary: {model: gpt-5.3-codex-spark, thinking: medium}
     tester:
-      primary: {model: gpt-5.3-codex, thinking: medium}
+      primary: {model: gpt-5.3-codex-spark, thinking: medium}
     reviewer:
       primary: {model: gpt-5.5, thinking: high}
     ux_reviewer:
-      primary: {model: gpt-5.3-codex, thinking: medium}
+      primary: {model: gpt-5.3-codex-spark, thinking: medium}
     final_reviewer:
       primary: {model: gpt-5.5, thinking: high}
       allow_fallback: false
 
 usage:
-  # Illustrative internal estimates, in credits per million tokens. Verify against
-  # the account's official usage view before enabling a hard budget.
-  # Account-wide same-day ceiling across all managed repositories.
-  # daily_budget_credits: 10
+  # Optional account-wide same-day safeguards using provider-reported tokens only.
+  # daily_token_limit: 2000000
+  # model_daily_token_limits:
+  #   gpt-5.6-sol: 250000
   block_on_unknown: true
-  # Supervised-only escape hatch for runtimes that expose aggregate or partial
-  # usage. Keep false for autonomous operation; CAPTAINS_CHAIR still reports lower-bound
-  # estimates and telemetry warnings when this is enabled.
+  # Supervised-only escape hatch for runtimes that expose partial telemetry.
+  # Missing usage remains unknown and is never converted to zero.
   allow_incomplete_telemetry: false
-  rates:
-    gpt-5.6-sol:
-      input_credits_per_million: 125
-      cached_input_credits_per_million: 12.5
-      output_credits_per_million: 750
-    gpt-5.5:
-      input_credits_per_million: 125
-      cached_input_credits_per_million: 12.5
-      output_credits_per_million: 750
-    gpt-5.3-codex:
-      input_credits_per_million: 43.75
-      cached_input_credits_per_million: 4.375
-      output_credits_per_million: 350
   retention_days: 90
 
 repos:
@@ -129,6 +115,11 @@ repos:
     allow_autonomous_merge: false
     canonical_docs: [README.md, docs/architecture.md]
     planning_doc: docs/IMPLEMENTATION_PLAN.md
+    # Greenfield provisioning is disabled unless explicitly approved.
+    provisioning:
+      enabled: false
+      visibility: private
+      description: ""
     require_project_manifest: true
     checks: [pytest]
     docs_checks: []

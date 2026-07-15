@@ -6,7 +6,7 @@ import shlex
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, Protocol, cast, runtime_checkable
 
 from captains_chair.command import CommandRunner, require_success, run_command
 from captains_chair.openclaw_workboard import OpenClawWorkboardError, decode_openclaw_json
@@ -30,11 +30,13 @@ class InstalledSchedule:
     enabled: bool
 
 
-class Scheduler(Protocol):
+@runtime_checkable
+class SchedulerAdapter(Protocol):
     def install(self, spec: ScheduleSpec) -> InstalledSchedule: ...
 
 
-SchedulerBuilder = Callable[[str, CommandRunner], Scheduler]
+Scheduler = SchedulerAdapter
+SchedulerBuilder = Callable[[str, CommandRunner], SchedulerAdapter]
 SCHEDULER_ADAPTER_ENTRYPOINT_GROUP = "captains_chair.scheduler_adapters"
 
 

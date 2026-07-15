@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
+import captains_chair.orchestration as orchestration
 from captains_chair.models import (
     ActionKind,
     CompletionPolicy,
@@ -20,12 +21,24 @@ from captains_chair.orchestration import (
     QueueStatus,
     WorkflowOrchestrator,
     WorkspaceRef,
+    WorkStage,
     build_workflow,
     classify_blocker,
+    worker_model_health,
     workflow_label,
 )
 from tests.fakes import InMemoryWorkQueue
 from tests.helpers import repo_config
+
+_block_reason = orchestration._block_reason  # pyright: ignore[reportPrivateUsage]
+_card_stage = orchestration._card_stage  # pyright: ignore[reportPrivateUsage]
+_completion_summary = orchestration._completion_summary  # pyright: ignore[reportPrivateUsage]
+_failure_count = orchestration._failure_count  # pyright: ignore[reportPrivateUsage]
+_has_passed_proof = orchestration._has_passed_proof  # pyright: ignore[reportPrivateUsage]
+_has_valid_proof = orchestration._has_valid_proof  # pyright: ignore[reportPrivateUsage]
+_passed_proof = orchestration._passed_proof  # pyright: ignore[reportPrivateUsage]
+_retry_depth = orchestration._retry_depth  # pyright: ignore[reportPrivateUsage]
+_retry_limit = orchestration._retry_limit  # pyright: ignore[reportPrivateUsage]
 
 
 def worker_config() -> OpenClawWorkboardConfig:
@@ -257,6 +270,125 @@ def test_owner_completion_policy_does_not_create_merge_or_post_merge_workers(tmp
     assert "stage:final_review" in labels
     assert "stage:merge" not in labels
     assert "stage:post_merge" not in labels
+
+
+def test_orchestration_card_helpers_fail_closed_and_preserve_latest_evidence(tmp_path: Path) -> None:
+    repo = repo_config(tmp_path, completion=CompletionPolicy.OWNER_APPROVAL)
+    protocol = QueueCard(
+        id="protocol",
+        title="Protocol",
+        status=QueueStatus.BLOCKED,
+        labels=("stage:review",),
+        metadata={"workerProtocol": {"detail": "protocol detail"}},
+    )
+    logs = protocol.model_copy(
+        update={"metadata": {"workerLogs": [{"message": "old"}, {"message": "latest"}]}}
+    )
+    attempts = protocol.model_copy(
+        update={"metadata": {"attempts": [{"error": "provider error"}]}}
+    )
+    bare = protocol.model_copy(update={"metadata": {}})
+
+    assert _card_stage(protocol) == WorkStage.REVIEW
+    assert _card_stage(protocol.model_copy(update={"labels": ("stage:unknown",)})) is None
+    assert _card_stage(protocol.model_copy(update={"labels": ()})) is None
+    assert _block_reason(protocol) == "protocol detail"
+    assert _block_reason(logs) == "latest"
+    assert _block_reason(attempts) == "provider error"
+    assert _block_reason(bare).startswith("TECHNICAL:")
+    assert _failure_count(protocol) == 1
+    assert _failure_count(protocol.model_copy(update={"metadata": {"failureCount": 0}})) == 0
+    assert _failure_count(protocol.model_copy(update={"metadata": {"attempts": []}})) == 1
+    assert _retry_limit(protocol, 2) == 2
+    assert _retry_limit(
+        protocol.model_copy(update={"metadata": {"automation": {"maxRetries": 4}}}), 2
+    ) == 4
+
+    passed = protocol.model_copy(
+        update={"metadata": {"proof": [{"status": "failed"}, {"status": "PASSED", "note": "proof"}]}}
+    )
+    assert _has_passed_proof(passed)
+    assert _passed_proof(passed)[0]["note"] == "proof"
+    assert _has_valid_proof(repo, passed)
+    assert not _has_passed_proof(bare)
+    assert not _has_valid_proof(repo, bare)
+    assert _completion_summary(passed) == "Recovered completed review card from runtime review status."
+
+
+def test_final_completion_proof_requires_current_head_marker_for_each_policy(tmp_path: Path) -> None:
+    card = QueueCard(
+        id="final",
+        title="Final",
+        status=QueueStatus.DONE,
+        labels=("stage:final_review",),
+        metadata={"proof": [{"status": "passed", "note": "READY_FOR_OWNER: abcdef1"}]},
+    )
+    for policy, marker in (
+        (CompletionPolicy.OWNER_APPROVAL, "READY_FOR_OWNER:"),
+        (CompletionPolicy.CONTROL_PLANE_COMPLETE, "CONTROL_PLANE_COMPLETE:"),
+        (CompletionPolicy.AUTO_MERGE, "AUTO_MERGE_ALLOWED:"),
+    ):
+        repo = repo_config(
+            tmp_path,
+            mode=OperationMode.AUTONOMOUS if policy == CompletionPolicy.AUTO_MERGE else OperationMode.ADVISORY,
+            completion=policy,
+        )
+        valid = card.model_copy(
+            update={"metadata": {"proof": [{"status": "passed", "label": f"{marker}abcdef1"}]}}
+        )
+        assert _has_valid_proof(repo, valid)
+    invalid = card.model_copy(
+        update={"metadata": {"proof": [{"status": "passed", "note": "READY_FOR_OWNER: not-a-sha"}]}}
+    )
+    assert not _has_valid_proof(repo_config(tmp_path), invalid)
+
+
+def test_worker_health_reports_adapter_capability_failures() -> None:
+    class NoHealth:
+        pass
+
+    class BrokenHealth:
+        def validate_worker_models(self) -> dict[str, str]:
+            raise RuntimeError("health unavailable")
+
+    class WrongHealth:
+        def validate_worker_models(self) -> list[str]:
+            return []
+
+    class Healthy:
+        def validate_worker_models(self) -> dict[str, str]:
+            return {"status": "ok"}
+
+    health = cast(Any, worker_model_health)
+    assert health(NoHealth()) == {"status": "not_supported"}
+    assert health(BrokenHealth()) == {
+        "status": "degraded",
+        "error": "health unavailable",
+    }
+    assert health(WrongHealth())["status"] == "degraded"
+    assert health(Healthy()) == {"status": "ok"}
+
+
+def test_retry_depth_handles_missing_and_cyclic_parent_labels() -> None:
+    root = QueueCard(id="root", title="Root", status=QueueStatus.BLOCKED, labels=("stage:review",))
+    child = QueueCard(
+        id="child",
+        title="Child",
+        status=QueueStatus.BLOCKED,
+        labels=("stage:review", "retry-for:root"),
+    )
+    missing = QueueCard(
+        id="missing",
+        title="Missing",
+        status=QueueStatus.BLOCKED,
+        labels=("stage:review", "retry-for:does-not-exist"),
+    )
+    cycle = root.model_copy(update={"labels": ("stage:review", "retry-for:child")})
+
+    assert _retry_depth(root, [root]) == 0
+    assert _retry_depth(child, [root, child]) == 1
+    assert _retry_depth(missing, [missing]) == 1
+    assert _retry_depth(cycle, [cycle, child]) == 2
 
 
 def test_repair_and_merge_actions_use_review_appropriate_worker_topology(tmp_path: Path) -> None:

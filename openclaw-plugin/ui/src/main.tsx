@@ -1,0 +1,549 @@
+import { StrictMode, useEffect, useMemo, useState, type FormEvent } from "react";
+import { createRoot } from "react-dom/client";
+import "./styles.css";
+
+type ModelRoute = { primary?: { model?: string; thinking?: string }; allow_fallback?: boolean };
+type EventRecord = {
+  event_type: string;
+  summary: string;
+  reason: string;
+  created_at: string;
+  evidence: Record<string, unknown>;
+};
+type UsageDetail = {
+  model_totals: Array<{ model?: string; accounted_tokens?: number; calls?: number }>;
+  token_hotspots: Array<{ model?: string; stage?: string; accounted_tokens?: number }>;
+  efficiency: { repeated_prompt_tokens?: number; failed_attempt_tokens?: number; fallback_attempts?: number };
+  failed_attempts?: number;
+  warnings: string[];
+};
+type Repo = {
+  full_name: string;
+  local_path: string;
+  exists: boolean;
+  dirty: boolean;
+  operation_mode: string;
+  completion_policy: string;
+  allow_autonomous_merge?: boolean;
+  state: string;
+  notification_route?: string | null;
+  model_profiles?: Record<string, ModelRoute>;
+  qa_profiles?: QAProfile[];
+  surfaces?: string[];
+  tokens: { total_tokens?: number; accounted_tokens?: number };
+  usage_detail?: UsageDetail;
+  active_work?: Record<string, unknown> | null;
+  events?: EventRecord[];
+  warnings: string[];
+};
+type QAProfile = {
+  key: string;
+  title: string;
+  surfaces?: string[];
+  checks?: string[];
+  required_tools?: string[];
+  reviewer_role?: string;
+  enabled?: boolean;
+};
+type ReadinessRequirement = {
+  key: string;
+  category: string;
+  question: string;
+  status: string;
+  answer?: string | null;
+  owner_decision_required?: boolean;
+};
+type WorkPackage = { key: string; title: string; objective: string; status: string; dependencies?: string[]; model_profiles?: Record<string, ModelRoute> };
+type Checkpoint = { key: string; title: string; reason: string; status: string; blocks_work_packages?: string[] };
+type Course = {
+  key: string;
+  title: string;
+  kind: string;
+  status: string;
+  goal: string;
+  readiness: ReadinessRequirement[];
+  work_packages: WorkPackage[];
+  checkpoints: Checkpoint[];
+  model_profiles?: Record<string, ModelRoute>;
+};
+type CourseSummary = {
+  repository: string;
+  course: Course;
+  readiness: { ready: boolean; unresolved?: string[]; owner_decisions?: string[]; verified?: string[] };
+};
+type ModelConfig = {
+  global_profiles: Record<string, ModelRoute>;
+  runtime_profiles: Record<string, Record<string, ModelRoute>>;
+  runtimes: string[];
+  usage?: UsageConfig;
+};
+type UsageConfig = {
+  daily_token_limit?: number | null;
+  model_daily_token_limits?: Record<string, number>;
+  block_on_unknown?: boolean;
+  allow_incomplete_telemetry?: boolean;
+  retention_days?: number;
+};
+type PlanningSession = { prompt: string; next_questions: string[]; interaction: string; mutation_requires_course_approval: boolean };
+type Portfolio = { repos: Repo[] };
+type Courses = { courses: CourseSummary[] };
+type UpdatePayload = Record<string, unknown>;
+type ModelPreset = "economy" | "balanced" | "maximum_quality" | "local_first";
+
+const ROUTE_DEFAULTS = [
+  { role: "strategist", label: "Course strategist", model: "codex/gpt-5.5", effort: "high" },
+  { role: "course_verifier", label: "Course verifier", model: "codex/gpt-5.5", effort: "high" },
+  { role: "baseline", label: "Baseline analyst", model: "codex/gpt-5.5", effort: "high" },
+  { role: "baseline_analyst", label: "Baseline gap analyst", model: "codex/gpt-5.5", effort: "high" },
+  { role: "planner", label: "Planning", model: "codex/gpt-5.5", effort: "high" },
+  { role: "readiness_reviewer", label: "Readiness review", model: "codex/gpt-5.5", effort: "high" },
+  { role: "decomposer", label: "Work decomposition", model: "codex/gpt-5.5", effort: "medium" },
+  { role: "package_planner", label: "Package planning", model: "codex/gpt-5.5", effort: "medium" },
+  { role: "subsystem_analyst", label: "Subsystem analysis", model: "codex/gpt-5.5", effort: "medium" },
+  { role: "coder", label: "Coding", model: "codex/gpt-5.3-codex-spark", effort: "medium" },
+  { role: "fast_coder", label: "Fast coding", model: "codex/gpt-5.3-codex-spark", effort: "medium" },
+  { role: "focused_coder", label: "Focused coding", model: "codex/gpt-5.3-codex-spark", effort: "medium" },
+  { role: "complex_coder", label: "Complex coding", model: "codex/gpt-5.5", effort: "high" },
+  { role: "local_coder", label: "Local coding", model: "ollama/qualified-local", effort: "medium" },
+  { role: "tester", label: "Testing", model: "codex/gpt-5.3-codex-spark", effort: "medium" },
+  { role: "qa_assistant", label: "QA assistant", model: "codex/gpt-5.3-codex-spark", effort: "medium" },
+  { role: "reviewer", label: "Independent review", model: "codex/gpt-5.5", effort: "high" },
+  { role: "code_reviewer", label: "Code review", model: "codex/gpt-5.5", effort: "high" },
+  { role: "comment_adjudicator", label: "Comment adjudication", model: "codex/gpt-5.5", effort: "high" },
+  { role: "security_reviewer", label: "Security review", model: "codex/gpt-5.5", effort: "high" },
+  { role: "ux_reviewer", label: "UX review", model: "codex/gpt-5.3-codex-spark", effort: "medium" },
+  { role: "ui_qa_reviewer", label: "UI QA", model: "codex/gpt-5.5", effort: "medium" },
+  { role: "final_reviewer", label: "Final review", model: "codex/gpt-5.5", effort: "high" },
+  { role: "merger", label: "Merge gate", model: "codex/gpt-5.5", effort: "high" },
+  { role: "recovery_planner", label: "Recovery planning", model: "codex/gpt-5.5", effort: "high" },
+  { role: "summarizer", label: "Summaries", model: "codex/gpt-5.3-codex-spark", effort: "low" },
+  { role: "verifier", label: "Post-merge verification", model: "codex/gpt-5.5", effort: "high" },
+] as const;
+type EditableRoute = { model: string; effort: string };
+
+function callGateway<T>(path: string, params: Record<string, unknown> = {}): Promise<T> {
+  return fetch(`/captains-chair/api/${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(params),
+  }).then(async (response) => {
+    if (!response.ok) throw new Error(`Gateway request failed: ${response.status}`);
+    return (await response.json()) as T;
+  });
+}
+
+function Flow({ state }: { state: string }) {
+  const stages = ["Course", "Ready", "Build", "Review", "Verify", "Complete"];
+  const active = state === "unbaselined" || state === "baseline_review"
+    ? 0 : state === "ready" || state === "planning" ? 1
+      : state.includes("review") || state === "pr_open" || state === "repairing" ? 3
+        : state === "completion_ready" || state === "post_merge_verification" ? 4
+          : state === "merged" ? 5 : 2;
+  return <div className="flow" aria-label="SDLC progress">
+    {stages.map((stage, index) => <div className={`flow-stage ${index <= active ? "active" : ""}`} key={stage}>
+      <span className="flow-dot" aria-hidden="true" /><span>{stage}</span>
+      {index < stages.length - 1 && <span className="flow-line" aria-hidden="true" />}
+    </div>)}
+  </div>;
+}
+
+function routeValue(repo: Repo, role: string, fallbackModel: string, fallbackEffort: string) {
+  const route = repo.model_profiles?.[role]?.primary;
+  return { model: route?.model ?? fallbackModel, effort: route?.thinking ?? fallbackEffort };
+}
+
+function initialRoutesFromProfiles(profiles?: Record<string, ModelRoute>): Record<string, EditableRoute> {
+  return Object.fromEntries(ROUTE_DEFAULTS.map(({ role, model, effort }) => {
+    const route = profiles?.[role]?.primary;
+    return [role, { model: route?.model ?? model, effort: route?.thinking ?? effort }];
+  }));
+}
+
+function initialStageRoute(profile?: ModelRoute): EditableRoute {
+  return { model: profile?.primary?.model ?? "codex/gpt-5.3-codex-spark", effort: profile?.primary?.thinking ?? "medium" };
+}
+
+function effectiveRoute(repo: Repo | undefined, course: Course, workPackage: WorkPackage | undefined, role: string, fallbackModel: string, fallbackEffort: string, stageName = "implementation") {
+  const stageKey = `stage:${stageName}`;
+  const candidates: Array<[string, ModelRoute | undefined]> = [
+    [`work package ${stageKey}`, workPackage?.model_profiles?.[stageKey]],
+    [`course ${stageKey}`, course.model_profiles?.[stageKey]],
+    ["work package", workPackage?.model_profiles?.[role]],
+    ["course", course.model_profiles?.[role]],
+    ["repository", repo?.model_profiles?.[role]],
+  ];
+  const selected = candidates.find(([, profile]) => profile?.primary?.model);
+  return {
+    model: selected?.[1]?.primary?.model ?? fallbackModel,
+    effort: selected?.[1]?.primary?.thinking ?? fallbackEffort,
+    source: selected?.[0] ?? "default",
+  };
+}
+
+function modelProfilesForRoutes(routes: Record<string, EditableRoute>): Record<string, ModelRoute> {
+  return Object.fromEntries(ROUTE_DEFAULTS.map(({ role }) => [role, {
+    primary: { model: routes[role].model, thinking: routes[role].effort },
+    ...(role === "reviewer" || role === "final_reviewer" ? { allow_fallback: false } : {}),
+  }]));
+}
+
+function initialRoutes(repo: Repo): Record<string, EditableRoute> {
+  return Object.fromEntries(ROUTE_DEFAULTS.map(({ role, model, effort }) => {
+    const configured = routeValue(repo, role, model, effort);
+    return [role, configured];
+  }));
+}
+
+const MODEL_PRESET_LABELS: Record<ModelPreset, string> = {
+  economy: "Economy",
+  balanced: "Balanced",
+  maximum_quality: "Maximum quality",
+  local_first: "Local first",
+};
+
+function presetRoutes(preset: ModelPreset): Record<string, EditableRoute> {
+  const expensiveRoles = new Set([
+    "strategist", "course_verifier", "baseline", "baseline_analyst", "planner",
+    "readiness_reviewer", "reviewer", "code_reviewer", "comment_adjudicator",
+    "security_reviewer", "final_reviewer", "merger", "recovery_planner", "verifier",
+  ]);
+  const localRoles = new Set(["coder", "fast_coder", "focused_coder", "local_coder", "tester", "qa_assistant", "ux_reviewer", "summarizer"]);
+  return Object.fromEntries(ROUTE_DEFAULTS.map(({ role, model, effort }) => {
+    if (preset === "balanced") return [role, { model, effort }];
+    if (preset === "maximum_quality") return [role, { model: "codex/gpt-5.5", effort: "high" }];
+    if (preset === "local_first") return [role, { model: localRoles.has(role) ? "ollama/qualified-local" : model, effort: localRoles.has(role) ? "medium" : effort }];
+    return [role, { model: expensiveRoles.has(role) ? "codex/gpt-5.5" : "codex/gpt-5.3-codex-spark", effort: expensiveRoles.has(role) ? "medium" : "low" }];
+  }));
+}
+
+function profileForEditing(profile: QAProfile): QAProfile {
+  return {
+    key: profile.key,
+    title: profile.title,
+    surfaces: [...(profile.surfaces ?? [])],
+    checks: [...(profile.checks ?? [])],
+    required_tools: [...(profile.required_tools ?? [])],
+    reviewer_role: profile.reviewer_role ?? "qa_assistant",
+    enabled: profile.enabled !== false,
+  };
+}
+
+function RepoPanel({ repo, onSave }: { repo: Repo; onSave: (name: string, payload: UpdatePayload) => Promise<void> }) {
+  const [mode, setMode] = useState(repo.operation_mode);
+  const [completion, setCompletion] = useState(repo.completion_policy);
+  const [allowMerge, setAllowMerge] = useState(repo.allow_autonomous_merge ?? false);
+  const [channel, setChannel] = useState(repo.notification_route ?? "");
+  const [qaProfiles, setQaProfiles] = useState<QAProfile[]>(() => (repo.qa_profiles ?? []).map(profileForEditing));
+  const [routes, setRoutes] = useState<Record<string, EditableRoute>>(() => initialRoutes(repo));
+  const [preset, setPreset] = useState<ModelPreset>("balanced");
+  const [surface, setSurface] = useState(repo.surfaces?.[0] ?? "custom");
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    setMode(repo.operation_mode); setCompletion(repo.completion_policy); setAllowMerge(repo.allow_autonomous_merge ?? false);
+    setChannel(repo.notification_route ?? ""); setQaProfiles((repo.qa_profiles ?? []).map(profileForEditing));
+    setRoutes(initialRoutes(repo)); setPreset("balanced"); setSurface(repo.surfaces?.[0] ?? "custom");
+  }, [repo]);
+  const save = async () => {
+    setSaving(true);
+    try {
+      const modelProfiles = modelProfilesForRoutes(routes);
+      const validation = await callGateway<{ can_save?: boolean; warnings?: Array<{ warning?: string }> }>("models/validate", { full_name: repo.full_name, model_profiles: modelProfiles });
+      if (validation.can_save === false) throw new Error("One or more model routes are invalid; correct them before saving.");
+      await onSave(repo.full_name, {
+        operation_mode: mode, completion_policy: completion, allow_autonomous_merge: allowMerge,
+        notification_route: channel, surfaces: surface ? [surface] : [],
+        qa_profiles: qaProfiles,
+        model_profiles: modelProfiles,
+      });
+      if (validation.warnings?.length) window.alert("Routes saved. Run a harness route test before autonomous use.");
+    } finally { setSaving(false); }
+  };
+  return <article className="repo-panel">
+    <div className="repo-heading"><div><h3>{repo.full_name}</h3><p>{repo.local_path}</p></div><span className={`mode ${repo.operation_mode}`}>{repo.operation_mode}</span></div>
+    <Flow state={repo.state} />
+    <div className="repo-meta"><span>{repo.state.split("_").join(" ")}</span><span>{(repo.tokens.total_tokens ?? repo.tokens.accounted_tokens ?? 0).toLocaleString()} tokens</span><span>{repo.dirty ? "Uncommitted changes" : "Clean checkout"}</span></div>
+    {repo.warnings[0] && <p className="warning">{repo.warnings[0]}</p>}
+    <details className="settings"><summary>Repository controls</summary>
+      <div className="settings-grid">
+        <label>Autonomy<select value={mode} onChange={(event) => setMode(event.target.value)}><option value="disabled">Disabled</option><option value="advisory">Advisory</option><option value="supervised">Supervised</option><option value="autonomous">Autonomous</option></select></label>
+        <label>Completion<select value={completion} onChange={(event) => setCompletion(event.target.value)}><option value="owner_approval">Owner approval</option><option value="control_plane_complete">Control plane complete</option><option value="auto_merge">Auto merge</option></select></label>
+        <label>Discord route<input value={channel} onChange={(event) => setChannel(event.target.value)} placeholder="notifications or channel id" /></label>
+        <label>Application surface<select value={surface} onChange={(event) => setSurface(event.target.value)}><option value="web_ui">Web UI</option><option value="cli">CLI</option><option value="api">API</option><option value="library">Library</option><option value="data_pipeline">Data pipeline</option><option value="infrastructure_release">Infrastructure/release</option><option value="custom">Custom</option></select></label>
+        <label className="check-label"><input type="checkbox" checked={allowMerge} onChange={(event) => setAllowMerge(event.target.checked)} /> Allow autonomous merge</label>
+      </div>
+      <div className="settings-grid"><label>Route preset<select aria-label="Route preset" value={preset} onChange={(event) => setPreset(event.target.value as ModelPreset)}>{Object.entries(MODEL_PRESET_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><button className="secondary compact" type="button" onClick={() => setRoutes(presetRoutes(preset))}>Apply preset</button></div>
+      <section className="detail-section" aria-labelledby={`qa-profiles-${repo.full_name}`}><div className="section-heading"><h4 id={`qa-profiles-${repo.full_name}`}>QA profiles</h4><button className="secondary compact" type="button" onClick={() => setQaProfiles([...qaProfiles, profileForEditing({ key: `qa-${qaProfiles.length + 1}`, title: "New QA profile", surfaces: [surface], checks: [], required_tools: [], reviewer_role: "qa_assistant", enabled: true })])}>Add QA profile</button></div>{qaProfiles.length ? <div className="package-list">{qaProfiles.map((profile, index) => <fieldset className="qa-profile" key={`${profile.key}-${index}`}><legend>{profile.title || profile.key}</legend><div className="settings-grid"><label>Profile key<input value={profile.key} onChange={(event) => setQaProfiles(qaProfiles.map((item, itemIndex) => itemIndex === index ? { ...item, key: event.target.value } : item))} /></label><label>Title<input value={profile.title} onChange={(event) => setQaProfiles(qaProfiles.map((item, itemIndex) => itemIndex === index ? { ...item, title: event.target.value } : item))} /></label><label>Surface<select value={profile.surfaces?.[0] ?? "custom"} onChange={(event) => setQaProfiles(qaProfiles.map((item, itemIndex) => itemIndex === index ? { ...item, surfaces: [event.target.value] } : item))}><option value="web_ui">Web UI</option><option value="cli">CLI</option><option value="api">API</option><option value="library">Library</option><option value="data_pipeline">Data pipeline</option><option value="custom">Custom</option></select></label><label>Reviewer role<input value={profile.reviewer_role ?? "qa_assistant"} onChange={(event) => setQaProfiles(qaProfiles.map((item, itemIndex) => itemIndex === index ? { ...item, reviewer_role: event.target.value } : item))} /></label><label className="wide">Checks<textarea value={(profile.checks ?? []).join("\n")} onChange={(event) => setQaProfiles(qaProfiles.map((item, itemIndex) => itemIndex === index ? { ...item, checks: splitLines(event.target.value) } : item))} placeholder="One deterministic check per line" /></label><label className="wide">Required tools<textarea value={(profile.required_tools ?? []).join("\n")} onChange={(event) => setQaProfiles(qaProfiles.map((item, itemIndex) => itemIndex === index ? { ...item, required_tools: splitLines(event.target.value) } : item))} placeholder="One tool per line" /></label><label className="check-label"><input type="checkbox" checked={profile.enabled !== false} onChange={(event) => setQaProfiles(qaProfiles.map((item, itemIndex) => itemIndex === index ? { ...item, enabled: event.target.checked } : item))} /> Enabled</label><button className="secondary compact" type="button" onClick={() => setQaProfiles(qaProfiles.filter((_item, itemIndex) => itemIndex !== index))}>Remove profile</button></div></fieldset>)}</div> : <p className="muted">No repository-specific QA profiles configured.</p>}</section>
+      <div className="route-grid">{ROUTE_DEFAULTS.map(({ role, label }) => <fieldset key={role}><legend>{label}</legend><label>Model<input value={routes[role].model} onChange={(event) => setRoutes({ ...routes, [role]: { ...routes[role], model: event.target.value } })} /></label><label>Reasoning<select value={routes[role].effort} onChange={(event) => setRoutes({ ...routes, [role]: { ...routes[role], effort: event.target.value } })}><option>low</option><option>medium</option><option>high</option><option>xhigh</option></select></label></fieldset>)}</div>
+      <button className="primary compact" onClick={save} disabled={saving}>{saving ? "Saving..." : "Save controls"}</button>
+    </details>
+  </article>;
+}
+
+function ModelPolicyPanel({ config, onSaved }: { config: ModelConfig; onSaved: () => void }) {
+  const [scope, setScope] = useState<"global" | "runtime">("global");
+  const [runtime, setRuntime] = useState(config.runtimes[0] ?? "");
+  const [preset, setPreset] = useState<ModelPreset>("balanced");
+  const [routes, setRoutes] = useState<Record<string, EditableRoute>>(() => initialRoutesFromProfiles(config.global_profiles));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const selectedProfiles = scope === "global" ? config.global_profiles : (config.runtime_profiles[runtime] ?? config.global_profiles);
+  useEffect(() => {
+    if (scope === "runtime" && !runtime && config.runtimes[0]) setRuntime(config.runtimes[0]);
+    setRoutes(initialRoutesFromProfiles(selectedProfiles));
+    setPreset("balanced");
+    setError(null);
+  }, [config, scope, runtime]);
+  const save = async () => {
+    if (scope === "runtime" && !runtime) return;
+    setSaving(true); setError(null);
+    try {
+      const modelProfiles = modelProfilesForRoutes(routes);
+      const validation = await callGateway<{ can_save?: boolean; warnings?: Array<{ warning?: string }> }>("models/validate", { model_profiles: modelProfiles });
+      if (validation.can_save === false) throw new Error("One or more model routes are invalid; correct them before saving.");
+      await callGateway("models/update", { scope, ...(scope === "runtime" ? { runtime } : {}), model_profiles: modelProfiles });
+      onSaved();
+      if (validation.warnings?.length) window.alert("Routes saved. Run a harness route test before autonomous use.");
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setSaving(false);
+    }
+  };
+  return <section className="model-policy-panel" aria-labelledby="model-policy-title"><div className="section-heading"><div><p className="eyebrow">MODEL CONTROL</p><h2 id="model-policy-title">Global and runtime routes</h2></div></div>
+    <p className="muted">Runtime routes override global routes. Repository, course, package, and stage routes can refine them further.</p>
+    <details className="settings"><summary>Configure global/runtime routes</summary>
+      <div className="settings-grid"><label>Configuration layer<select value={scope} onChange={(event) => setScope(event.target.value as "global" | "runtime")}><option value="global">Global defaults</option><option value="runtime">Runtime override</option></select></label>{scope === "runtime" && <label>Runtime<select value={runtime} onChange={(event) => setRuntime(event.target.value)} disabled={!config.runtimes.length}>{config.runtimes.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>}</div>
+      <div className="settings-grid"><label>Route preset<select aria-label="Route preset" value={preset} onChange={(event) => setPreset(event.target.value as ModelPreset)}>{Object.entries(MODEL_PRESET_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><button className="secondary compact" type="button" onClick={() => setRoutes(presetRoutes(preset))}>Apply preset</button></div>
+      <div className="route-grid">{ROUTE_DEFAULTS.map(({ role, label }) => <fieldset key={role}><legend>{label}</legend><label>Model<input value={routes[role].model} onChange={(event) => setRoutes({ ...routes, [role]: { ...routes[role], model: event.target.value } })} /></label><label>Reasoning<select value={routes[role].effort} onChange={(event) => setRoutes({ ...routes, [role]: { ...routes[role], effort: event.target.value } })}><option>low</option><option>medium</option><option>high</option><option>xhigh</option></select></label></fieldset>)}</div>
+      <button className="primary compact" onClick={save} disabled={saving || (scope === "runtime" && !runtime)}>{saving ? "Saving..." : "Save global/runtime routes"}</button>{error && <p className="warning" role="alert">{error}</p>}
+    </details>
+  </section>;
+}
+
+function UsagePolicyPanel({ config, onSaved }: { config: ModelConfig; onSaved: () => void }) {
+  const configured = config.usage ?? {};
+  const [dailyLimit, setDailyLimit] = useState(configured.daily_token_limit?.toString() ?? "");
+  const [blockOnUnknown, setBlockOnUnknown] = useState(configured.block_on_unknown !== false);
+  const [limits, setLimits] = useState<Array<{ model: string; limit: string }>>(
+    Object.entries(configured.model_daily_token_limits ?? {}).map(([model, limit]) => ({ model, limit: String(limit) })),
+  );
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    const next = config.usage ?? {};
+    setDailyLimit(next.daily_token_limit?.toString() ?? "");
+    setBlockOnUnknown(next.block_on_unknown !== false);
+    setLimits(Object.entries(next.model_daily_token_limits ?? {}).map(([model, limit]) => ({ model, limit: String(limit) })));
+  }, [config]);
+  const save = async () => {
+    setSaving(true); setError(null);
+    try {
+      const modelLimits: Record<string, number> = {};
+      for (const item of limits) {
+        const model = item.model.trim();
+        if (!model && !item.limit.trim()) continue;
+        const limit = Number(item.limit);
+        if (!model || !Number.isInteger(limit) || limit < 0) throw new Error("Each model token limit needs a model name and a non-negative integer.");
+        modelLimits[model] = limit;
+      }
+      const daily = dailyLimit.trim() ? Number(dailyLimit) : null;
+      if (daily !== null && (!Number.isInteger(daily) || daily < 0)) throw new Error("Daily token limit must be a non-negative integer.");
+      await callGateway("usage/update", { daily_token_limit: daily, model_daily_token_limits: modelLimits, block_on_unknown: blockOnUnknown });
+      onSaved();
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setSaving(false);
+    }
+  };
+  return <section className="model-policy-panel" aria-labelledby="usage-policy-title"><div className="section-heading"><div><p className="eyebrow">TOKEN CONTROL</p><h2 id="usage-policy-title">Token safeguards</h2></div></div><p className="muted">Limits use provider-reported tokens only. Unknown telemetry remains unknown and can block autonomous work.</p><div className="settings-grid"><label>Daily token limit<input inputMode="numeric" value={dailyLimit} onChange={(event) => setDailyLimit(event.target.value)} placeholder="No limit" /></label><label className="check-label"><input type="checkbox" checked={blockOnUnknown} onChange={(event) => setBlockOnUnknown(event.target.checked)} /> Block when telemetry is unknown</label></div><div className="package-list">{limits.map((item, index) => <fieldset className="qa-profile" key={`${item.model}-${index}`}><legend>Model limit</legend><div className="settings-grid"><label>Model<input value={item.model} onChange={(event) => setLimits(limits.map((row, rowIndex) => rowIndex === index ? { ...row, model: event.target.value } : row))} placeholder="codex/gpt-5.3-codex-spark" /></label><label>Daily tokens<input inputMode="numeric" value={item.limit} onChange={(event) => setLimits(limits.map((row, rowIndex) => rowIndex === index ? { ...row, limit: event.target.value } : row))} /></label><button className="secondary compact" type="button" onClick={() => setLimits(limits.filter((_row, rowIndex) => rowIndex !== index))}>Remove limit</button></div></fieldset>)}</div><div className="action-row"><button className="secondary compact" type="button" onClick={() => setLimits([...limits, { model: "", limit: "" }])}>Add model limit</button><button className="primary compact" type="button" onClick={save} disabled={saving}>{saving ? "Saving..." : "Save token safeguards"}</button></div>{error && <p className="warning" role="alert">{error}</p>}</section>;
+}
+
+function RegisterPanel({ onRegistered }: { onRegistered: () => void }) {
+  const [open, setOpen] = useState(false); const [fullName, setFullName] = useState(""); const [localPath, setLocalPath] = useState("");
+  const [planningDoc, setPlanningDoc] = useState("docs/IMPLEMENTATION_PLAN.md"); const [channel, setChannel] = useState("notifications"); const [saving, setSaving] = useState(false); const [error, setError] = useState<string | null>(null);
+  const submit = async (event: FormEvent) => { event.preventDefault(); setSaving(true); setError(null); try { await callGateway("repos/register", { full_name: fullName, local_path: localPath, planning_doc: planningDoc, notification_route: channel }); setFullName(""); setLocalPath(""); setOpen(false); onRegistered(); } catch (reason) { setError(String(reason)); } finally { setSaving(false); } };
+  return <section className="register-panel" aria-labelledby="register-title"><div className="section-heading"><div><p className="eyebrow">REPOSITORY REGISTRY</p><h2 id="register-title">Set a new course</h2></div><button className="secondary" onClick={() => setOpen(!open)}>{open ? "Close" : "Register repository"}</button></div>
+    {open && <form className="register-form" onSubmit={submit}><label>GitHub repository<input required value={fullName} onChange={(event) => setFullName(event.target.value)} placeholder="owner/repository" /></label><label>Local path<input required value={localPath} onChange={(event) => setLocalPath(event.target.value)} placeholder="/workspace/repository" /></label><label>Planning document<input required value={planningDoc} onChange={(event) => setPlanningDoc(event.target.value)} /></label><label>Discord route<input value={channel} onChange={(event) => setChannel(event.target.value)} /></label><button className="primary" type="submit" disabled={saving}>{saving ? "Registering..." : "Register repository"}</button>{error && <p className="warning" role="alert">{error}</p>}</form>}
+  </section>;
+}
+
+function GreenfieldPanel({ onCreated }: { onCreated: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [fullName, setFullName] = useState("");
+  const [localPath, setLocalPath] = useState("");
+  const [key, setKey] = useState("first-course");
+  const [title, setTitle] = useState("");
+  const [goal, setGoal] = useState("");
+  const [description, setDescription] = useState("");
+  const [visibility, setVisibility] = useState("private");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault(); setSaving(true); setError(null);
+    try {
+      await callGateway("repos/create", {
+        full_name: fullName,
+        local_path: localPath,
+        description,
+        visibility,
+        course: {
+          key,
+          title,
+          kind: "greenfield",
+          goal,
+          status: "readiness_review",
+          readiness: [
+            { key: "users", category: "product", question: "Who is this for and what must they accomplish?", required: true, owner_decision_required: true },
+            { key: "success", category: "goal", question: "What observable outcome defines success?", required: true, owner_decision_required: true },
+            { key: "access", category: "operations", question: "What permissions, secrets, environments, or test data are required?", required: true, owner_decision_required: true },
+          ],
+          work_packages: [{ key: "discovery", title: "Discovery", objective: "Establish the verified course charter and implementation foundation.", status: "planned" }],
+          checkpoints: [],
+        },
+      });
+      setOpen(false); onCreated();
+    } catch (reason) { setError(String(reason)); } finally { setSaving(false); }
+  };
+  return <section className="register-panel greenfield-panel" aria-labelledby="greenfield-title">
+    <div className="section-heading"><div><p className="eyebrow">GREENFIELD BRIDGE</p><h2 id="greenfield-title">Create from the Chair</h2></div><button className="secondary" onClick={() => setOpen(!open)}>{open ? "Close" : "New greenfield repo"}</button></div>
+    <p className="muted">The GitHub repository is created only after the course passes readiness and you explicitly engage it.</p>
+    {open && <form className="register-form course-form" onSubmit={submit}>
+      <label>GitHub repository<input required pattern="[^/\s]+/[^/\s]+" value={fullName} onChange={(event) => setFullName(event.target.value)} placeholder="owner/repository" /></label>
+      <label>Local path<input required value={localPath} onChange={(event) => setLocalPath(event.target.value)} placeholder="/workspace/repository" /></label>
+      <label>Course key<input required pattern="[A-Za-z0-9][A-Za-z0-9._-]*" value={key} onChange={(event) => setKey(event.target.value)} /></label>
+      <label>Course title<input required value={title} onChange={(event) => setTitle(event.target.value)} /></label>
+      <label>Visibility<select value={visibility} onChange={(event) => setVisibility(event.target.value)}><option value="private">Private</option><option value="public">Public</option></select></label>
+      <label>Repository description<input value={description} onChange={(event) => setDescription(event.target.value)} /></label>
+      <label className="wide">Goal<textarea required minLength={10} value={goal} onChange={(event) => setGoal(event.target.value)} /></label>
+      <button className="primary" type="submit" disabled={saving}>{saving ? "Preparing course..." : "Create readiness review"}</button>
+      {error && <p className="warning" role="alert">{error}</p>}
+    </form>}
+  </section>;
+}
+
+function splitLines(value: string): string[] { return value.split(/[\n,]/).map((item) => item.trim()).filter(Boolean); }
+
+function CourseCreatePanel({ repos, onCreated }: { repos: Repo[]; onCreated: () => void }) {
+  const [open, setOpen] = useState(false); const [repository, setRepository] = useState(repos[0]?.full_name ?? ""); const [key, setKey] = useState("new-course"); const [title, setTitle] = useState(""); const [kind, setKind] = useState("feature"); const [goal, setGoal] = useState("");
+  const [users, setUsers] = useState(""); const [scope, setScope] = useState(""); const [nonGoals, setNonGoals] = useState(""); const [acceptance, setAcceptance] = useState(""); const [exitCriteria, setExitCriteria] = useState(""); const [questions, setQuestions] = useState("What does success look like?\nWhat permissions, environments, or test data are required?"); const [saving, setSaving] = useState(false); const [error, setError] = useState<string | null>(null);
+  const [packages, setPackages] = useState("discovery | Establish a verified understanding of the repository | Read the current implementation, docs, checks, and GitHub state.");
+  useEffect(() => { if (!repository && repos[0]) setRepository(repos[0].full_name); }, [repos, repository]);
+  const submit = async (event: FormEvent) => { event.preventDefault(); setSaving(true); setError(null); try {
+    const readiness = splitLines(questions).map((question, index) => ({ key: `readiness-${index + 1}`, category: "planning", question, required: true, owner_decision_required: true }));
+    const workPackages = splitLines(packages).map((line, index) => {
+      const [packageKey, packageTitle, objective] = line.split("|").map((item) => item.trim());
+      return { key: packageKey || `package-${index + 1}`, title: packageTitle || `Work package ${index + 1}`, objective: objective || packageTitle || line, status: "planned", acceptance_criteria: splitLines(acceptance) };
+    });
+    await callGateway("course/create", { full_name: repository, course: { key, title, kind, goal, users: splitLines(users), scope: splitLines(scope), non_goals: splitLines(nonGoals), acceptance_criteria: splitLines(acceptance), exit_criteria: splitLines(exitCriteria), readiness, status: "readiness_review", work_packages: workPackages, checkpoints: [] } });
+    setOpen(false); onCreated();
+  } catch (reason) { setError(String(reason)); } finally { setSaving(false); } };
+  return <section className="course-builder"><div className="section-heading"><div><p className="eyebrow">COURSE CHARTER</p><h2>Start a planning session</h2></div><button className="secondary" onClick={() => setOpen(!open)}>{open ? "Close" : "New course"}</button></div>
+     {open && <form className="register-form course-form" onSubmit={submit}><label>Repository<select required value={repository} onChange={(event) => setRepository(event.target.value)}>{repos.map((repo) => <option key={repo.full_name}>{repo.full_name}</option>)}</select></label><label>Course key<input required pattern="[A-Za-z0-9][A-Za-z0-9._-]*" value={key} onChange={(event) => setKey(event.target.value)} /></label><label>Title<input required value={title} onChange={(event) => setTitle(event.target.value)} /></label><label>Mode<select value={kind} onChange={(event) => setKind(event.target.value)}><option value="greenfield">Greenfield</option><option value="takeover">In-progress takeover</option><option value="feature">Shipped-product feature</option></select></label><label className="wide">Goal<textarea required minLength={10} value={goal} onChange={(event) => setGoal(event.target.value)} /></label><label>Users<textarea value={users} onChange={(event) => setUsers(event.target.value)} /></label><label>Scope<textarea value={scope} onChange={(event) => setScope(event.target.value)} /></label><label>Non-goals<textarea value={nonGoals} onChange={(event) => setNonGoals(event.target.value)} /></label><label>Acceptance criteria<textarea value={acceptance} onChange={(event) => setAcceptance(event.target.value)} /></label><label>Exit criteria<textarea value={exitCriteria} onChange={(event) => setExitCriteria(event.target.value)} /></label><label className="wide">Initial work packages<textarea value={packages} onChange={(event) => setPackages(event.target.value)} /></label><label className="wide">Readiness questions<textarea value={questions} onChange={(event) => setQuestions(event.target.value)} /></label><button className="primary" type="submit" disabled={saving}>{saving ? "Creating..." : "Create readiness review"}</button>{error && <p className="warning" role="alert">{error}</p>}</form>}
+  </section>;
+}
+
+function CourseModelSettings({ repository, repo, course, onSaved }: { repository: string; repo?: Repo; course: Course; onSaved: () => void }) {
+  const [layer, setLayer] = useState<"course" | "work_package" | "stage">("course");
+  const [stageScope, setStageScope] = useState<"course" | "work_package">("course");
+  const [stageName, setStageName] = useState("implementation");
+  const [packageKey, setPackageKey] = useState(course.work_packages[0]?.key ?? "");
+  const [preset, setPreset] = useState<ModelPreset>("balanced");
+  const [routes, setRoutes] = useState<Record<string, EditableRoute>>(() => initialRoutesFromProfiles(course.model_profiles));
+  const [stageRoute, setStageRoute] = useState<EditableRoute>(() => initialStageRoute(course.model_profiles?.["stage:implementation"]));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const selectedPackage = course.work_packages.find((item) => item.key === packageKey);
+  const selectedProfiles = layer === "course" ? course.model_profiles : selectedPackage?.model_profiles;
+  const stageProfiles = stageScope === "course" ? course.model_profiles : selectedPackage?.model_profiles;
+  useEffect(() => {
+    if (layer === "stage") setStageRoute(initialStageRoute(stageProfiles?.[`stage:${stageName}`]));
+    else setRoutes(initialRoutesFromProfiles(selectedProfiles));
+    setPreset("balanced");
+    setError(null);
+  }, [course, layer, packageKey, stageName, stageScope]);
+  const save = async () => {
+    if ((layer === "work_package" || (layer === "stage" && stageScope === "work_package")) && !selectedPackage) return;
+    setSaving(true); setError(null);
+    try {
+      const stageKey = `stage:${stageName}`;
+      const modelProfiles = layer === "stage"
+        ? { [stageKey]: { primary: { model: stageRoute.model, thinking: stageRoute.effort } } }
+        : modelProfilesForRoutes(routes);
+      const validation = await callGateway<{ can_save?: boolean; warnings?: Array<{ warning?: string }> }>("models/validate", { full_name: repository, model_profiles: modelProfiles });
+      if (validation.can_save === false) throw new Error("One or more model routes are invalid; correct them before saving.");
+      await callGateway("course/models", {
+        full_name: repository,
+        course_key: course.key,
+        layer: layer === "stage" ? "stage" : layer,
+        ...(layer === "stage" ? { stage_name: stageName, stage_scope: stageScope, stage_profile: modelProfiles[stageKey] } : {}),
+        ...(layer === "work_package" || (layer === "stage" && stageScope === "work_package") ? { work_package_key: packageKey } : {}),
+        ...(layer === "stage" ? {} : { model_profiles: modelProfiles }),
+      });
+      onSaved();
+      if (validation.warnings?.length) window.alert("Routes saved. Run a harness route test before autonomous use.");
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setSaving(false);
+    }
+  };
+  const previewPackage = selectedPackage ?? course.work_packages[0];
+  return <details className="settings"><summary>Course and package model routes</summary>
+    <p className="muted">Stage routes override package routes, which override course routes, repository routes, and runtime defaults.</p>
+    <div className="settings-grid">
+      <label>Override layer<select value={layer} onChange={(event) => setLayer(event.target.value as "course" | "work_package" | "stage")}><option value="course">Course</option><option value="work_package">Work package</option><option value="stage">Workflow stage</option></select></label>
+      {layer === "stage" && <><label>Stage scope<select value={stageScope} onChange={(event) => setStageScope(event.target.value as "course" | "work_package")}><option value="course">Course stage</option><option value="work_package">Work package stage</option></select></label><label>Stage name<input value={stageName} onChange={(event) => setStageName(event.target.value)} pattern="[A-Za-z0-9._-]+" /></label></>}
+      {(layer === "work_package" || (layer === "stage" && stageScope === "work_package")) && <label>Work package<select value={packageKey} onChange={(event) => setPackageKey(event.target.value)} disabled={!course.work_packages.length}>{course.work_packages.map((item) => <option key={item.key} value={item.key}>{item.key}</option>)}</select></label>}
+    </div>
+    {layer !== "stage" && <div className="settings-grid"><label>Route preset<select aria-label="Course route preset" value={preset} onChange={(event) => setPreset(event.target.value as ModelPreset)}>{Object.entries(MODEL_PRESET_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><button className="secondary compact" type="button" onClick={() => setRoutes(presetRoutes(preset))}>Apply course preset</button></div>}
+    {layer === "stage" ? <fieldset className="stage-route"><legend>{stageName || "Workflow stage"} route</legend><label>Model<input value={stageRoute.model} onChange={(event) => setStageRoute({ ...stageRoute, model: event.target.value })} /></label><label>Reasoning<select value={stageRoute.effort} onChange={(event) => setStageRoute({ ...stageRoute, effort: event.target.value })}><option>low</option><option>medium</option><option>high</option><option>xhigh</option></select></label></fieldset> : <div className="route-grid">{ROUTE_DEFAULTS.map(({ role, label }) => <fieldset key={role}><legend>{label}</legend><label>Model<input value={routes[role].model} onChange={(event) => setRoutes({ ...routes, [role]: { ...routes[role], model: event.target.value } })} /></label><label>Reasoning<select value={routes[role].effort} onChange={(event) => setRoutes({ ...routes, [role]: { ...routes[role], effort: event.target.value } })}><option>low</option><option>medium</option><option>high</option><option>xhigh</option></select></label></fieldset>)}</div>}
+    <section className="route-preview" aria-labelledby={`route-preview-${course.key}`}><h3 id={`route-preview-${course.key}`}>Effective route preview</h3>{ROUTE_DEFAULTS.map(({ role, label, model, effort }) => { const route = effectiveRoute(repo, course, previewPackage, role, model, effort, stageName); return <div key={role}><span>{label}</span><strong>{route.model}</strong><small>{route.effort} / {route.source}</small></div>; })}</section>
+    <button className="primary compact" onClick={save} disabled={saving || ((layer === "work_package" || (layer === "stage" && stageScope === "work_package")) && !selectedPackage)}>{saving ? "Saving..." : "Save model routes"}</button>{error && <p className="warning" role="alert">{error}</p>}
+  </details>;
+}
+
+function CoursePanel({ item, repo, onAction, onRefresh }: { item: CourseSummary; repo?: Repo; onAction: (path: string, params: Record<string, unknown>) => Promise<void>; onRefresh: () => void }) {
+  const [open, setOpen] = useState(false); const [actor, setActor] = useState("owner"); const [answers, setAnswers] = useState<Record<string, string>>({}); const [planning, setPlanning] = useState<PlanningSession | null>(null); const [planningLoading, setPlanningLoading] = useState(false);
+  const { course, repository, readiness } = item;
+  const params = { full_name: repository, course_key: course.key };
+  const openPlanning = async () => { setPlanningLoading(true); try { setPlanning(await callGateway<PlanningSession>("course/planning-session", params)); } finally { setPlanningLoading(false); } };
+  return <article className="course-card"><div className="course-heading"><div><strong>{course.title}</strong><span>{repository} / {course.kind} / {course.status}</span></div><span className={`readiness ${readiness.ready ? "ready" : "waiting"}`}>{readiness.ready ? "Ready for approval" : `${readiness.unresolved?.length ?? 0} readiness items`}</span><button className="icon-button" aria-label={`${open ? "Collapse" : "Expand"} ${course.title}`} onClick={() => setOpen(!open)}>{open ? "-" : "+"}</button></div>
+    {open && <div className="course-detail"><p className="course-goal">{course.goal}</p><div className="course-actions"><label>Decision owner<input value={actor} onChange={(event) => setActor(event.target.value)} /></label><button className="secondary" onClick={openPlanning} disabled={planningLoading}>{planningLoading ? "Preparing..." : "Open planning brief"}</button>{readiness.ready && course.status !== "engaged" && course.status !== "paused" && <button className="primary" onClick={() => onAction("course/approve", { ...params, approved_by: actor })}>Engage course</button>}{course.status === "engaged" && <button className="secondary" onClick={() => onAction("course/pause", params)}>Pause</button>}{course.status === "paused" && <button className="primary" onClick={() => onAction("course/resume", params)}>Resume</button>}</div>
+      {planning && <section className="detail-section planning-brief"><h3>Planning conversation handoff</h3><p>{planning.prompt}</p>{planning.next_questions.length ? <><strong>Next questions</strong><ul>{planning.next_questions.map((question) => <li key={question}>{question}</li>)}</ul></> : <p className="muted">The charter is ready for owner review. Approval is still required before mutation.</p>}</section>}
+      <section className="detail-section"><h3>Readiness</h3>{course.readiness.length ? course.readiness.map((requirement) => <div className="requirement" key={requirement.key}><div><strong>{requirement.key}</strong><span>{requirement.question}</span></div><span className="status-text">{requirement.status}</span>{requirement.status !== "verified" && <><textarea aria-label={`Answer ${requirement.key}`} value={answers[requirement.key] ?? requirement.answer ?? ""} onChange={(event) => setAnswers({ ...answers, [requirement.key]: event.target.value })} placeholder="Answer or evidence" /><button className="secondary compact" onClick={() => onAction("course/requirement", { ...params, requirement_key: requirement.key, status: "verified", answer: answers[requirement.key] ?? requirement.answer ?? "", evidence: ["dashboard"] })}>Verify answer</button></>}</div>) : <p className="muted">No readiness questions recorded.</p>}</section>
+      <section className="detail-section"><h3>Work packages</h3>{course.work_packages.length ? <div className="package-list">{course.work_packages.map((pkg) => <div key={pkg.key}><strong>{pkg.key}</strong><span>{pkg.title}</span><em>{pkg.status}</em></div>)}</div> : <p className="muted">The Captain will decompose work after course approval.</p>}</section>
+      <section className="detail-section"><h3>Checkpoints</h3>{course.checkpoints.length ? course.checkpoints.map((checkpoint) => <div className="checkpoint" key={checkpoint.key}><div><strong>{checkpoint.title}</strong><span>{checkpoint.reason}</span></div><span className="status-text">{checkpoint.status}</span>{checkpoint.status === "pending" && <button className="secondary compact" onClick={() => onAction("course/checkpoint", { ...params, checkpoint_key: checkpoint.key, status: "resolved", resolved_by: actor, evidence: ["dashboard"] })}>Resolve</button>}</div>) : <p className="muted">No checkpoints are currently defined.</p>}</section>
+      <CourseModelSettings repository={repository} repo={repo} course={course} onSaved={onRefresh} />
+    </div>}
+  </article>;
+}
+
+const ATTENTION_TYPES = new Set(["ATTENTION_REQUIRED", "COMPLETION_READY", "REVIEW_BLOCKED", "FINAL_REVIEW_BLOCKED", "PR_CHECKS_WAITING", "STALLED", "QUEUE_DEGRADED"]);
+function ActivityPanel({ repos }: { repos: Repo[] }) {
+  const events = useMemo(() => repos.flatMap((repo) => (repo.events ?? []).map((event) => ({ ...event, repo: repo.full_name }))).sort((a, b) => b.created_at.localeCompare(a.created_at)), [repos]);
+  const attention = events.filter((event) => ATTENTION_TYPES.has(event.event_type)).slice(0, 8);
+  const crew = events.filter((event) => !ATTENTION_TYPES.has(event.event_type)).slice(0, 8);
+  const models = repos.flatMap((repo) => repo.usage_detail?.model_totals ?? []).reduce<Record<string, number>>((totals, item) => { const model = item.model ?? "unknown"; totals[model] = (totals[model] ?? 0) + (item.accounted_tokens ?? 0); return totals; }, {});
+  return <section className="activity-section"><div className="section-heading"><div><p className="eyebrow">SHIP STATUS</p><h2>Attention and crew activity</h2></div></div><div className="activity-grid"><div className="activity-panel"><h3>Attention queue</h3>{attention.length ? attention.map((event) => <div className="event-row attention" key={`${event.repo}:${event.created_at}:${event.event_type}`}><strong>{event.event_type.split("_").join(" ")}</strong><span>{event.repo} | {event.summary}</span><small>{event.reason}</small></div>) : <p className="muted">No blocking decisions.</p>}</div><div className="activity-panel"><h3>Crew activity</h3>{crew.length ? crew.map((event) => <div className="event-row" key={`${event.repo}:${event.created_at}:${event.event_type}`}><strong>{event.event_type.split("_").join(" ")}</strong><span>{event.repo} | {event.summary}</span><small>{String(event.evidence.worker ?? event.evidence.model ?? "Captain")}</small></div>) : <p className="muted">No recent crew events.</p>}</div><div className="activity-panel"><h3>Tokens by model</h3>{Object.keys(models).length ? Object.entries(models).sort((a, b) => b[1] - a[1]).map(([model, tokens]) => <div className="token-row" key={model}><span>{model}</span><strong>{tokens.toLocaleString()}</strong></div>) : <p className="muted">Provider token telemetry is not available yet.</p>}</div></div></section>;
+}
+
+export function App() {
+  const [portfolio, setPortfolio] = useState<Portfolio | null>(null); const [courses, setCourses] = useState<Courses | null>(null); const [modelConfig, setModelConfig] = useState<ModelConfig | null>(null); const [error, setError] = useState<string | null>(null); const [refreshing, setRefreshing] = useState(false); const [scheduleMessage, setScheduleMessage] = useState<string | null>(null);
+  const refresh = () => { setRefreshing(true); setError(null); Promise.all([callGateway<Portfolio>("portfolio/status"), callGateway<Courses>("courses/list"), callGateway<ModelConfig>("models/config")]).then(([nextPortfolio, nextCourses, nextModelConfig]) => { setPortfolio(nextPortfolio); setCourses(nextCourses); setModelConfig(nextModelConfig); }).catch((reason: unknown) => setError(String(reason))).finally(() => setRefreshing(false)); };
+  const updateRepo = async (fullName: string, payload: UpdatePayload) => { await callGateway("repos/update", { full_name: fullName, ...payload }); refresh(); };
+  const courseAction = async (path: string, params: Record<string, unknown>) => { try { await callGateway(path, params); refresh(); } catch (reason) { setError(String(reason)); } };
+  const installSchedules = async () => { setScheduleMessage(null); try { const response = await fetch("/captains-chair/api/schedule/install", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }); const payload = await response.json() as { error?: string; jobs?: Array<{ name?: string }> }; if (!response.ok) throw new Error(payload.error ?? `Schedule installation failed: ${response.status}`); setScheduleMessage(`Schedules ready: ${payload.jobs?.map((job) => job.name).join(", ") ?? "reconciled"}`); } catch (reason) { setScheduleMessage(String(reason)); } };
+  useEffect(refresh, []);
+  const repos = portfolio?.repos ?? [];
+  return <main className="shell"><header className="topbar"><div><p className="eyebrow">FLIGHT CONTROL</p><h1>Captain's Chair</h1><p className="subtitle">Set the course. Engage the crew.</p></div><div className="action-row"><button className="secondary" onClick={installSchedules}>Install schedules</button><button className="secondary" onClick={refresh} disabled={refreshing} aria-label="Refresh portfolio">{refreshing ? "Refreshing..." : "Refresh"}</button></div></header>
+    {scheduleMessage && <div className="alert" role="status">{scheduleMessage}</div>}{error && <div className="alert" role="alert">{error}</div>}
+    <section className="overview" aria-labelledby="overview-title"><div className="section-heading"><div><p className="eyebrow">MISSION OVERVIEW</p><h2 id="overview-title">Current courses</h2></div><span className="status-pill">{portfolio ? `${repos.length} registered` : "Connecting"}</span></div>{repos.length ? <div className="repo-grid">{repos.map((repo) => <RepoPanel key={repo.full_name} repo={repo} onSave={updateRepo} />)}</div> : <div className="empty"><h3>No repositories registered</h3><p>Register a repository to begin a readiness review.</p></div>}</section>
+    {modelConfig && <><ModelPolicyPanel config={modelConfig} onSaved={refresh} /><UsagePolicyPanel config={modelConfig} onSaved={refresh} /></>}
+    <section className="courses" aria-labelledby="courses-title"><div className="section-heading"><div><p className="eyebrow">COURSE CHARTER</p><h2 id="courses-title">Readiness and work packages</h2></div><span className="status-pill">{courses?.courses.length ?? 0} courses</span></div>{courses?.courses.length ? <div className="course-list">{courses.courses.map((item) => <CoursePanel key={`${item.repository}:${item.course.key}`} item={item} repo={repos.find((repo) => repo.full_name === item.repository)} onAction={courseAction} onRefresh={refresh} />)}</div> : <p className="muted">No course charter has been saved yet.</p>}</section>
+    <CourseCreatePanel repos={repos} onCreated={refresh} /><ActivityPanel repos={repos} /><GreenfieldPanel onCreated={refresh} /><RegisterPanel onRegistered={refresh} />
+  </main>;
+}
+
+const rootElement = document.getElementById("root");
+if (rootElement) createRoot(rootElement).render(<StrictMode><App /></StrictMode>);

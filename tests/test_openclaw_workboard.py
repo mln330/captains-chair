@@ -163,6 +163,7 @@ def test_create_card_uses_gateway_rpc_and_preserves_worker_metadata(tmp_path: Pa
                 branch="captains_chair/work/39",
                 push_branch="feature/current-pr",
             ),
+            metadata={"courseKey": "course-1", "workPackageKey": "package-1"},
         ),
     )
 
@@ -175,6 +176,7 @@ def test_create_card_uses_gateway_rpc_and_preserves_worker_metadata(tmp_path: Pa
     assert params["agentId"] == "coder"
     assert params["workspace"]["kind"] == "worktree"
     assert params["workspace"]["pushBranch"] == "feature/current-pr"
+    assert params["metadata"] == {"courseKey": "course-1", "workPackageKey": "package-1"}
     assert card.workspace == WorkspaceRef(
         kind="worktree",
         path=tmp_path,
@@ -619,10 +621,10 @@ def test_worker_model_health_fails_closed_when_agent_inventory_fails() -> None:
 def test_worker_model_health_accepts_codex_route_reported_by_openai_provider() -> None:
     observed = {
         "captain": "openai/gpt-5.5",
-        "coder": "openai/gpt-5.3-codex",
+        "coder": "openai/gpt-5.3-codex-spark",
         "reviewer": "openai/gpt-5.5",
-        "tester": "openai/gpt-5.3-codex",
-        "ux": "openai/gpt-5.3-codex",
+        "tester": "openai/gpt-5.3-codex-spark",
+        "ux": "openai/gpt-5.3-codex-spark",
         "final": "openai/gpt-5.5",
         "merge": "openai/gpt-5.5",
         "verify": "openai/gpt-5.5",

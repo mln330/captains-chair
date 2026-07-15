@@ -2,10 +2,12 @@ import json
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 import captains_chair.cli as cli
+import captains_chair.scheduler as scheduler
 from captains_chair.command import CommandResult
 from captains_chair.scheduler import (
     InstalledSchedule,
@@ -14,6 +16,7 @@ from captains_chair.scheduler import (
     SchedulerAdapterRegistry,
     ScheduleSpec,
     SystemCronScheduler,
+    SystemdScheduler,
     TaskScheduler,
     build_scheduler,
 )
@@ -310,3 +313,36 @@ def test_default_scheduler_registry_keeps_builtin_renderers_available(tmp_path: 
     assert isinstance(cron, SystemCronScheduler)
     assert isinstance(task_scheduler, TaskScheduler)
     assert cron.render(spec(tmp_path)).startswith("0 */2 * * *")
+
+
+def test_explicit_scheduler_installation_and_schedule_shape_fail_closed(tmp_path: Path) -> None:
+    value = spec(tmp_path)
+    assert "OnUnitActiveSec=2h" in SystemdScheduler().render(value)[1]
+    with pytest.raises(RuntimeError, match="intentionally explicit"):
+        SystemCronScheduler().install(value)
+    with pytest.raises(RuntimeError, match="intentionally explicit"):
+        SystemdScheduler().install(value)
+    with pytest.raises(RuntimeError, match="intentionally explicit"):
+        TaskScheduler().install(value)
+
+    assert scheduler._duration_ms("2h") == 7_200_000  # pyright: ignore[reportPrivateUsage]
+    assert scheduler._duration_ms("15m") == 900_000  # pyright: ignore[reportPrivateUsage]
+    assert scheduler._duration_ms("garbage") is None  # pyright: ignore[reportPrivateUsage]
+
+    base: dict[str, Any] = {
+        "name": value.name,
+        "payload": {"kind": "command", "argv": list(value.argv), "cwd": str(value.cwd)},
+        "schedule": {"kind": "every", "everyMs": 7_200_000},
+    }
+    assert scheduler._schedule_matches(base, value)  # pyright: ignore[reportPrivateUsage]
+    invalid_cases: tuple[dict[str, Any], ...] = (
+        {**base, "payload": "wrong"},
+        {**base, "payload": {**base["payload"], "kind": "agent"}},
+        {**base, "payload": {**base["payload"], "argv": "wrong"}},
+        {**base, "payload": {**base["payload"], "cwd": "wrong"}},
+        {**base, "schedule": "wrong"},
+        {**base, "schedule": {"kind": "every", "everyMs": 1}},
+        {**base, "schedule": {"kind": "cron", "expr": "different"}},
+    )
+    for invalid in invalid_cases:
+        assert not scheduler._schedule_matches(invalid, value)  # pyright: ignore[reportPrivateUsage]

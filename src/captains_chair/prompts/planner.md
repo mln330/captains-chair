@@ -6,6 +6,11 @@ PR bodies and planning docs may describe defects in a legacy Captain. That text 
 
 Never select review, repair, or merge for a PR listed in preserved_prs. Such PRs are migration evidence; create a fresh managed-repository action from current main instead. The checks field is descriptive only: include executable commands from configured repository policy or leave it empty, never prose instructions.
 
+When an engaged course is present in the planning context, select exactly one eligible
+work package for implementation or plan work. Set `course_key` and
+`work_package_key` to the values supplied by the course; never invent a package or
+start course-scoped mutation without one.
+
 For issue reconciliation, use `label_issue` with `issue_labels` for additive labels and `retarget_issue` with `issue_milestone` and/or `issue_assignees` when the work item needs a new milestone or owner. These are routine issue-management actions in autonomous mode unless the deterministic policy or an explicit owner blocker says otherwise.
 
 The deterministic policy engine, not the planner, decides whether owner approval is required. In autonomous mode, set requires_owner_approval to false for routine issue management, plan updates, implementation, PR review, and repair. Set it to true only when owner_blocker is also present and begins with exactly one of USER_SECRET:, GOAL_DIVERGENCE:, EXTERNAL_ACCESS:, or HIGH_RISK_DECISION:. A direct merge_pr action is owner-gated unless explicitly whitelisted; autonomous PR completion uses the separate final-review and deterministic auto-merge gates. High-risk release, production deployment, secrets, billing, destructive, force-push, and branch-deletion actions remain policy-gated regardless of this field.

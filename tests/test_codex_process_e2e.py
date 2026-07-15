@@ -8,7 +8,7 @@ import pytest
 
 from captains_chair.command import CommandResult, run_command
 from captains_chair.harness import CodexAdapter
-from captains_chair.models import HarnessConfig, HarnessHealth, ModelTarget, RoleModels
+from captains_chair.models import HarnessConfig, HarnessHealth, ModelTarget, ReasoningEffort, RoleModels
 
 FAKE_CODEX = r'''
 from __future__ import annotations
@@ -91,7 +91,7 @@ def test_codex_adapter_crosses_process_boundary_with_schema_and_usage(
     result = adapter.run(
         prompt="Return the health response.",
         models=RoleModels(
-            primary=ModelTarget(model="gpt-5.3-codex-spark", thinking="medium"),
+            primary=ModelTarget(model="gpt-5.3-codex-spark", thinking=ReasoningEffort.MEDIUM),
         ),
         role="coder",
         output_model=HarnessHealth,

@@ -21,7 +21,6 @@ from captains_chair.models import (
     RepoConfig,
     RunState,
     UsageConfig,
-    UsageRate,
 )
 from captains_chair.notifications import NotificationError, Notifier
 from captains_chair.orchestration import EnqueuedWorkflow, WorkflowOrchestrator
@@ -416,12 +415,12 @@ class FailOnceNotifier:
             raise NotificationError("Discord route unavailable")
 
 
-def test_direct_model_call_honors_configured_daily_budget_before_provider_call(
+def test_direct_model_call_honors_configured_daily_token_limit_before_provider_call(
     tmp_path: Path,
 ) -> None:
     repo = repo_config(tmp_path, mode=OperationMode.AUTONOMOUS)
     config = app_config(tmp_path, repo).model_copy(
-        update={"usage": UsageConfig(daily_budget_credits=0)}
+        update={"usage": UsageConfig(daily_token_limit=0)}
     )
     state = StateStore(config.state_dir / "state.db")
     harness = CapturingHarness(HarnessConfig(kind="codex", executable="codex"))
@@ -434,7 +433,7 @@ def test_direct_model_call_honors_configured_daily_budget_before_provider_call(
         model_policy(),
     )
 
-    with pytest.raises(ModelCallSuppressedError, match="daily usage budget"):
+    with pytest.raises(ModelCallSuppressedError, match="daily token limit"):
         engine.run_model(
             repo,
             "budget-check",
@@ -449,14 +448,11 @@ def test_direct_model_call_honors_configured_daily_budget_before_provider_call(
     assert harness.calls == 0
 
 
-def test_direct_model_call_uses_account_wide_budget_across_repositories(tmp_path: Path) -> None:
+def test_direct_model_call_uses_account_wide_token_limit_across_repositories(tmp_path: Path) -> None:
     repo = repo_config(tmp_path, mode=OperationMode.AUTONOMOUS)
     config = app_config(tmp_path, repo).model_copy(
         update={
-            "usage": UsageConfig(
-                rates={"gpt-5.5": UsageRate(input_credits_per_million=10)},
-                daily_budget_credits=10,
-            )
+            "usage": UsageConfig(daily_token_limit=1_000_000)
         }
     )
     state = StateStore(config.state_dir / "state.db")
@@ -477,7 +473,7 @@ def test_direct_model_call_uses_account_wide_budget_across_repositories(tmp_path
         model_policy(),
     )
 
-    with pytest.raises(ModelCallSuppressedError, match="daily usage budget"):
+    with pytest.raises(ModelCallSuppressedError, match="daily token limit"):
         engine.run_model(
             repo,
             "cross-repo-budget-check",
@@ -492,7 +488,7 @@ def test_direct_model_call_uses_account_wide_budget_across_repositories(tmp_path
     assert harness.calls == 0
 
 
-def test_direct_model_call_honors_unknown_telemetry_guard_without_daily_budget(
+def test_direct_model_call_honors_unknown_telemetry_guard_without_daily_limit(
     tmp_path: Path,
 ) -> None:
     repo = repo_config(tmp_path, mode=OperationMode.AUTONOMOUS)
@@ -603,7 +599,7 @@ def test_direct_model_call_suppresses_when_runtime_usage_sync_is_degraded(tmp_pa
 def test_cycle_reports_usage_suppression_as_a_non_owner_blocker(tmp_path: Path) -> None:
     repo = repo_config(tmp_path, mode=OperationMode.AUTONOMOUS)
     config = app_config(tmp_path, repo).model_copy(
-        update={"usage": UsageConfig(daily_budget_credits=0)}
+        update={"usage": UsageConfig(daily_token_limit=0)}
     )
     state = StateStore(config.state_dir / "state.db")
     artifact = tmp_path / "baseline.json"

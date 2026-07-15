@@ -4,20 +4,27 @@ from typing import Any, cast
 
 import pytest
 
+import captains_chair.runtime as runtime
 from captains_chair.command import CommandResult, CommandRunner
 from captains_chair.conformance import run_runtime_conformance
 from captains_chair.models import (
     ActionKind,
-    CodexWorkboardConfig,
     CompletionPolicy,
-    HermesWorkboardConfig,
+    ExternalWorkboardConfig,
     OpenClawWorkboardConfig,
     OperationMode,
     OrchestratorConfig,
     PlanDecision,
     WorkerAssignments,
 )
-from captains_chair.orchestration import QueueCard, WorkerLifecycleAdapter, WorkQueueAdapter, WorkspaceRef
+from captains_chair.orchestration import (
+    NullWorkTracker,
+    QueueCard,
+    WorkerLifecycleAdapter,
+    WorkQueueAdapter,
+    WorkspaceRef,
+    WorkTrackerAdapter,
+)
 from captains_chair.plugins import PluginDiscoveryError
 from captains_chair.runtime import (
     RuntimeAdapterContractError,
@@ -141,8 +148,8 @@ def test_openclaw_runtime_factory_requires_live_completion_validator_by_default(
 @pytest.mark.parametrize(
     "config",
     (
-        HermesWorkboardConfig(workers=workers()),
-        CodexWorkboardConfig(workers=workers()),
+        ExternalWorkboardConfig(kind="future_a", executable="future-a", workers=workers()),
+        ExternalWorkboardConfig(kind="future_b", executable="future-b", workers=workers()),
     ),
 )
 def test_future_runtime_configs_fail_at_adapter_boundary(config: OrchestratorConfig) -> None:
@@ -154,37 +161,44 @@ def test_future_queue_runtime_can_register_without_mutating_workflow_core() -> N
     registry = RuntimeAdapterRegistry()
     marker = ContractAdapter()
 
-    def build_hermes(config: OrchestratorConfig, runner: CommandRunner) -> WorkQueueAdapter:
+    def build_future(config: OrchestratorConfig, runner: CommandRunner) -> WorkQueueAdapter:
         del config, runner
         return cast(WorkQueueAdapter, marker)
 
-    registry.register("hermes_workboard", build_hermes)
+    registry.register("future_runtime", build_future)
     adapter = build_work_queue_adapter(
-        HermesWorkboardConfig(workers=workers()),
+        ExternalWorkboardConfig(kind="future_runtime", executable="future", workers=workers()),
         no_rpc,
         registry=registry,
     )
 
     assert adapter is marker
     with pytest.raises(ValueError, match="already registered"):
-        registry.register("hermes_workboard", build_hermes)
+        registry.register("future_runtime", build_future)
 
 
 def test_runtime_registry_discovers_packaged_adapter_once() -> None:
     registry = RuntimeAdapterRegistry()
     marker = ContractAdapter()
 
-    def build_hermes(config: OrchestratorConfig, runner: CommandRunner) -> WorkQueueAdapter:
+    def build_future(config: OrchestratorConfig, runner: CommandRunner) -> WorkQueueAdapter:
         del config, runner
         return cast(WorkQueueAdapter, marker)
 
-    def register_hermes(target: Any) -> None:
-        target.register("hermes_workboard", build_hermes)
+    def register_future(target: Any) -> None:
+        target.register("future_runtime", build_future)
 
-    entry_point = FakeEntryPoint("hermes", "captains_chair.runtime_adapters", register_hermes)
-    assert registry.discover(provider=lambda: [entry_point]) == ("hermes",)
+    entry_point = FakeEntryPoint("future", "captains_chair.runtime_adapters", register_future)
+    assert registry.discover(provider=lambda: [entry_point]) == ("future",)
     assert registry.discover(provider=lambda: [entry_point]) == ()
-    assert build_work_queue_adapter(HermesWorkboardConfig(workers=workers()), no_rpc, registry=registry) is marker
+    assert (
+        build_work_queue_adapter(
+            ExternalWorkboardConfig(kind="future_runtime", executable="future", workers=workers()),
+            no_rpc,
+            registry=registry,
+        )
+        is marker
+    )
 
 
 def test_runtime_plugin_registration_failure_is_explicit() -> None:
@@ -204,18 +218,22 @@ def test_runtime_plugin_registration_failure_is_explicit() -> None:
     ("config", "runtime_kind"),
     (
         (
-            HermesWorkboardConfig(
+            ExternalWorkboardConfig(
+                kind="future_a",
+                executable="future-a",
                 workers=worker_policy().workers,
                 require_live_completion_validation=False,
             ),
-            "hermes_workboard",
+            "future_a",
         ),
         (
-            CodexWorkboardConfig(
+            ExternalWorkboardConfig(
+                kind="future_b",
+                executable="future-b",
                 workers=worker_policy().workers,
                 require_live_completion_validation=False,
             ),
-            "codex_workboard",
+            "future_b",
         ),
     ),
 )
@@ -227,11 +245,11 @@ def test_future_runtime_shape_runs_the_shared_workflow_conformance_fixture(
     registry = RuntimeAdapterRegistry()
     queue = InMemoryWorkQueue()
 
-    def build_hermes(config: OrchestratorConfig, runner: CommandRunner) -> WorkQueueAdapter:
+    def build_future(config: OrchestratorConfig, runner: CommandRunner) -> WorkQueueAdapter:
         del config, runner
         return queue
 
-    registry.register(runtime_kind, build_hermes)
+    registry.register(runtime_kind, build_future)
     orchestrator = build_work_queue_orchestrator(config, no_rpc, registry=registry)
     repo = repo_config(
         tmp_path,
@@ -301,8 +319,7 @@ def test_future_runtime_shape_runs_the_shared_workflow_conformance_fixture(
         card.workspace == workspace
         for card in workflow_cards
         if all(
-            stage not in card.labels
-            for stage in ("stage:orchestration", "stage:merge", "stage:post_merge")
+            stage not in card.labels for stage in ("stage:orchestration", "stage:merge", "stage:post_merge")
         )
     )
 
@@ -333,11 +350,62 @@ def test_future_queue_runtime_rejects_incomplete_adapter_at_construction() -> No
         del config, runner
         return cast(WorkQueueAdapter, object())
 
-    registry.register("hermes_workboard", build_incomplete)
+    registry.register("future_runtime", build_incomplete)
 
     with pytest.raises(RuntimeAdapterContractError, match="required operations"):
         build_work_queue_adapter(
-            HermesWorkboardConfig(workers=workers()),
+            ExternalWorkboardConfig(kind="future_runtime", executable="future", workers=workers()),
             no_rpc,
             registry=registry,
         )
+
+
+def test_runtime_registry_rejects_empty_kind_and_allows_explicit_replacement() -> None:
+    registry = RuntimeAdapterRegistry()
+    marker = ContractAdapter()
+
+    def build(config: OrchestratorConfig, runner: CommandRunner) -> WorkQueueAdapter:
+        del config, runner
+        return cast(WorkQueueAdapter, marker)
+
+    with pytest.raises(ValueError, match="must not be empty"):
+        registry.register("   ", build)
+    registry.register("replaceable", build)
+    registry.register("replaceable", build, replace=True)
+
+
+def test_runtime_registry_rejects_openclaw_and_direct_config_type_mismatches() -> None:
+    registry = RuntimeAdapterRegistry()
+    registry.register("openclaw_workboard", runtime._build_openclaw_queue)  # pyright: ignore[reportPrivateUsage]
+    with pytest.raises(TypeError, match="OpenClawWorkboardConfig"):
+        registry.build(
+            ExternalWorkboardConfig(kind="openclaw_workboard", executable="openclaw", workers=workers()),
+            no_rpc,
+        )
+    registry = RuntimeAdapterRegistry()
+    registry.register("direct", runtime._build_direct_orchestrator)  # pyright: ignore[reportPrivateUsage]
+    with pytest.raises(TypeError, match="DirectOrchestratorConfig"):
+        registry.build(
+            ExternalWorkboardConfig(kind="direct", executable="direct", workers=workers()),
+            no_rpc,
+        )
+
+
+def test_null_work_tracker_satisfies_optional_tracker_contract() -> None:
+    tracker = NullWorkTracker()
+
+    assert isinstance(tracker, WorkTrackerAdapter)
+    assert (
+        tracker.mirror_work(
+            "course-1/package-1",
+            title="Implement bounded package",
+            summary="No external tracker is configured.",
+            status="ready",
+            source_url="https://example.test/package-1",
+            metadata={"course_id": "course-1"},
+        )
+        is None
+    )
+    tracker.update_work("unused", status="done", summary="Complete")
+    tracker.remove_work("unused")
+    assert tracker.diagnostics() == {"status": "healthy", "kind": "null", "enabled": False}
