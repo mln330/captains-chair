@@ -308,7 +308,7 @@ def test_future_runtime_shape_runs_the_shared_workflow_conformance_fixture(
     assert report.mixed_owner_blocked_card_id.startswith("card-")
     assert report.mixed_technical_retry_card_id.startswith("card-")
     assert report.mixed_unrelated_card_id.startswith("card-")
-    assert len(lifecycle_completions) == 8
+    assert len(lifecycle_completions) == 7
     workflow_cards = [
         card
         for card in queue.list_cards("captains-chair-example-project")
@@ -340,7 +340,7 @@ def test_future_runtime_shape_runs_the_shared_workflow_conformance_fixture(
     )
     assert repeated.workflow_id == "future-runtime-conformance-repeat"
     assert repeated.workflow_id != report.workflow_id
-    assert len(lifecycle_completions) == 16
+    assert len(lifecycle_completions) == 14
 
 
 def test_future_queue_runtime_rejects_incomplete_adapter_at_construction() -> None:

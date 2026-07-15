@@ -10,15 +10,18 @@ from typing import Any, Protocol, cast, runtime_checkable
 
 from pydantic import Field
 
+from captains_chair.config import load_project_manifest
 from captains_chair.models import (
     ActionKind,
+    ApplicationSurface,
     CompletionPolicy,
     PlanDecision,
+    QAProfile,
     RepoConfig,
     StrictModel,
     WorkerAssignments,
 )
-from captains_chair.qa import select_qa
+from captains_chair.qa import QASelection, select_qa
 
 
 class WorkStage(enum.StrEnum):
@@ -138,12 +141,23 @@ class ReconcileResult:
     cleaned_workspaces: tuple[str, ...] = ()
     workspace_cleanup_failures: tuple[str, ...] = ()
     recovery_warnings: tuple[str, ...] = ()
+    qa_created: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
 class CompletionValidation:
     allowed: bool
     reason: str
+
+
+class QARequirementContext(StrictModel):
+    version: int = 1
+    pr_number: int
+    pr_url: str
+    head_sha: str
+    planned_paths: tuple[str, ...] = ()
+    actual_paths: tuple[str, ...] = ()
+    selection: QASelection
 
 
 WorkspaceCleanup = Callable[[RepoConfig, WorkspaceRef], bool]
@@ -418,6 +432,8 @@ class WorkflowOrchestrator:
                     )
             cards = self.adapter.list_cards(board_id)
         recovery_warnings = tuple(recovery_warning_values)
+        cards, qa_created, qa_warnings = self._materialize_actual_qa(repo, board_id, cards)
+        recovery_warnings = (*recovery_warnings, *qa_warnings)
         proof_retries: list[str] = []
         protocol_retries: list[str] = []
         repairs_created: list[str] = []
@@ -628,7 +644,86 @@ class WorkflowOrchestrator:
             cleaned_workspaces=tuple(cleaned_workspaces),
             workspace_cleanup_failures=tuple(workspace_cleanup_failures),
             recovery_warnings=recovery_warnings,
+            qa_created=qa_created,
         )
+
+    def _materialize_actual_qa(
+        self,
+        repo: RepoConfig,
+        board_id: str,
+        cards: list[QueueCard],
+    ) -> tuple[list[QueueCard], tuple[str, ...], tuple[str, ...]]:
+        resolver = getattr(self.completion_validator, "required_qa", None)
+        if not callable(resolver):
+            return cards, (), ()
+        groups: dict[str, list[QueueCard]] = {}
+        for card in cards:
+            workflow = _card_workflow_label(card)
+            if workflow is not None and not card.metadata.get("archivedAt"):
+                groups.setdefault(workflow, []).append(card)
+        created: list[str] = []
+        warnings: list[str] = []
+        for workflow, workflow_cards in groups.items():
+            try:
+                context = resolver(repo, workflow_cards)
+            except Exception as exc:
+                warnings.append(f"Actual-path QA resolution failed for {workflow}: {str(exc)[:1000]}")
+                continue
+            if context is None:
+                continue
+            if not isinstance(context, QARequirementContext):
+                warnings.append(f"Actual-path QA resolver returned invalid context for {workflow}")
+                continue
+            existing = {
+                str(card.metadata.get("qaProfile") or "")
+                for card in workflow_cards
+                if card.metadata.get("qaProfile")
+            }
+            workspace = next(
+                (card.workspace for card in workflow_cards if card.workspace is not None),
+                None,
+            )
+            for profile in context.selection.profiles:
+                if profile.key in existing:
+                    continue
+                stage = (
+                    WorkStage.UX_REVIEW
+                    if context.selection.worker_roles[profile.key] == "ux_reviewer"
+                    else WorkStage.TEST
+                )
+                metadata = _qa_metadata(profile, context.planned_paths)
+                metadata.update(
+                    {
+                        "actualChangedPaths": list(context.actual_paths),
+                        "discoveredHeadSha": context.head_sha,
+                    }
+                )
+                card = self.adapter.create_card(
+                    board_id,
+                    QueueCardSpec(
+                        key=f"captains_chair:{workflow}:qa:{_qa_key(profile.key)}:{context.head_sha[:12]}",
+                        title=f"{profile.title}: current PR head",
+                        notes=_dynamic_qa_notes(repo, profile, context),
+                        status=QueueStatus.READY,
+                        priority="high",
+                        labels=(
+                            "captains_chair",
+                            f"repo:{repo.full_name.lower()}",
+                            workflow,
+                            f"stage:{stage.value}",
+                            _bounded_label(f"qa:{profile.key}"),
+                        ),
+                        agent_id=_worker_for(stage, self.config),
+                        source_url=context.pr_url,
+                        workspace=workspace,
+                        max_runtime_seconds=self.config.max_runtime_seconds,
+                        max_retries=self.config.max_retries,
+                        metadata=metadata,
+                    ),
+                )
+                created.append(card.id)
+                existing.add(profile.key)
+        return (self.adapter.list_cards(board_id) if created else cards), tuple(created), tuple(warnings)
 
     def _cleanup_completed_workflows(
         self, repo: RepoConfig, board_id: str
@@ -694,7 +789,12 @@ class WorkflowOrchestrator:
     ) -> bool:
         if not _has_valid_proof(repo, card):
             return False
-        if _card_stage(card) != WorkStage.FINAL_REVIEW:
+        stage = _card_stage(card)
+        requires_live_validation = stage == WorkStage.FINAL_REVIEW or (
+            stage in {WorkStage.TEST, WorkStage.UX_REVIEW}
+            and bool(card.metadata.get("qaProfile"))
+        )
+        if not requires_live_validation:
             return True
         if self.completion_validator is None:
             return not self.config.require_live_completion_validation
@@ -784,6 +884,7 @@ class WorkflowOrchestrator:
                 workspace=card.workspace,
                 max_runtime_seconds=self.config.max_runtime_seconds,
                 max_retries=self.config.max_retries,
+                metadata=_retry_metadata(card),
             ),
         )
         if retry.status != QueueStatus.READY:
@@ -970,23 +1071,38 @@ def build_workflow(
     )
     stages = _stage_sequence(repo, decision)
     specs: list[QueueCardSpec] = []
-    for stage, dependencies in stages:
-        key = f"{action_id}:{stage.value}"
+    for suffix, stage, dependencies, qa_profile in stages:
+        key = f"{action_id}:{suffix}"
         stage_workspace = None if stage in {WorkStage.MERGE, WorkStage.POST_MERGE} else workspace
-        parents = tuple(root_key if parent is None else f"{action_id}:{parent.value}" for parent in dependencies)
+        parents = tuple(root_key if parent is None else f"{action_id}:{parent}" for parent in dependencies)
+        metadata: dict[str, Any] = _course_metadata(decision)
+        if qa_profile is not None:
+            metadata.update(_qa_metadata(qa_profile, decision.changed_paths))
+        qa_labels = (_bounded_label(f"qa:{qa_profile.key}"),) if qa_profile is not None else ()
         specs.append(
             QueueCardSpec(
                 key=key,
-                title=f"{stage.value.replace('_', ' ').title()}: {decision.summary}",
-                notes=_stage_notes(repo, decision, action_id, stage, workspace=stage_workspace),
-                labels=(*common_labels, f"stage:{stage.value}"),
+                title=(
+                    f"{qa_profile.title}: {decision.summary}"
+                    if qa_profile is not None
+                    else f"{stage.value.replace('_', ' ').title()}: {decision.summary}"
+                ),
+                notes=_stage_notes(
+                    repo,
+                    decision,
+                    action_id,
+                    stage,
+                    workspace=stage_workspace,
+                    qa_profile=qa_profile,
+                ),
+                labels=(*common_labels, *qa_labels, f"stage:{stage.value}"),
                 agent_id=_worker_for(stage, config),
                 source_url=source_url,
                 parents=parents,
                 workspace=stage_workspace,
                 max_runtime_seconds=config.max_runtime_seconds,
                 max_retries=config.max_retries,
-                metadata=_course_metadata(decision),
+                metadata=metadata,
             )
         )
     return WorkflowSpec(
@@ -1003,7 +1119,7 @@ def build_workflow(
 
 def _stage_sequence(
     repo: RepoConfig, decision: PlanDecision
-) -> tuple[tuple[WorkStage, tuple[WorkStage | None, ...]], ...]:
+) -> tuple[tuple[str, WorkStage, tuple[str | None, ...], QAProfile | None], ...]:
     if decision.action in {
         ActionKind.CREATE_ISSUE,
         ActionKind.UPDATE_ISSUE,
@@ -1012,32 +1128,69 @@ def _stage_sequence(
         ActionKind.CLOSE_ISSUE,
     }:
         return (
-            (WorkStage.CONTROL_PLANE_ACTION, (None,)),
-            (WorkStage.POST_MERGE, (WorkStage.CONTROL_PLANE_ACTION,)),
+            (WorkStage.CONTROL_PLANE_ACTION.value, WorkStage.CONTROL_PLANE_ACTION, (None,), None),
+            (
+                WorkStage.POST_MERGE.value,
+                WorkStage.POST_MERGE,
+                (WorkStage.CONTROL_PLANE_ACTION.value,),
+                None,
+            ),
         )
 
     if decision.action in {ActionKind.REVIEW_PR, ActionKind.MERGE_PR}:
-        first = WorkStage.REVIEW
-        rows: list[tuple[WorkStage, tuple[WorkStage | None, ...]]] = [
-            (WorkStage.REVIEW, (None,)),
-            (WorkStage.TEST, (None,)),
+        first = WorkStage.REVIEW.value
+        qa_parent: str | None = None
+        rows: list[tuple[str, WorkStage, tuple[str | None, ...], QAProfile | None]] = [
+            (WorkStage.REVIEW.value, WorkStage.REVIEW, (None,), None),
         ]
     else:
-        first = WorkStage.REPAIR if decision.action == ActionKind.REPAIR_PR else WorkStage.IMPLEMENTATION
+        first_stage = (
+            WorkStage.REPAIR if decision.action == ActionKind.REPAIR_PR else WorkStage.IMPLEMENTATION
+        )
+        first = first_stage.value
+        qa_parent = first
         rows = [
-            (first, (None,)),
-            (WorkStage.REVIEW, (first,)),
-            (WorkStage.TEST, (first,)),
+            (first, first_stage, (None,), None),
+            (WorkStage.REVIEW.value, WorkStage.REVIEW, (first,), None),
         ]
 
-    review_dependencies: list[WorkStage] = [WorkStage.REVIEW, WorkStage.TEST]
-    if repo.ux_enabled and decision.action != ActionKind.UPDATE_PLAN:
-        rows.append((WorkStage.UX_REVIEW, (first,)))
-        review_dependencies.append(WorkStage.UX_REVIEW)
-    rows.append((WorkStage.FINAL_REVIEW, tuple(review_dependencies)))
+    manifest = load_project_manifest(repo.local_path, repo.project_manifest)
+    qa_selection = select_qa(repo, decision.changed_paths, manifest)
+    review_dependencies = [WorkStage.REVIEW.value]
+    for profile in qa_selection.profiles:
+        suffix = f"qa:{_qa_key(profile.key)}"
+        stage = (
+            WorkStage.UX_REVIEW
+            if qa_selection.worker_roles[profile.key] == "ux_reviewer"
+            else WorkStage.TEST
+        )
+        rows.append((suffix, stage, (qa_parent,), profile))
+        review_dependencies.append(suffix)
+    rows.append(
+        (
+            WorkStage.FINAL_REVIEW.value,
+            WorkStage.FINAL_REVIEW,
+            tuple(review_dependencies),
+            None,
+        )
+    )
     if repo.completion_policy == CompletionPolicy.AUTO_MERGE:
-        rows.append((WorkStage.MERGE, (WorkStage.FINAL_REVIEW,)))
-        rows.append((WorkStage.POST_MERGE, (WorkStage.MERGE,)))
+        rows.append(
+            (
+                WorkStage.MERGE.value,
+                WorkStage.MERGE,
+                (WorkStage.FINAL_REVIEW.value,),
+                None,
+            )
+        )
+        rows.append(
+            (
+                WorkStage.POST_MERGE.value,
+                WorkStage.POST_MERGE,
+                (WorkStage.MERGE.value,),
+                None,
+            )
+        )
     return tuple(rows)
 
 
@@ -1085,13 +1238,74 @@ def _root_notes(repo: RepoConfig, decision: PlanDecision, action_id: str) -> str
     )
 
 
-def _course_metadata(decision: PlanDecision) -> dict[str, str]:
-    metadata: dict[str, str] = {}
+def _course_metadata(decision: PlanDecision) -> dict[str, Any]:
+    metadata: dict[str, Any] = {}
     if decision.course_key:
         metadata["courseKey"] = decision.course_key
     if decision.work_package_key:
         metadata["workPackageKey"] = decision.work_package_key
     return metadata
+
+
+def _qa_key(value: str) -> str:
+    normalized = "".join(character if character.isalnum() or character in "._-" else "-" for character in value)
+    return normalized[:80] or "qa"
+
+
+def _qa_metadata(profile: QAProfile, planned_paths: tuple[str, ...]) -> dict[str, Any]:
+    return {
+        "qaEvidenceVersion": 1,
+        "qaProfile": profile.key,
+        "qaSurfaces": sorted(surface.value for surface in profile.surfaces),
+        "qaChecks": list(profile.checks),
+        "qaRequired": True,
+        "plannedChangedPaths": list(planned_paths),
+    }
+
+
+def _retry_metadata(card: QueueCard) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in card.metadata.items()
+        if key
+        in {
+            "courseKey",
+            "workPackageKey",
+            "qaEvidenceVersion",
+            "qaProfile",
+            "qaSurfaces",
+            "qaChecks",
+            "qaRequired",
+            "plannedChangedPaths",
+            "actualChangedPaths",
+            "discoveredHeadSha",
+        }
+    }
+
+
+def _dynamic_qa_notes(
+    repo: RepoConfig,
+    profile: QAProfile,
+    context: QARequirementContext,
+) -> str:
+    paths = "\n".join(f"- {path}" for path in context.actual_paths) or "- No changed paths reported"
+    surfaces = ", ".join(sorted(surface.value for surface in profile.surfaces)) or "custom checks"
+    ui_evidence = (
+        " Evidence must separately cover accessibility, contrast, responsive behavior, flow, and cohesion."
+        if ApplicationSurface.WEB_UI in profile.surfaces
+        else ""
+    )
+    return (
+        f"Repository: {repo.full_name}\n"
+        f"PR: {context.pr_url}\n"
+        f"Current head: {context.head_sha}\n"
+        f"QA profile: {profile.key} - {profile.title}\n"
+        f"Capability surfaces: {surfaces}\n\n"
+        f"Actual changed paths:\n{paths}\n\n"
+        "Run this capability's checks in fresh context. Complete with one structured proof containing "
+        f"`QA_PASSED:{profile.key}:{context.head_sha}`, non-empty `model`, `provider`, and `evidence` fields."
+        f"{ui_evidence} Block with TECHNICAL: and actionable findings when the capability does not pass."
+    )
 
 
 def _stage_notes(
@@ -1101,6 +1315,7 @@ def _stage_notes(
     stage: WorkStage,
     *,
     workspace: WorkspaceRef | None = None,
+    qa_profile: QAProfile | None = None,
 ) -> str:
     contracts = {
         WorkStage.CONTROL_PLANE_ACTION: "Perform only the exact GitHub issue action in this card and verify it by reading GitHub back.",
@@ -1143,17 +1358,21 @@ def _stage_notes(
         "A blocked card must not prevent workers from completing unrelated ready cards."
     )
     qa_note = ""
-    if stage in {WorkStage.TEST, WorkStage.UX_REVIEW}:
-        qa_selection = select_qa(repo, decision.changed_paths)
+    if qa_profile is not None:
+        surfaces = ", ".join(sorted(surface.value for surface in qa_profile.surfaces)) or "custom checks"
+        checks = "\n".join(f"- {check}" for check in qa_profile.checks) or "- Capability-specific exploratory checks"
+        ui_evidence = (
+            " UI proof evidence must separately cover accessibility, contrast, responsive behavior, flow, and cohesion."
+            if ApplicationSurface.WEB_UI in qa_profile.surfaces
+            else ""
+        )
         qa_note = (
-            "\nCapability-selected QA profiles:\n"
-            + "\n".join(
-                f"- {profile.key}: {profile.title} (worker={qa_selection.worker_roles[profile.key]})"
-                for profile in qa_selection.profiles
-            )
-            + "\nDetected/configured surfaces: "
-            + ", ".join(sorted(surface.value for surface in qa_selection.surfaces))
-            + "\n"
+            f"\nQA profile: {qa_profile.key} - {qa_profile.title}\n"
+            f"Capability surfaces: {surfaces}\n"
+            f"Checks:\n{checks}\n"
+            "Complete only against the current PR head with one structured proof containing "
+            f"`QA_PASSED:{qa_profile.key}:<head-sha>`, non-empty `model`, `provider`, and `evidence` fields."
+            f"{ui_evidence}\n"
         )
     return (
         f"Repository: {repo.full_name}\n"

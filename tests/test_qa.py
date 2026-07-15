@@ -1,8 +1,34 @@
 from pathlib import Path
 
+import pytest
+
 from captains_chair.models import ApplicationSurface, ProjectManifest, QAProfile
 from captains_chair.qa import infer_surfaces, paths_match_surface, select_qa
 from tests.helpers import repo_config
+
+
+@pytest.mark.parametrize(
+    ("path", "surface", "profile"),
+    (
+        ("frontend/App.tsx", ApplicationSurface.WEB_UI, "web-ui-qa"),
+        ("src/cli.py", ApplicationSurface.CLI, "cli-qa"),
+        ("api/openapi.yaml", ApplicationSurface.API, "api-qa"),
+        ("src/client.py", ApplicationSurface.LIBRARY, "library-qa"),
+        ("pipelines/orders.sql", ApplicationSurface.DATA_PIPELINE, "data-pipeline-qa"),
+        ("infra/main.tf", ApplicationSurface.INFRASTRUCTURE_RELEASE, "infrastructure-release-qa"),
+        ("README.md", ApplicationSurface.CUSTOM, "custom-qa"),
+    ),
+)
+def test_every_supported_surface_selects_a_first_class_profile(
+    tmp_path: Path,
+    path: str,
+    surface: ApplicationSurface,
+    profile: str,
+) -> None:
+    selection = select_qa(repo_config(tmp_path), [path])
+
+    assert surface in selection.surfaces
+    assert profile in {item.key for item in selection.profiles}
 
 
 def test_surface_inference_is_capability_based() -> None:
@@ -32,9 +58,17 @@ def test_explicit_manifest_profiles_override_detection(tmp_path: Path) -> None:
         qa_profiles=(profile,),
     )
     selection = select_qa(repo, ["frontend/App.tsx"], manifest)
-    assert selection.surfaces == frozenset({ApplicationSurface.CLI})
-    assert [item.key for item in selection.profiles] == ["cli-qa"]
-    assert selection.worker_roles == {"cli-qa": "tester"}
+    assert selection.surfaces == frozenset({ApplicationSurface.CLI, ApplicationSurface.WEB_UI})
+    assert [item.key for item in selection.profiles] == [
+        "cli-qa",
+        "web-ui-qa",
+        "deterministic-checks",
+    ]
+    assert selection.worker_roles == {
+        "cli-qa": "tester",
+        "web-ui-qa": "ux_reviewer",
+        "deterministic-checks": "tester",
+    }
 
 
 def test_web_ui_selection_uses_dedicated_ux_worker(tmp_path: Path) -> None:
@@ -86,7 +120,7 @@ def test_qa_profile_selection_and_path_matching_are_capability_scoped(tmp_path: 
         }
     )
     selection = select_qa(repo, ["src/cli.py"])
-    assert selection.profiles[0].key == "default-capability-qa"
+    assert selection.profiles[0].key == "cli-qa"
     profile = QAProfile(
         key="web",
         title="Web QA",

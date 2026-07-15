@@ -40,6 +40,8 @@ class GitHubProvider(Protocol):
 
     def pull_request_diff(self, repo: RepoConfig, number: int) -> str: ...
 
+    def pull_request_files(self, repo: RepoConfig, number: int) -> tuple[str, ...]: ...
+
     def review_threads(self, repo: RepoConfig, number: int) -> list[dict[str, Any]]: ...
 
     def required_check_names(self, repo: RepoConfig) -> set[str]: ...
@@ -181,6 +183,16 @@ class GhGitHubProvider:
         if result.returncode:
             raise GitHubProviderError((result.stderr or result.stdout).strip()[:3000])
         return result.stdout
+
+    def pull_request_files(self, repo: RepoConfig, number: int) -> tuple[str, ...]:
+        value = self.pull_request(repo, number).get("files")
+        if not isinstance(value, list):
+            raise GitHubProviderError("pull request files are missing or unreadable")
+        rows = _object_list(cast(object, value), "pull request files")
+        paths = tuple(str(item.get("path") or "").strip() for item in rows)
+        if any(not path for path in paths):
+            raise GitHubProviderError("pull request files contain a missing path")
+        return paths
 
     def review_threads(self, repo: RepoConfig, number: int) -> list[dict[str, Any]]:
         owner, name = repo.full_name.split("/", 1)

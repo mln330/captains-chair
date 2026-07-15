@@ -86,7 +86,10 @@ elif method == "workboard.cards.create":
         "labels": params.get("labels", []),
         "agentId": params.get("agentId"),
         "sourceUrl": params.get("sourceUrl"),
-        "metadata": {"automation": {"maxRetries": params.get("maxRetries", 2)}},
+        "metadata": {
+            **params.get("metadata", {}),
+            "automation": {"maxRetries": params.get("maxRetries", 2)},
+        },
     }
     if params.get("workspace"):
         card["workspace"] = params["workspace"]
@@ -180,6 +183,7 @@ elif method == "workboard.cards.create":
     card_id = f"card-{state['next_id']}"
     state["next_id"] += 1
     metadata = {
+        **params.get("metadata", {}),
         "automation": {"maxRetries": params.get("maxRetries", 2)},
         "links": [
             {"type": "parent", "targetCardId": parent}

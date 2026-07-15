@@ -418,7 +418,7 @@ def test_rejected_live_completion_creates_retry_and_does_not_cleanup_workspace(t
     assert workflow.stage_cards["live-gate-action:final_review"] in result.proof_retries
     assert result.cleaned_workspaces == ()
     assert cleaned == []
-    assert validator.calls == 1
+    assert validator.calls == 2
     retry_cards = [card for card in queue.cards.values() if "retry" in card.title.lower()]
     assert retry_cards
     assert "current PR head is stale" in (retry_cards[0].notes or "")
@@ -458,7 +458,7 @@ def test_live_completion_is_revalidated_after_github_evidence_changes(tmp_path: 
 
     first = orchestrator.reconcile(repo, dispatch=False, dispatch_reason="test")
     assert first.proof_retries == ()
-    assert validator.calls == 1
+    assert validator.calls == 2
 
     validator.allowed = False
     validator.reason = "current PR head changed after final review"
@@ -466,4 +466,4 @@ def test_live_completion_is_revalidated_after_github_evidence_changes(tmp_path: 
 
     final_card_id = workflow.stage_cards["revalidate-live-gate:final_review"]
     assert final_card_id in second.proof_retries
-    assert validator.calls == 2
+    assert validator.calls == 4

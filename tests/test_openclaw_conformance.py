@@ -121,6 +121,7 @@ class FakeGateway:
             "agentId": params.get("agentId"),
             "sourceUrl": params.get("sourceUrl"),
             "metadata": {
+                **params.get("metadata", {}),
                 "automation": {"maxRetries": params.get("maxRetries", 2)},
                 "links": [
                     {"type": "parent", "targetCardId": parent}
@@ -259,6 +260,14 @@ class FakeCompletionGitHub:
             unresolved_threads=0,
             review_head_sha=review_head_sha,
         )
+
+    def pull_request(self, repo: object, number: int) -> dict[str, object]:
+        del repo, number
+        return {"headRefOid": "bcdef12"}
+
+    def pull_request_files(self, repo: object, number: int) -> tuple[str, ...]:
+        del repo, number
+        return ()
 
 
 def _stage(adapter: OpenClawWorkboardAdapter, board: str, name: str) -> str:
