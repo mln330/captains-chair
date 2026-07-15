@@ -104,10 +104,41 @@
           "title": "Database Path",
           "type": "string"
         },
+        "worker_runtime": {
+          "default": "external",
+          "enum": [
+            "external",
+            "openclaw",
+            "codex"
+          ],
+          "title": "Worker Runtime",
+          "type": "string"
+        },
         "executable": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
           "default": null,
-          "title": "Executable",
-          "type": "null"
+          "title": "Executable"
+        },
+        "lease_seconds": {
+          "default": 3600,
+          "maximum": 14400,
+          "minimum": 30,
+          "title": "Lease Seconds",
+          "type": "integer"
+        },
+        "max_dispatch_workers": {
+          "default": 1,
+          "maximum": 10,
+          "minimum": 1,
+          "title": "Max Dispatch Workers",
+          "type": "integer"
         }
       },
       "required": [

@@ -408,7 +408,16 @@ class DirectOrchestratorConfig(WorkerOrchestrationConfig):
 
     kind: Literal["direct"] = "direct"
     database_path: Path
-    executable: None = None
+    worker_runtime: Literal["external", "openclaw", "codex"] = "external"
+    executable: str | None = None
+    lease_seconds: int = Field(default=3600, ge=30, le=14400)
+    max_dispatch_workers: int = Field(default=1, ge=1, le=10)
+
+    @model_validator(mode="after")
+    def managed_runtime_requires_executable(self) -> DirectOrchestratorConfig:
+        if self.worker_runtime != "external" and not (self.executable or "").strip():
+            raise ValueError("managed direct worker runtimes require executable")
+        return self
 
 
 class ExternalWorkboardConfig(WorkerOrchestrationConfig):

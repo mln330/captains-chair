@@ -4,6 +4,7 @@ import enum
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
+from datetime import datetime
 from hashlib import sha256
 from pathlib import Path
 from typing import Any, Protocol, cast, runtime_checkable
@@ -50,6 +51,7 @@ class BlockerKind(enum.StrEnum):
     GOAL_DIVERGENCE = "goal_divergence"
     EXTERNAL_ACCESS = "external_access"
     HIGH_RISK_DECISION = "high_risk_decision"
+    CANCELLATION = "cancellation"
     TECHNICAL = "technical"
 
 
@@ -58,6 +60,7 @@ USER_BLOCKER_PREFIXES: dict[str, BlockerKind] = {
     "GOAL_DIVERGENCE:": BlockerKind.GOAL_DIVERGENCE,
     "EXTERNAL_ACCESS:": BlockerKind.EXTERNAL_ACCESS,
     "HIGH_RISK_DECISION:": BlockerKind.HIGH_RISK_DECISION,
+    "CANCELLED:": BlockerKind.CANCELLATION,
 }
 
 
@@ -295,6 +298,38 @@ class WorkerLifecycleAdapter(Protocol):
         token: str,
         reason: str,
     ) -> QueueCard: ...
+
+
+@runtime_checkable
+class ClaimingWorkerLifecycleAdapter(WorkerLifecycleAdapter, Protocol):
+    """Full portable lifecycle for runtimes where Captain's Chair owns claims."""
+
+    def claim_card(
+        self,
+        card_id: str,
+        *,
+        owner_id: str,
+        token: str,
+        attempt_id: str | None = None,
+    ) -> QueueCard: ...
+
+    def claim_next_card(
+        self,
+        board_id: str,
+        *,
+        owner_id: str,
+        token: str,
+        agent_id: str | None = None,
+    ) -> QueueCard | None: ...
+
+    def cancel_claimed_card(self, card_id: str, *, requested_by: str, reason: str) -> QueueCard: ...
+
+    def recover_expired_claims(
+        self,
+        board_id: str,
+        *,
+        now: datetime | None = None,
+    ) -> tuple[str, ...]: ...
 
 
 class OrchestrationPolicy(Protocol):

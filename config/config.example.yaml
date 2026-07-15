@@ -14,6 +14,24 @@ harnesses:
     timeout_seconds: 3600
 
 orchestrators:
+  # Board-free execution. Set worker_runtime to openclaw to launch the same
+  # portable claim/lease protocol through OpenClaw workers instead.
+  direct-codex:
+    kind: direct
+    database_path: /home/example/.local/state/captains-chair/orchestrators/example-project.db
+    worker_runtime: codex
+    executable: codex
+    lease_seconds: 3600
+    max_dispatch_workers: 1
+    workers:
+      captain: direct-captain
+      coder: direct-coder
+      reviewer: direct-reviewer
+      tester: direct-tester
+      ux_reviewer: direct-ux
+      final_reviewer: direct-final
+      merger: direct-merge
+      verifier: direct-verify
   openclaw-workers:
     kind: openclaw_workboard
     executable: /home/example/.npm-global/bin/openclaw
@@ -126,7 +144,7 @@ repos:
     ux_enabled: true
     ux_paths: [frontend/, "*.tsx", "*.jsx", "*.css", "*.html"]
     preserved_prs: []
-    orchestrator: openclaw-workers
+    orchestrator: direct-codex
     orchestration_board: captains-chair-example-project
     notification:
       kind: stdout
