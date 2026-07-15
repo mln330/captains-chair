@@ -7,6 +7,7 @@ from typing import Any, cast
 import pytest
 import yaml
 
+import captains_chair.sidecar as sidecar_module
 from captains_chair.config import load_config
 from captains_chair.models import (
     CourseKind,
@@ -39,7 +40,10 @@ def test_sidecar_reports_health_portfolio_and_schedule_contract(tmp_path: Path) 
     config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
     server = SidecarServer(config_path)
 
-    assert server.request("health")["status"] == "healthy"
+    health = server.request("health")
+    assert health["status"] == "healthy"
+    assert health["version"] == "0.2.0"
+    assert health["protocol_version"] == 1
     status = server.request("portfolio.status")
     assert status["repos"][0]["full_name"] == "example/project"
     assert status["repos"][0]["state"] == "unbaselined"
@@ -162,6 +166,19 @@ def test_sidecar_reads_and_updates_global_and_runtime_model_layers(tmp_path: Pat
             "models.update",
             {"scope": "runtime", "runtime": "missing", "model_profiles": {}},
         )
+
+
+def test_sidecar_revalidates_cross_field_policy_before_persisting(tmp_path: Path) -> None:
+    repo = repo_config(tmp_path, mode=OperationMode.AUTONOMOUS)
+    config = app_config(tmp_path, repo)
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+    server = SidecarServer(config_path)
+
+    with pytest.raises(SidecarError, match="invalid application configuration"):
+        server.request("usage.update", {"allow_incomplete_telemetry": True})
+
+    assert load_config(config_path).usage.allow_incomplete_telemetry is False
 
 
 def test_sidecar_exposes_course_creation_readiness_approval_and_ready_work(tmp_path: Path) -> None:
@@ -330,8 +347,10 @@ def test_sidecar_course_lifecycle_and_surface_configuration(tmp_path: Path) -> N
             **params,
             "requirement_key": "success",
             "status": "verified",
-            "answer": "The search flow is fast and ranked.",
-            "evidence": ["dashboard"],
+                "answer": "The search flow is fast and ranked.",
+                "evidence": ["repository-review"],
+                "verified_by": "readiness-reviewer",
+                "verification_model": "test-model",
         },
     )
     assert answered["status"] == "verified"
@@ -657,3 +676,26 @@ def test_sidecar_stdio_protocol_returns_jsonrpc_errors_without_stopping(tmp_path
     assert responses[1]["error"]["code"] == "SIDECAR_ERROR"
     assert responses[2]["error"]["code"] == "SIDECAR_ERROR"
     assert responses[3]["error"]["code"] == "SIDECAR_ERROR"
+
+
+def test_one_shot_process_exit_code_reflects_degraded_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    class FakeServer:
+        def __init__(self, _config_path: Path) -> None:
+            pass
+
+        def request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+            assert method == "run.once"
+            assert params == {"kind": "review"}
+            return {"status": "degraded"}
+
+    monkeypatch.setattr(sidecar_module, "SidecarServer", FakeServer)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["captains-chair-sidecar", "--config", str(tmp_path / "config.yaml"), "--once", "review"],
+    )
+
+    assert sidecar_module.main() == 2
+    assert '"status": "degraded"' in capsys.readouterr().out

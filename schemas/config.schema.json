@@ -924,6 +924,11 @@
           "title": "Preserved Prs",
           "type": "array"
         },
+        "require_engaged_course": {
+          "default": true,
+          "title": "Require Engaged Course",
+          "type": "boolean"
+        },
         "orchestrator": {
           "anyOf": [
             {

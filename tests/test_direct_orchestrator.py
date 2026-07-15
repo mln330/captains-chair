@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -50,6 +51,17 @@ def test_direct_orchestrator_is_durable_idempotent_and_claim_aware(tmp_path: Pat
     assert DirectOrchestrator(tmp_path / "direct.db").list_cards("course-1") == [created]
 
     assert adapter.dispatch("course-1")["promoted"] == [created.id]
+    with pytest.raises(PermissionError, match="no active claim"):
+        adapter.complete_claimed_card(
+            created.id,
+            owner_id="worker",
+            token="secret",
+            summary="not claimed",
+            proof=(),
+        )
+    adapter.claim_card(created.id, owner_id="worker", token="secret")
+    with pytest.raises(PermissionError, match="not ready"):
+        adapter.claim_card(created.id, owner_id="other-worker", token="other-token")
     claimed = adapter.heartbeat_card(created.id, owner_id="worker", token="secret", note="started")
     assert claimed.status == QueueStatus.RUNNING
     with pytest.raises(PermissionError, match="claim credentials"):
@@ -75,7 +87,7 @@ def test_direct_orchestrator_passes_shared_runtime_conformance(tmp_path: Path) -
     config = _config(tmp_path)
     orchestrator = build_work_queue_orchestrator(config)
     assert isinstance(orchestrator.adapter, WorkerLifecycleAdapter)
-    adapter = orchestrator.adapter
+    adapter = cast(DirectOrchestrator, orchestrator.adapter)
     repo = repo_config(
         tmp_path,
         mode=OperationMode.AUTONOMOUS,
@@ -89,25 +101,33 @@ def test_direct_orchestrator_passes_shared_runtime_conformance(tmp_path: Path) -
         acceptance_criteria=("Scope is correct", "Checks pass"),
     )
 
+    def block(card_id: str, reason: str):
+        adapter.claim_card(card_id, owner_id="worker", token="token")
+        return adapter.block_claimed_card(
+            card_id,
+            owner_id="worker",
+            token="token",
+            reason=reason,
+        )
+
+    def complete(card_id: str, summary: str, proof: tuple[dict[str, object], ...]):
+        adapter.claim_card(card_id, owner_id="worker", token="token")
+        return adapter.complete_claimed_card(
+            card_id,
+            owner_id="worker",
+            token="token",
+            summary=summary,
+            proof=proof,
+        )
+
     report = run_runtime_conformance(
         orchestrator,
         adapter,
         repo,
         decision,
         action_id="direct-conformance",
-        block_card=lambda card_id, reason: adapter.block_claimed_card(
-            card_id,
-            owner_id="worker",
-            token="token",
-            reason=reason,
-        ),
-        complete_card=lambda card_id, summary, proof: adapter.complete_claimed_card(
-            card_id,
-            owner_id="worker",
-            token="token",
-            summary=summary,
-            proof=proof,
-        ),
+        block_card=block,
+        complete_card=complete,
     )
 
     assert report.workflow_id == "direct-conformance"
@@ -146,7 +166,11 @@ def test_direct_orchestrator_handles_reclaim_reassign_comments_and_dependencies(
 
     first = adapter.dispatch("course-1")
     assert first["promoted"] == [parent.id]
-    assert first["started"] == [canary.id]
+    assert first["started"] == []
+    claimed_canary = adapter.claim_card(
+        canary.id, owner_id="canary-worker", token="canary-token"
+    )
+    assert claimed_canary.status == QueueStatus.RUNNING
     adapter.complete_card(parent.id, summary="parent complete", created_card_ids=(child.id,))
     second = adapter.dispatch("course-1")
     assert second["promoted"] == [child.id]
@@ -164,6 +188,8 @@ def test_direct_orchestrator_handles_reclaim_reassign_comments_and_dependencies(
     )
     assert reassigned.agent_id == "replacement"
     assert "failures" not in reassigned.metadata
+    adapter.dispatch("course-1")
+    adapter.claim_card(child.id, owner_id="replacement", token="token")
     adapter.heartbeat_card(child.id, owner_id="replacement", token="token", note="working")
     adapter.block_claimed_card(
         child.id,

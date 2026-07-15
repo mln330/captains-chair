@@ -27,7 +27,7 @@ from captains_chair.models import (
     UsageConfig,
     WorkerAssignments,
 )
-from captains_chair.orchestration import QueueCard, QueueStatus, ReconcileResult
+from captains_chair.orchestration import QueueCard, QueueCardSpec, QueueStatus, ReconcileResult
 from captains_chair.runtime import RuntimeAdapterContractError
 from captains_chair.state import StateStore
 from tests.fakes import InMemoryWorkQueue
@@ -1805,6 +1805,47 @@ def test_worker_protocol_cli_rejects_completion_without_structured_proof(
         == 3
     )
     assert "complete requires --summary and --proof-note" in capsys.readouterr().err
+
+
+def test_worker_protocol_claims_next_card_from_default_direct_orchestrator(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = repo_config(tmp_path, mode=OperationMode.SUPERVISED)
+    config = app_config(tmp_path, repo)
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+    adapter = DirectOrchestrator(config.state_dir / "orchestrators" / "example-project.db")
+    board_id = "captains-chair-direct-example-project"
+    adapter.ensure_board(board_id, "Project", "Direct work", tmp_path)
+    card = adapter.create_card(
+        board_id,
+        QueueCardSpec(
+            key="package-1",
+            title="Implement package",
+            notes="Use the portable worker protocol.",
+            status=QueueStatus.READY,
+            agent_id="coder",
+        ),
+    )
+
+    assert cli.main(
+        [
+            "--config",
+            str(config_path),
+            "worker-protocol",
+            "claim",
+            "--repo",
+            repo.full_name,
+            "--owner-id",
+            "worker-1",
+            "--token",
+            "secret-token",
+        ]
+    ) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["id"] == card.id
+    assert payload["status"] == "running"
 
 
 def test_worker_protocol_does_not_mutate_disabled_repo(

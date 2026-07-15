@@ -67,6 +67,20 @@ def implementation_decision() -> PlanDecision:
     )
 
 
+def test_qa_notes_use_planned_changed_paths_and_portable_worker_protocol(tmp_path: Path) -> None:
+    repo = repo_config(tmp_path).model_copy(update={"surfaces": frozenset()})
+    decision = implementation_decision().model_copy(
+        update={"changed_paths": ("frontend/SearchResults.tsx",)}
+    )
+
+    workflow = build_workflow(repo, decision, "qa-paths", worker_config())
+    test_card = next(card for card in workflow.stages if "stage:test" in card.labels)
+
+    assert "web_ui" in test_card.notes
+    assert "configured orchestrator" in test_card.notes
+    assert "Workboard complete" not in test_card.notes
+
+
 def test_live_completion_validator_is_required_by_default(tmp_path: Path) -> None:
     del tmp_path
     strict_config = worker_config().model_copy(update={"require_live_completion_validation": True})

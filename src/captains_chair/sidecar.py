@@ -19,6 +19,7 @@ from typing import Any, Literal, cast
 
 import yaml
 
+from captains_chair import SIDECAR_PROTOCOL_VERSION, __version__
 from captains_chair.adapters import InteractionAdapter, NativeInteractionAdapter
 from captains_chair.config import load_config
 from captains_chair.courses import (
@@ -74,6 +75,8 @@ class SidecarServer:
             return {
                 "status": "healthy",
                 "service": "captains-chair-sidecar",
+                "version": __version__,
+                "protocol_version": SIDECAR_PROTOCOL_VERSION,
                 "config": str(self.config_path),
                 "timestamp": datetime.now(UTC).isoformat(),
             }
@@ -561,6 +564,13 @@ class SidecarServer:
                 status,
                 str(payload.get("answer")) if payload.get("answer") is not None else None,
                 tuple(str(item) for item in evidence_items),
+                verified_by=str(payload.get("verified_by") or "") or None,
+                verified_at=(
+                    datetime.fromisoformat(str(payload["verified_at"]))
+                    if payload.get("verified_at")
+                    else None
+                ),
+                verification_model=str(payload.get("verification_model") or "") or None,
             )
             store.save(updated)
         except (CourseError, ValueError) as exc:
@@ -680,15 +690,19 @@ class SidecarServer:
         return {"status": updated.status.value, **self._course_payload(repo.full_name, updated)}
 
     def _write_config(self, config: AppConfig) -> None:
+        try:
+            validated = AppConfig.model_validate(config.model_dump(mode="python"))
+        except ValueError as exc:
+            raise SidecarError(f"invalid application configuration: {exc}") from exc
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = yaml.safe_dump(config.model_dump(mode="json"), sort_keys=False)
+        payload = yaml.safe_dump(validated.model_dump(mode="json"), sort_keys=False)
         with tempfile.NamedTemporaryFile(
             mode="w", encoding="utf-8", dir=self.config_path.parent, delete=False
         ) as handle:
             handle.write(payload)
             temporary = Path(handle.name)
         os.replace(temporary, self.config_path)
-        self.config = config
+        self.config = validated
 
     def _schedule_description(self) -> dict[str, Any]:
         return {
@@ -791,8 +805,9 @@ def main() -> int:
     args = _parser().parse_args()
     server = SidecarServer(args.config)
     if args.once:
-        print(json.dumps(server.request("run.once", {"kind": args.once}), default=str), flush=True)
-        return 0
+        result = server.request("run.once", {"kind": args.once})
+        print(json.dumps(result, default=str), flush=True)
+        return 0 if result.get("status") == "completed" else 2
     for line in sys.stdin:
         if not line.strip():
             continue

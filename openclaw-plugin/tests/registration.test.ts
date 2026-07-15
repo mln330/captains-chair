@@ -24,6 +24,7 @@ describe("Captain's Chair OpenClaw registration", () => {
       tools: [] as string[],
       hooks: [] as string[],
       routes: [] as string[],
+      routeAuth: {} as Record<string, string>,
       services: [] as string[],
       controls: [] as string[],
       cli: 0,
@@ -48,7 +49,10 @@ describe("Captain's Chair OpenClaw registration", () => {
       registerHook: (_events: string | string[], _handler: (...args: unknown[]) => Promise<void>, opts?: { name?: string }) => {
         if (opts?.name) registrations.hooks.push(opts.name);
       },
-      registerHttpRoute: (route: { path: string }) => registrations.routes.push(route.path),
+      registerHttpRoute: (route: { path: string; auth: string }) => {
+        registrations.routes.push(route.path);
+        registrations.routeAuth[route.path] = route.auth;
+      },
       registerService: (service: { id: string }) => registrations.services.push(service.id),
       registerCli: () => { registrations.cli += 1; },
     };
@@ -80,6 +84,8 @@ describe("Captain's Chair OpenClaw registration", () => {
     expect(registrations.routes).toContain("/captains-chair/api/models/config");
     expect(registrations.routes).toContain("/captains-chair/api/models/update");
     expect(registrations.routes).toContain("/captains-chair/api/usage/update");
+    expect(Object.values(registrations.routeAuth)).not.toContain("plugin");
+    expect(registrations.routeAuth["/captains-chair/api/repos/create"]).toBe("gateway");
     expect(registrations.services).toEqual(["captains-chair"]);
     expect(registrations.cli).toBe(1);
   });

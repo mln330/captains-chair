@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface, type Interface } from "node:readline";
 
 export type RpcResult = Record<string, unknown>;
+export const SIDECAR_PROTOCOL_VERSION = 1;
 export type SidecarRequest = {
   jsonrpc: "2.0";
   id: number;
@@ -65,6 +66,23 @@ export class SidecarSupervisor {
       this.lines = undefined;
       this.child = undefined;
     });
+    try {
+      const health = await this.request("health");
+      if (health.status !== "healthy") {
+        throw new Error(`Captain's Chair sidecar health was ${String(health.status ?? "missing")}`);
+      }
+      if (health.protocol_version !== SIDECAR_PROTOCOL_VERSION) {
+        throw new Error(
+          `Captain's Chair sidecar protocol mismatch: expected ${SIDECAR_PROTOCOL_VERSION}, got ${String(health.protocol_version ?? "missing")}`,
+        );
+      }
+    } catch (error) {
+      child.kill();
+      this.child = undefined;
+      this.lines?.close();
+      this.lines = undefined;
+      throw error;
+    }
   }
 
   public async request(method: string, params: Record<string, unknown> = {}): Promise<RpcResult> {

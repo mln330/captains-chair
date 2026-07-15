@@ -339,6 +339,17 @@ def test_course_context_ignores_completed_courses(tmp_path: Path) -> None:
     assert blocker is None
 
 
+def test_course_context_fails_closed_when_course_is_required_but_missing(tmp_path: Path) -> None:
+    engine, _ = make_engine(tmp_path)
+
+    selected, blocker = engine._course_context(  # pyright: ignore[reportPrivateUsage]
+        repo_config(tmp_path, require_engaged_course=True)
+    )
+
+    assert selected is None
+    assert blocker == "an approved course is required before repository work can begin"
+
+
 def test_course_context_returns_invalid_state_blocker(tmp_path: Path) -> None:
     engine, _ = make_engine(tmp_path)
     courses = tmp_path / ".captains-chair" / "courses"

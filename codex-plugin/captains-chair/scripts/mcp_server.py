@@ -151,7 +151,7 @@ def _handle(request: dict[str, Any]) -> None:
                 "result": {
                     "protocolVersion": "2025-06-18",
                     "capabilities": {"tools": {"listChanged": False}},
-                    "serverInfo": {"name": "captains-chair", "version": "0.1.0"},
+                    "serverInfo": {"name": "captains-chair", "version": "0.2.0"},
                 },
             }
         )

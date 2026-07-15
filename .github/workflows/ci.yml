@@ -79,6 +79,8 @@ jobs:
         working-directory: openclaw-plugin
       - run: npm run build
         working-directory: openclaw-plugin
+      - run: npm run test:package
+        working-directory: openclaw-plugin
       - run: npm run test:host
         working-directory: openclaw-plugin
       - run: npx playwright install --with-deps chromium

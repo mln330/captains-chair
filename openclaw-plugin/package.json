@@ -1,13 +1,20 @@
 {
   "name": "@mln330/openclaw-captains-chair",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Captain's Chair control plane for OpenClaw",
   "type": "module",
+  "main": "./dist/index.js",
+  "files": [
+    "dist",
+    "openclaw.plugin.json"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json && npm --prefix ui run build",
+    "prepack": "npm run build",
     "check": "tsc -p tsconfig.json --noEmit && tsc -p ui/tsconfig.json --noEmit",
     "test": "vitest run",
     "test:host": "node tests/host-registration.mjs",
+    "test:package": "node tests/package.mjs",
     "test:e2e": "playwright test"
   },
   "peerDependencies": {
@@ -29,7 +36,7 @@
   },
   "openclaw": {
     "extensions": [
-      "./src/index.ts"
+      "./dist/index.js"
     ],
     "runtimeExtensions": [
       "./dist/index.js"

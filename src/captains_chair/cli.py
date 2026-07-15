@@ -47,9 +47,11 @@ from captains_chair.openclaw_runtime import OpenClawRuntimeInstaller
 from captains_chair.openclaw_usage import DEFAULT_SESSION_LIMIT, sync_openclaw_sessions
 from captains_chair.openclaw_workboard import OpenClawWorkboardAdapter
 from captains_chair.orchestration import (
+    QueueCard,
     QueueCardSpec,
     QueueStatus,
     ReconcileResult,
+    WorkerLifecycleAdapter,
     WorkflowOrchestrator,
     WorkQueueAdapter,
     WorkspaceRef,
@@ -234,12 +236,13 @@ def _parser() -> argparse.ArgumentParser:
     runtime_install.add_argument("--apply", action="store_true")
 
     worker_protocol = sub.add_parser(
-        "worker-protocol", help="perform a claimed Workboard worker lifecycle operation"
+        "worker-protocol", help="perform a portable claimed-worker lifecycle operation"
     )
-    worker_protocol.add_argument("action", choices=("heartbeat", "complete", "block"))
+    worker_protocol.add_argument("action", choices=("claim", "heartbeat", "complete", "block"))
     worker_protocol.add_argument("--repo", required=True)
-    worker_protocol.add_argument("--orchestrator", required=True)
-    worker_protocol.add_argument("--card", required=True)
+    worker_protocol.add_argument("--orchestrator")
+    worker_protocol.add_argument("--card")
+    worker_protocol.add_argument("--agent-id")
     worker_protocol.add_argument("--owner-id", required=True)
     worker_protocol.add_argument("--token", required=True)
     worker_protocol.add_argument("--note", default="working")
@@ -1599,7 +1602,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "worker-protocol":
             repo = config.repo(args.repo)
-            if repo.orchestrator != args.orchestrator:
+            if args.orchestrator is not None and repo.orchestrator != args.orchestrator:
                 raise ValueError(
                     f"repository {repo.full_name} is configured for orchestrator "
                     f"{repo.orchestrator!r}, not {args.orchestrator!r}"
@@ -1618,11 +1621,8 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 )
                 return 0
-            value = config.orchestrators.get(args.orchestrator)
-            if value is None:
-                raise KeyError(f"unknown orchestrator: {args.orchestrator}")
-            if not isinstance(value, OpenClawWorkboardConfig):
-                raise ValueError(f"worker-protocol only supports openclaw_workboard, not {value.kind}")
+            if args.action != "claim" and not args.card:
+                raise ValueError(f"{args.action} requires --card")
             proof: dict[str, str] | None = None
             if args.action == "complete":
                 if not args.summary or not args.proof_note:
@@ -1636,26 +1636,59 @@ def main(argv: list[str] | None = None) -> int:
                     proof["url"] = args.proof_url
             elif args.action == "block" and not args.reason:
                 raise ValueError("block requires --reason")
-            adapter = OpenClawWorkboardAdapter(value)
-            if args.action == "heartbeat":
-                card = adapter.heartbeat_card(
-                    args.card,
+            configured = config.orchestrators.get(repo.orchestrator) if repo.orchestrator else None
+            adapter = (
+                OpenClawWorkboardAdapter(configured)
+                if isinstance(configured, OpenClawWorkboardConfig)
+                else _orchestrator(config, repo.full_name).adapter
+            )
+            lifecycle = cast(WorkerLifecycleAdapter, adapter)
+            card: QueueCard
+            if args.action == "claim":
+                claim_card = getattr(adapter, "claim_card", None)
+                claim_next = getattr(adapter, "claim_next_card", None)
+                if args.card and callable(claim_card):
+                    card = cast(
+                        QueueCard,
+                        claim_card(args.card, owner_id=args.owner_id, token=args.token),
+                    )
+                elif callable(claim_next):
+                    claimed = cast(
+                        QueueCard | None,
+                        claim_next(
+                            _board_id(config, repo.full_name),
+                            owner_id=args.owner_id,
+                            token=args.token,
+                            agent_id=args.agent_id,
+                        ),
+                    )
+                    if claimed is None:
+                        print(json.dumps({"status": "idle", "repo": repo.full_name}, indent=2))
+                        return 0
+                    card = claimed
+                else:
+                    raise ValueError(
+                        f"orchestrator {repo.orchestrator or 'direct'} does not expose portable claims"
+                    )
+            elif args.action == "heartbeat":
+                card = lifecycle.heartbeat_card(
+                    cast(str, args.card),
                     owner_id=args.owner_id,
                     token=args.token,
                     note=args.note,
                 )
             elif args.action == "complete":
                 assert proof is not None
-                card = adapter.complete_claimed_card(
-                    args.card,
+                card = lifecycle.complete_claimed_card(
+                    cast(str, args.card),
                     owner_id=args.owner_id,
                     token=args.token,
                     summary=args.summary,
                     proof=(proof,),
                 )
             else:
-                card = adapter.block_claimed_card(
-                    args.card,
+                card = lifecycle.block_claimed_card(
+                    cast(str, args.card),
                     owner_id=args.owner_id,
                     token=args.token,
                     reason=args.reason,

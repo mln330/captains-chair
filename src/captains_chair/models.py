@@ -3,14 +3,30 @@ from __future__ import annotations
 import enum
 from collections.abc import Mapping
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+def _repository_relative_path(value: str) -> str:
+    normalized = value.strip().replace("\\", "/")
+    posix = PurePosixPath(normalized)
+    windows = PureWindowsPath(value)
+    if (
+        not normalized
+        or posix.is_absolute()
+        or windows.is_absolute()
+        or windows.drive
+        or ".." in posix.parts
+        or normalized == "."
+    ):
+        raise ValueError("repository document paths must be non-empty relative paths without parent traversal")
+    return str(posix)
 
 
 class OperationMode(enum.StrEnum):
@@ -493,8 +509,19 @@ class RepoConfig(StrictModel):
     max_parallel_prs: int = Field(default=1, ge=1, le=10)
     deploy_is_merge_gate: bool = False
     preserved_prs: tuple[int, ...] = ()
+    require_engaged_course: bool = True
     orchestrator: str | None = None
     orchestration_board: str | None = None
+
+    @field_validator("planning_doc", "project_manifest")
+    @classmethod
+    def validate_document_path(cls, value: str) -> str:
+        return _repository_relative_path(value)
+
+    @field_validator("canonical_docs")
+    @classmethod
+    def validate_canonical_document_paths(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(_repository_relative_path(value) for value in values)
 
     @model_validator(mode="after")
     def validate_policy(self) -> RepoConfig:
@@ -573,6 +600,16 @@ class ProjectManifest(StrictModel):
     surfaces: frozenset[ApplicationSurface] = frozenset()
     qa_profiles: tuple[QAProfile, ...] = ()
 
+    @field_validator("planning_doc")
+    @classmethod
+    def validate_planning_document_path(cls, value: str) -> str:
+        return _repository_relative_path(value)
+
+    @field_validator("canonical_docs")
+    @classmethod
+    def validate_manifest_document_paths(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(_repository_relative_path(value) for value in values)
+
 
 class ReadinessRequirement(StrictModel):
     version: Literal[1] = 1
@@ -584,6 +621,9 @@ class ReadinessRequirement(StrictModel):
     answer: str | None = None
     evidence: tuple[str, ...] = ()
     owner_decision_required: bool = False
+    verified_by: str | None = None
+    verified_at: datetime | None = None
+    verification_model: str | None = None
 
     @model_validator(mode="after")
     def validate_resolution(self) -> ReadinessRequirement:
@@ -594,6 +634,15 @@ class ReadinessRequirement(StrictModel):
         if self.status == RequirementStatus.WAIVED and self.required and not self.owner_decision_required:
             raise ValueError(
                 f"required readiness requirement {self.key!r} can only be waived with owner decision"
+            )
+        if self.status == RequirementStatus.VERIFIED and (
+            not self.evidence
+            or not self.verified_by
+            or self.verified_at is None
+            or not self.verification_model
+        ):
+            raise ValueError(
+                f"readiness requirement {self.key!r} needs independent verification provenance"
             )
         return self
 
@@ -772,6 +821,7 @@ class PlanDecision(StrictModel):
     issue_milestone: str | None = None
     acceptance_criteria: tuple[str, ...] = ()
     checks: tuple[str, ...] = ()
+    changed_paths: tuple[str, ...] = ()
     requires_owner_approval: bool = False
     owner_blocker: str | None = None
 

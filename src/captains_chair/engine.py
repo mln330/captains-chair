@@ -413,6 +413,8 @@ class ControlPlaneEngine:
             keys = ", ".join(course.key for course in courses)
             return None, f"multiple active courses are present ({keys}); only one course may be engaged per repository"
         if not courses:
+            if repo.require_engaged_course:
+                return None, "an approved course is required before repository work can begin"
             return None, None
         course = courses[0]
         if course.status == CourseStatus.ENGAGED:

@@ -28,6 +28,8 @@ def test_native_interaction_adapter_preserves_durable_course_operations() -> Non
         RequirementStatus.VERIFIED,
         answer="The search flow is fast and ranked.",
         evidence=("owner",),
+        verified_by="readiness-reviewer",
+        verification_model="test-model",
     )
     resolved = adapter.resolve_checkpoint(
         ready_course(),

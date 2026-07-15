@@ -51,6 +51,10 @@ class InteractionAdapter(Protocol):
         status: RequirementStatus,
         answer: str | None = None,
         evidence: tuple[str, ...] = (),
+        *,
+        verified_by: str | None = None,
+        verified_at: datetime | None = None,
+        verification_model: str | None = None,
     ) -> Course: ...
 
     def resolve_checkpoint(
@@ -77,8 +81,21 @@ class NativeInteractionAdapter:
         status: RequirementStatus,
         answer: str | None = None,
         evidence: tuple[str, ...] = (),
+        *,
+        verified_by: str | None = None,
+        verified_at: datetime | None = None,
+        verification_model: str | None = None,
     ) -> Course:
-        return resolve_readiness_requirement(course, requirement_key, status, answer, evidence)
+        return resolve_readiness_requirement(
+            course,
+            requirement_key,
+            status,
+            answer,
+            evidence,
+            verified_by=verified_by,
+            verified_at=verified_at,
+            verification_model=verification_model,
+        )
 
     def resolve_checkpoint(
         self,

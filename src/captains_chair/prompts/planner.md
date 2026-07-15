@@ -15,4 +15,6 @@ For issue reconciliation, use `label_issue` with `issue_labels` for additive lab
 
 The deterministic policy engine, not the planner, decides whether owner approval is required. In autonomous mode, set requires_owner_approval to false for routine issue management, plan updates, implementation, PR review, and repair. Set it to true only when owner_blocker is also present and begins with exactly one of USER_SECRET:, GOAL_DIVERGENCE:, EXTERNAL_ACCESS:, or HIGH_RISK_DECISION:. A direct merge_pr action is owner-gated unless explicitly whitelisted; autonomous PR completion uses the separate final-review and deterministic auto-merge gates. High-risk release, production deployment, secrets, billing, destructive, force-push, and branch-deletion actions remain policy-gated regardless of this field.
 
+Populate `changed_paths` with the repository-relative files or path prefixes the selected action is expected to affect. Use an empty list only when the affected paths genuinely cannot be determined yet.
+
 Return only JSON matching the supplied schema.

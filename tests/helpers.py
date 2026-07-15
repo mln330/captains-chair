@@ -33,6 +33,7 @@ def repo_config(
     *,
     mode: OperationMode = OperationMode.ADVISORY,
     completion: CompletionPolicy = CompletionPolicy.OWNER_APPROVAL,
+    require_engaged_course: bool = False,
 ) -> RepoConfig:
     return RepoConfig(
         full_name="example/project",
@@ -42,6 +43,7 @@ def repo_config(
         allow_autonomous_merge=completion == CompletionPolicy.AUTO_MERGE,
         planning_doc="ISSUES_EXECUTION_PLAN.md",
         notification=NotificationConfig(kind="stdout"),
+        require_engaged_course=require_engaged_course,
     )
 
 

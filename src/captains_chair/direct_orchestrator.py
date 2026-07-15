@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Generator
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
@@ -127,11 +128,13 @@ class DirectOrchestrator:
         card = self._card(card_id)
         metadata = dict(card.metadata)
         metadata.pop("workerProtocol", None)
+        metadata.pop("claim", None)
         return self._update(card_id, status=QueueStatus.TODO, metadata=metadata)
 
     def reclaim_card(self, card_id: str, *, status: QueueStatus, reason: str) -> QueueCard:
         card = self._card(card_id)
         metadata = {**card.metadata, "reclaimReason": reason}
+        metadata.pop("claim", None)
         return self._update(card_id, status=status, metadata=metadata)
 
     def reassign_card(
@@ -145,6 +148,7 @@ class DirectOrchestrator:
     ) -> QueueCard:
         card = self._card(card_id)
         metadata = {**card.metadata, "reassignmentReason": reason}
+        metadata.pop("claim", None)
         if reset_failures:
             metadata.pop("failures", None)
         return self._update(card_id, status=status, agent_id=agent_id, metadata=metadata)
@@ -159,12 +163,7 @@ class DirectOrchestrator:
     def dispatch(self, board_id: str) -> dict[str, Any]:
         cards = {card.id: card for card in self.list_cards(board_id)}
         promoted: list[str] = []
-        started: list[str] = []
         for card in cards.values():
-            if card.status == QueueStatus.READY and "runtime-canary" in card.labels:
-                self._update(card.id, status=QueueStatus.RUNNING)
-                started.append(card.id)
-                continue
             if card.status != QueueStatus.TODO:
                 continue
             parents_value = card.metadata.get("parents", [])
@@ -176,7 +175,7 @@ class DirectOrchestrator:
             if all(parent in cards and cards[parent].status == QueueStatus.DONE for parent in parents):
                 self._update(card.id, status=QueueStatus.READY)
                 promoted.append(card.id)
-        return {"promoted": promoted, "started": started, "count": len(promoted) + len(started)}
+        return {"promoted": promoted, "started": [], "count": len(promoted)}
 
     def diagnostics(self) -> dict[str, Any]:
         with self._connect() as connection:
@@ -184,14 +183,67 @@ class DirectOrchestrator:
             cards = int(connection.execute("SELECT COUNT(*) FROM direct_cards").fetchone()[0])
         return {"status": "healthy", "kind": "direct", "boards": boards, "cards": cards}
 
+    def claim_card(self, card_id: str, *, owner_id: str, token: str) -> QueueCard:
+        if not owner_id.strip() or not token:
+            raise ValueError("direct worker claims require a non-empty owner and token")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT payload_json FROM direct_cards WHERE id=?", (card_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"unknown direct card: {card_id}")
+            card = QueueCard.model_validate_json(str(row["payload_json"]))
+            if card.status != QueueStatus.READY:
+                raise PermissionError(f"card {card_id} is not ready to be claimed")
+            if card.metadata.get("claim") is not None:
+                raise PermissionError(f"card {card_id} is already claimed")
+            metadata = {
+                **card.metadata,
+                "claim": {
+                    "ownerId": owner_id,
+                    "token": token,
+                    "claimedAt": datetime.now(UTC).isoformat(),
+                    "heartbeat": "claimed",
+                },
+            }
+            claimed = card.model_copy(update={"status": QueueStatus.RUNNING, "metadata": metadata})
+            cursor = connection.execute(
+                "UPDATE direct_cards SET payload_json=? WHERE id=?",
+                (claimed.model_dump_json(), card_id),
+            )
+            if cursor.rowcount != 1:
+                raise KeyError(f"unknown direct card: {card_id}")
+            return claimed
+
+    def claim_next_card(
+        self,
+        board_id: str,
+        *,
+        owner_id: str,
+        token: str,
+        agent_id: str | None = None,
+    ) -> QueueCard | None:
+        for card in self.list_cards(board_id):
+            if card.status != QueueStatus.READY:
+                continue
+            if agent_id is not None and card.agent_id != agent_id:
+                continue
+            try:
+                return self.claim_card(card.id, owner_id=owner_id, token=token)
+            except PermissionError:
+                continue
+        return None
+
     def heartbeat_card(self, card_id: str, *, owner_id: str, token: str, note: str) -> QueueCard:
         card = self._card(card_id)
+        self._validate_claim(card_id, owner_id, token)
+        claim = cast(dict[str, Any], card.metadata["claim"])
         metadata = {
             **card.metadata,
-            "claim": {"ownerId": owner_id, "token": token, "heartbeat": note},
+            "claim": {**claim, "heartbeat": note, "heartbeatAt": datetime.now(UTC).isoformat()},
         }
-        status = QueueStatus.RUNNING if card.status == QueueStatus.READY else card.status
-        return self._update(card_id, status=status, metadata=metadata)
+        return self._update(card_id, metadata=metadata)
 
     def complete_claimed_card(
         self,
@@ -227,7 +279,7 @@ class DirectOrchestrator:
     def _validate_claim(self, card_id: str, owner_id: str, token: str) -> None:
         claim = self._card(card_id).metadata.get("claim")
         if claim is None:
-            return
+            raise PermissionError(f"card {card_id} has no active claim")
         if not isinstance(claim, dict):
             raise ValueError(f"card {card_id} has invalid claim metadata")
         claim_value = cast(dict[str, Any], claim)

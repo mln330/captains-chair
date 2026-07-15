@@ -144,6 +144,8 @@ def test_canary_completion_and_direct_orchestrator_edge_contracts(tmp_path: Path
     with pytest.raises(KeyError, match="unknown direct card"):
         adapter._update("missing", status=QueueStatus.DONE)  # pyright: ignore[reportPrivateUsage]
 
+    adapter.dispatch("course")
+    adapter.claim_card(created.id, owner_id="worker", token="token")
     claimed = adapter.heartbeat_card(created.id, owner_id="worker", token="token", note="started")
     with pytest.raises(PermissionError, match="claim credentials"):
         adapter.complete_claimed_card(

@@ -21,6 +21,7 @@ from captains_chair.models import (
     PlanDecision,
     ProjectManifest,
     ReasoningEffort,
+    RepoConfig,
     TokenUsageRecord,
     UsageConfig,
     WorkerAssignments,
@@ -92,6 +93,30 @@ def test_config_helpers_reject_non_object_yaml(tmp_path: Path) -> None:
     path.write_text("- item\n", encoding="utf-8")
     with pytest.raises(ValueError, match="expected YAML object"):
         load_config(path)
+
+
+@pytest.mark.parametrize(
+    "field_value",
+    ("../outside.md", "/tmp/outside.md", "C:\\outside.md", "."),
+)
+def test_repository_document_paths_cannot_escape_checkout(
+    tmp_path: Path, field_value: str
+) -> None:
+    with pytest.raises(ValidationError, match="repository document paths"):
+        RepoConfig(
+            full_name="example/project",
+            local_path=tmp_path,
+            planning_doc=field_value,
+        )
+
+    with pytest.raises(ValidationError, match="repository document paths"):
+        ProjectManifest(
+            version=1,
+            goal="Keep all project documents inside the repository.",
+            canonical_docs=(field_value,),
+            planning_doc="PLAN.md",
+            checks=(),
+        )
 
 
 def test_final_review_fallback_is_rejected(tmp_path: Path) -> None:

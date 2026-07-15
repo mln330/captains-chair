@@ -1144,7 +1144,7 @@ def _stage_notes(
     )
     qa_note = ""
     if stage in {WorkStage.TEST, WorkStage.UX_REVIEW}:
-        qa_selection = select_qa(repo, ())
+        qa_selection = select_qa(repo, decision.changed_paths)
         qa_note = (
             "\nCapability-selected QA profiles:\n"
             + "\n".join(
@@ -1163,8 +1163,8 @@ def _stage_notes(
         f"Reason: {decision.reason}\n\n"
         + _workspace_notes(workspace)
         + f"Stage contract: {contracts[stage]}{qa_note}\n"
-        f"Worker protocol: claim the card, heartbeat during long work, and call Workboard complete with a concise summary and proof, "
-        f"or Workboard block with a specific reason. {blocker_rules}"
+        f"Worker protocol: claim the card through the configured orchestrator, heartbeat during long work, "
+        f"and complete it with a concise summary and proof or block it with a specific reason. {blocker_rules}"
     )
 
 

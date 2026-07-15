@@ -27,7 +27,12 @@ type Api = {
     handler: (...args: any[]) => Promise<void>,
     opts?: { name?: string; description?: string },
   ) => void;
-  registerHttpRoute?: (route: { path: string; auth: string; handler: (req: any, res: any) => Promise<void> }) => void;
+  registerHttpRoute?: (route: {
+    path: string;
+    auth: "gateway" | "plugin";
+    gatewayRuntimeScopeSurface?: "write-default" | "trusted-operator";
+    handler: (req: any, res: any) => Promise<void>;
+  }) => void;
   registerService?: (service: { id: string; start: () => Promise<void>; stop: () => Promise<void> }) => void;
   registerCli?: (registrar: (context: { program: any }) => Promise<void>, opts: Record<string, unknown>) => void;
   session?: { controls?: { registerControlUiDescriptor?: (descriptor: Record<string, unknown>) => void } };
@@ -105,7 +110,7 @@ export default definePluginEntry({
     const uiRoot = join(api.rootDir ?? process.cwd(), "dist", "ui");
     api.registerHttpRoute?.({
       path: "/captains-chair/",
-      auth: "plugin",
+      auth: "gateway",
       handler: async (_req, res) => {
         res.statusCode = 200;
         res.setHeader("content-type", "text/html; charset=utf-8");
@@ -114,7 +119,7 @@ export default definePluginEntry({
     });
     api.registerHttpRoute?.({
       path: "/captains-chair/assets/index.css",
-      auth: "plugin",
+      auth: "gateway",
       handler: async (_req, res) => {
         try {
           const body = await readFile(join(uiRoot, "assets", "index.css"));
@@ -129,7 +134,7 @@ export default definePluginEntry({
     });
     api.registerHttpRoute?.({
       path: "/captains-chair/assets/index.js",
-      auth: "plugin",
+      auth: "gateway",
       handler: async (_req, res) => {
         try {
           const body = await readFile(join(uiRoot, "assets", "index.js"));
@@ -146,7 +151,8 @@ export default definePluginEntry({
     const apiRoute = (path: string, method: string) => {
       api.registerHttpRoute?.({
         path,
-        auth: "plugin",
+        auth: "gateway",
+        gatewayRuntimeScopeSurface: "trusted-operator",
         handler: async (req, res) => {
           try {
             const params = req?.body && typeof req.body === "object" ? req.body : {};
@@ -221,6 +227,9 @@ export default definePluginEntry({
           status: { type: "string", enum: ["answered", "verified", "waived"] },
           answer: { type: "string" },
           evidence: { type: "array", items: { type: "string" } },
+          verified_by: { type: "string" },
+          verified_at: { type: "string" },
+          verification_model: { type: "string" },
         },
         required: ["full_name", "course_key", "requirement_key", "status"],
       },
@@ -352,7 +361,8 @@ export default definePluginEntry({
 
     api.registerHttpRoute?.({
       path: "/captains-chair/api/schedule/install",
-      auth: "plugin",
+      auth: "gateway",
+      gatewayRuntimeScopeSurface: "trusted-operator",
       handler: async (_req, res) => {
         try {
           const result = await installSchedules();

@@ -96,6 +96,10 @@ def resolve_readiness_requirement(
     status: RequirementStatus,
     answer: str | None = None,
     evidence: tuple[str, ...] = (),
+    *,
+    verified_by: str | None = None,
+    verified_at: datetime | None = None,
+    verification_model: str | None = None,
 ) -> Course:
     """Persist an answer or verification result without changing course approval."""
     requirement = next((item for item in course.readiness if item.key == requirement_key), None)
@@ -104,13 +108,27 @@ def resolve_readiness_requirement(
     answer_value = answer.strip() if answer is not None else requirement.answer
     if status in {RequirementStatus.ANSWERED, RequirementStatus.VERIFIED} and not answer_value:
         raise CourseError(f"readiness requirement {requirement_key!r} needs an answer")
+    if status == RequirementStatus.VERIFIED and (
+        not evidence
+        or not (verified_by or "").strip()
+        or not (verification_model or "").strip()
+    ):
+        raise CourseError(
+            f"readiness requirement {requirement_key!r} needs independent verification provenance"
+        )
     updated = requirement.model_copy(
         update={
             "status": status,
             "answer": answer_value,
             "evidence": evidence,
+            "verified_by": (verified_by or "").strip() or None,
+            "verified_at": (verified_at or datetime.now(UTC))
+            if status == RequirementStatus.VERIFIED
+            else None,
+            "verification_model": (verification_model or "").strip() or None,
         }
     )
+    updated = type(requirement).model_validate(updated.model_dump(mode="python"))
     requirements = tuple(updated if item.key == requirement_key else item for item in course.readiness)
     return course.model_copy(update={"readiness": requirements})
 

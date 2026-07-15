@@ -80,7 +80,14 @@ def course() -> Course:
 def ready_course() -> Course:
     value = course()
     requirement = value.readiness[0].model_copy(
-        update={"status": RequirementStatus.VERIFIED, "answer": "The search flow is fast and ranked."}
+        update={
+            "status": RequirementStatus.VERIFIED,
+            "answer": "The search flow is fast and ranked.",
+            "evidence": ("reviewed",),
+            "verified_by": "readiness-reviewer",
+            "verified_at": datetime(2026, 1, 1, tzinfo=UTC),
+            "verification_model": "test-model",
+        }
     )
     return value.model_copy(update={"readiness": (requirement,)})
 
@@ -110,6 +117,8 @@ def test_readiness_requirement_answer_can_be_verified_durably() -> None:
         "success",
         RequirementStatus.VERIFIED,
         evidence=("reviewed",),
+        verified_by="readiness-reviewer",
+        verification_model="test-model",
     )
     assert verified.readiness[0].status == RequirementStatus.VERIFIED
     assert readiness_report(verified).ready is True
