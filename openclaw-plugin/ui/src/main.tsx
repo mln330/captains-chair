@@ -16,6 +16,7 @@ type UsageDetail = {
   efficiency: { repeated_prompt_tokens?: number; failed_attempt_tokens?: number; fallback_attempts?: number };
   failed_attempts?: number;
   warnings: string[];
+  dimensions?: Array<{ date?: string; course_key?: string | null; work_package_key?: string | null; stage?: string; model?: string; tokens?: number; calls?: number }>;
 };
 type Repo = {
   full_name: string;
@@ -24,8 +25,11 @@ type Repo = {
   dirty: boolean;
   operation_mode: string;
   completion_policy: string;
+  schedule_enabled?: boolean;
   allow_autonomous_merge?: boolean;
   state: string;
+  orchestrator?: string;
+  orchestration_board?: string | null;
   notification_route?: string | null;
   model_profiles?: Record<string, ModelRoute>;
   qa_profiles?: QAProfile[];
@@ -87,6 +91,8 @@ type UsageConfig = {
 type PlanningSession = { prompt: string; next_questions: string[]; interaction: string; mutation_requires_course_approval: boolean };
 type Portfolio = { repos: Repo[] };
 type Courses = { courses: CourseSummary[] };
+type ScheduleJob = { name: string; every: string; id?: string | null; enabled: boolean; health: string; drift?: string[]; duplicates?: number };
+type ScheduleStatus = { status: string; jobs: ScheduleJob[] };
 type UpdatePayload = Record<string, unknown>;
 type ModelPreset = "economy" | "balanced" | "maximum_quality" | "local_first";
 
@@ -233,6 +239,7 @@ function RepoPanel({ repo, onSave }: { repo: Repo; onSave: (name: string, payloa
   const [completion, setCompletion] = useState(repo.completion_policy);
   const [allowMerge, setAllowMerge] = useState(repo.allow_autonomous_merge ?? false);
   const [channel, setChannel] = useState(repo.notification_route ?? "");
+  const [scheduleEnabled, setScheduleEnabled] = useState(repo.schedule_enabled !== false);
   const [qaProfiles, setQaProfiles] = useState<QAProfile[]>(() => (repo.qa_profiles ?? []).map(profileForEditing));
   const [routes, setRoutes] = useState<Record<string, EditableRoute>>(() => initialRoutes(repo));
   const [preset, setPreset] = useState<ModelPreset>("balanced");
@@ -240,7 +247,7 @@ function RepoPanel({ repo, onSave }: { repo: Repo; onSave: (name: string, payloa
   const [saving, setSaving] = useState(false);
   useEffect(() => {
     setMode(repo.operation_mode); setCompletion(repo.completion_policy); setAllowMerge(repo.allow_autonomous_merge ?? false);
-    setChannel(repo.notification_route ?? ""); setQaProfiles((repo.qa_profiles ?? []).map(profileForEditing));
+    setChannel(repo.notification_route ?? ""); setScheduleEnabled(repo.schedule_enabled !== false); setQaProfiles((repo.qa_profiles ?? []).map(profileForEditing));
     setRoutes(initialRoutes(repo)); setPreset("balanced"); setSurface(repo.surfaces?.[0] ?? "custom");
   }, [repo]);
   const save = async () => {
@@ -252,6 +259,7 @@ function RepoPanel({ repo, onSave }: { repo: Repo; onSave: (name: string, payloa
       await onSave(repo.full_name, {
         operation_mode: mode, completion_policy: completion, allow_autonomous_merge: allowMerge,
         notification_route: channel, surfaces: surface ? [surface] : [],
+        schedule_enabled: scheduleEnabled,
         qa_profiles: qaProfiles,
         model_profiles: modelProfiles,
       });
@@ -261,7 +269,7 @@ function RepoPanel({ repo, onSave }: { repo: Repo; onSave: (name: string, payloa
   return <article className="repo-panel">
     <div className="repo-heading"><div><h3>{repo.full_name}</h3><p>{repo.local_path}</p></div><span className={`mode ${repo.operation_mode}`}>{repo.operation_mode}</span></div>
     <Flow state={repo.state} />
-    <div className="repo-meta"><span>{repo.state.split("_").join(" ")}</span><span>{(repo.tokens.total_tokens ?? repo.tokens.accounted_tokens ?? 0).toLocaleString()} tokens</span><span>{repo.dirty ? "Uncommitted changes" : "Clean checkout"}</span></div>
+    <div className="repo-meta"><span>{repo.state.split("_").join(" ")}</span><span>{(repo.tokens.total_tokens ?? repo.tokens.accounted_tokens ?? 0).toLocaleString()} tokens</span><span>{repo.dirty ? "Uncommitted changes" : "Clean checkout"}</span>{repo.orchestrator === "openclaw" && repo.orchestration_board && <span>Workboard: {repo.orchestration_board}</span>}</div>
     {repo.warnings[0] && <p className="warning">{repo.warnings[0]}</p>}
     <details className="settings"><summary>Repository controls</summary>
       <div className="settings-grid">
@@ -270,6 +278,7 @@ function RepoPanel({ repo, onSave }: { repo: Repo; onSave: (name: string, payloa
         <label>Discord route<input value={channel} onChange={(event) => setChannel(event.target.value)} placeholder="notifications or channel id" /></label>
         <label>Application surface<select value={surface} onChange={(event) => setSurface(event.target.value)}><option value="web_ui">Web UI</option><option value="cli">CLI</option><option value="api">API</option><option value="library">Library</option><option value="data_pipeline">Data pipeline</option><option value="infrastructure_release">Infrastructure/release</option><option value="custom">Custom</option></select></label>
         <label className="check-label"><input type="checkbox" checked={allowMerge} onChange={(event) => setAllowMerge(event.target.checked)} /> Allow autonomous merge</label>
+        <label className="check-label"><input type="checkbox" checked={scheduleEnabled} onChange={(event) => setScheduleEnabled(event.target.checked)} /> Include in scheduled runs</label>
       </div>
       <div className="settings-grid"><label>Route preset<select aria-label="Route preset" value={preset} onChange={(event) => setPreset(event.target.value as ModelPreset)}>{Object.entries(MODEL_PRESET_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><button className="secondary compact" type="button" onClick={() => setRoutes(presetRoutes(preset))}>Apply preset</button></div>
       <section className="detail-section" aria-labelledby={`qa-profiles-${repo.full_name}`}><div className="section-heading"><h4 id={`qa-profiles-${repo.full_name}`}>QA profiles</h4><button className="secondary compact" type="button" onClick={() => setQaProfiles([...qaProfiles, profileForEditing({ key: `qa-${qaProfiles.length + 1}`, title: "New QA profile", surfaces: [surface], checks: [], required_tools: [], reviewer_role: "qa_assistant", enabled: true })])}>Add QA profile</button></div>{qaProfiles.length ? <div className="package-list">{qaProfiles.map((profile, index) => <fieldset className="qa-profile" key={`${profile.key}-${index}`}><legend>{profile.title || profile.key}</legend><div className="settings-grid"><label>Profile key<input value={profile.key} onChange={(event) => setQaProfiles(qaProfiles.map((item, itemIndex) => itemIndex === index ? { ...item, key: event.target.value } : item))} /></label><label>Title<input value={profile.title} onChange={(event) => setQaProfiles(qaProfiles.map((item, itemIndex) => itemIndex === index ? { ...item, title: event.target.value } : item))} /></label><label>Surface<select value={profile.surfaces?.[0] ?? "custom"} onChange={(event) => setQaProfiles(qaProfiles.map((item, itemIndex) => itemIndex === index ? { ...item, surfaces: [event.target.value] } : item))}><option value="web_ui">Web UI</option><option value="cli">CLI</option><option value="api">API</option><option value="library">Library</option><option value="data_pipeline">Data pipeline</option><option value="custom">Custom</option></select></label><label>Reviewer role<input value={profile.reviewer_role ?? "qa_assistant"} onChange={(event) => setQaProfiles(qaProfiles.map((item, itemIndex) => itemIndex === index ? { ...item, reviewer_role: event.target.value } : item))} /></label><label className="wide">Checks<textarea value={(profile.checks ?? []).join("\n")} onChange={(event) => setQaProfiles(qaProfiles.map((item, itemIndex) => itemIndex === index ? { ...item, checks: splitLines(event.target.value) } : item))} placeholder="One deterministic check per line" /></label><label className="wide">Required tools<textarea value={(profile.required_tools ?? []).join("\n")} onChange={(event) => setQaProfiles(qaProfiles.map((item, itemIndex) => itemIndex === index ? { ...item, required_tools: splitLines(event.target.value) } : item))} placeholder="One tool per line" /></label><label className="check-label"><input type="checkbox" checked={profile.enabled !== false} onChange={(event) => setQaProfiles(qaProfiles.map((item, itemIndex) => itemIndex === index ? { ...item, enabled: event.target.checked } : item))} /> Enabled</label><button className="secondary compact" type="button" onClick={() => setQaProfiles(qaProfiles.filter((_item, itemIndex) => itemIndex !== index))}>Remove profile</button></div></fieldset>)}</div> : <p className="muted">No repository-specific QA profiles configured.</p>}</section>
@@ -503,6 +512,29 @@ function CourseModelSettings({ repository, repo, course, onSaved }: { repository
   </details>;
 }
 
+function SchedulePanel({ status, onRefresh }: { status: ScheduleStatus | null; onRefresh: () => void }) {
+  const [reconcileEvery, setReconcileEvery] = useState(status?.jobs.find((job) => job.name === "captains-chair-reconcile")?.every ?? "5m");
+  const [reviewEvery, setReviewEvery] = useState(status?.jobs.find((job) => job.name === "captains-chair-course-review")?.every ?? "2h");
+  const [message, setMessage] = useState<string | null>(null);
+  useEffect(() => {
+    setReconcileEvery(status?.jobs.find((job) => job.name === "captains-chair-reconcile")?.every ?? "5m");
+    setReviewEvery(status?.jobs.find((job) => job.name === "captains-chair-course-review")?.every ?? "2h");
+  }, [status]);
+  const action = async (path: string, params: Record<string, unknown> = {}) => {
+    setMessage(null);
+    try {
+      const result = await callGateway<{ status?: string }>(`schedule/${path}`, params);
+      setMessage(`Schedule ${result.status ?? path}.`);
+      onRefresh();
+    } catch (reason) { setMessage(String(reason)); }
+  };
+  return <section className="schedule-section" aria-labelledby="schedule-title"><div className="section-heading"><div><p className="eyebrow">AUTOMATION</p><h2 id="schedule-title">Managed schedules</h2></div><button className="secondary compact" onClick={() => action("install")}>Reconcile</button></div>
+    <div className="schedule-grid">{status?.jobs?.map((job) => <div className="schedule-row" key={job.name}><div><strong>{job.name}</strong><span>Every {job.every}</span></div><span className={`health ${job.health}`}>{job.health}</span><div className="action-row"><button className="secondary compact" onClick={() => action(job.enabled ? "pause" : "resume", { name: job.name })}>{job.enabled ? "Pause" : "Resume"}</button><button className="secondary compact danger" onClick={() => action("remove", { name: job.name })}>Remove</button></div></div>) ?? <p className="muted">Schedule state is unavailable.</p>}</div>
+    <div className="settings-grid schedule-editor"><label>Reconcile cadence<input aria-label="Reconcile cadence" value={reconcileEvery} onChange={(event) => setReconcileEvery(event.target.value)} pattern="[1-9][0-9]*(s|m|h|d)" /></label><label>Course review cadence<input aria-label="Course review cadence" value={reviewEvery} onChange={(event) => setReviewEvery(event.target.value)} pattern="[1-9][0-9]*(s|m|h|d)" /></label><button className="primary compact" onClick={() => action("edit", { reconcile_every: reconcileEvery, review_every: reviewEvery })}>Save cadence</button></div>
+    {message && <p className="inline-status" role="status">{message}</p>}
+  </section>;
+}
+
 function CoursePanel({ item, repo, onAction, onRefresh }: { item: CourseSummary; repo?: Repo; onAction: (path: string, params: Record<string, unknown>) => Promise<void>; onRefresh: () => void }) {
   const [open, setOpen] = useState(false); const [actor, setActor] = useState("owner"); const [answers, setAnswers] = useState<Record<string, string>>({}); const [planning, setPlanning] = useState<PlanningSession | null>(null); const [planningLoading, setPlanningLoading] = useState(false);
   const { course, repository, readiness } = item;
@@ -510,9 +542,9 @@ function CoursePanel({ item, repo, onAction, onRefresh }: { item: CourseSummary;
   const openPlanning = async () => { setPlanningLoading(true); try { setPlanning(await callGateway<PlanningSession>("course/planning-session", params)); } finally { setPlanningLoading(false); } };
   return <article className="course-card"><div className="course-heading"><div><strong>{course.title}</strong><span>{repository} / {course.kind} / {course.status}</span></div><span className={`readiness ${readiness.ready ? "ready" : "waiting"}`}>{readiness.ready ? "Ready for approval" : `${readiness.unresolved?.length ?? 0} readiness items`}</span><button className="icon-button" aria-label={`${open ? "Collapse" : "Expand"} ${course.title}`} onClick={() => setOpen(!open)}>{open ? "-" : "+"}</button></div>
     {open && <div className="course-detail"><p className="course-goal">{course.goal}</p><div className="course-actions"><label>Decision owner<input value={actor} onChange={(event) => setActor(event.target.value)} /></label><button className="secondary" onClick={openPlanning} disabled={planningLoading}>{planningLoading ? "Preparing..." : "Open planning brief"}</button>{readiness.ready && course.status !== "engaged" && course.status !== "paused" && <button className="primary" onClick={() => onAction("course/approve", { ...params, approved_by: actor })}>Engage course</button>}{course.status === "engaged" && <button className="secondary" onClick={() => onAction("course/pause", params)}>Pause</button>}{course.status === "paused" && <button className="primary" onClick={() => onAction("course/resume", params)}>Resume</button>}</div>
-      {planning && <section className="detail-section planning-brief"><h3>Planning conversation handoff</h3><p>{planning.prompt}</p>{planning.next_questions.length ? <><strong>Next questions</strong><ul>{planning.next_questions.map((question) => <li key={question}>{question}</li>)}</ul></> : <p className="muted">The charter is ready for owner review. Approval is still required before mutation.</p>}</section>}
+      {planning && <section className="detail-section planning-brief"><h3>Plan and charter review</h3><p>{planning.prompt}</p><dl className="plan-diff"><div><dt>Goal</dt><dd>{course.goal}</dd></div><div><dt>Readiness</dt><dd>{readiness.unresolved?.length ?? 0} unresolved, {readiness.verified?.length ?? 0} verified</dd></div><div><dt>Delivery plan</dt><dd>{course.work_packages.length} work packages, {course.checkpoints.length} checkpoints</dd></div></dl>{planning.next_questions.length ? <><strong>Next questions</strong><ul>{planning.next_questions.map((question) => <li key={question}>{question}</li>)}</ul></> : <p className="muted">The charter is ready for owner review. Approval is still required before mutation.</p>}</section>}
       <section className="detail-section"><h3>Readiness</h3>{course.readiness.length ? course.readiness.map((requirement) => <div className="requirement" key={requirement.key}><div><strong>{requirement.key}</strong><span>{requirement.question}</span></div><span className="status-text">{requirement.status}</span>{requirement.status !== "verified" && <><textarea aria-label={`Answer ${requirement.key}`} value={answers[requirement.key] ?? requirement.answer ?? ""} onChange={(event) => setAnswers({ ...answers, [requirement.key]: event.target.value })} placeholder="Answer or evidence" /><button className="secondary compact" onClick={() => onAction("course/requirement", { ...params, requirement_key: requirement.key, status: "answered", answer: answers[requirement.key] ?? requirement.answer ?? "", evidence: ["owner-dashboard-answer"] })}>Submit answer</button></>}</div>) : <p className="muted">No readiness questions recorded.</p>}</section>
-      <section className="detail-section"><h3>Work packages</h3>{course.work_packages.length ? <div className="package-list">{course.work_packages.map((pkg) => <div key={pkg.key}><strong>{pkg.key}</strong><span>{pkg.title}</span><em>{pkg.status}</em></div>)}</div> : <p className="muted">The Captain will decompose work after course approval.</p>}</section>
+      <section className="detail-section"><h3>Work-package dependency map</h3>{course.work_packages.length ? <div className="package-list">{course.work_packages.map((pkg) => <div key={pkg.key}><strong>{pkg.key}</strong><span>{pkg.title}{pkg.dependencies?.length ? ` | after ${pkg.dependencies.join(", ")}` : " | ready when engaged"}</span><em>{pkg.status}</em></div>)}</div> : <p className="muted">The Captain will decompose work after course approval.</p>}</section>
       <section className="detail-section"><h3>Checkpoints</h3>{course.checkpoints.length ? course.checkpoints.map((checkpoint) => <div className="checkpoint" key={checkpoint.key}><div><strong>{checkpoint.title}</strong><span>{checkpoint.reason}</span></div><span className="status-text">{checkpoint.status}</span>{checkpoint.status === "pending" && <button className="secondary compact" onClick={() => onAction("course/checkpoint", { ...params, checkpoint_key: checkpoint.key, status: "resolved", resolved_by: actor, evidence: ["dashboard"] })}>Resolve</button>}</div>) : <p className="muted">No checkpoints are currently defined.</p>}</section>
       <CourseModelSettings repository={repository} repo={repo} course={course} onSaved={onRefresh} />
     </div>}
@@ -520,28 +552,45 @@ function CoursePanel({ item, repo, onAction, onRefresh }: { item: CourseSummary;
 }
 
 const ATTENTION_TYPES = new Set(["ATTENTION_REQUIRED", "COMPLETION_READY", "REVIEW_BLOCKED", "FINAL_REVIEW_BLOCKED", "PR_CHECKS_WAITING", "STALLED", "QUEUE_DEGRADED"]);
-function ActivityPanel({ repos }: { repos: Repo[] }) {
+function evidenceLink(evidence: Record<string, unknown>): string | null {
+  const value = evidence.pr_url ?? evidence.html_url ?? evidence.github_url ?? evidence.url;
+  return typeof value === "string" && value.startsWith("https://github.com/") ? value : null;
+}
+function ActivityPanel({ repos, onRefresh }: { repos: Repo[]; onRefresh: () => void }) {
   const events = useMemo(() => repos.flatMap((repo) => (repo.events ?? []).map((event) => ({ ...event, repo: repo.full_name }))).sort((a, b) => b.created_at.localeCompare(a.created_at)), [repos]);
   const attention = events.filter((event) => ATTENTION_TYPES.has(event.event_type)).slice(0, 8);
   const crew = events.filter((event) => !ATTENTION_TYPES.has(event.event_type)).slice(0, 8);
   const models = repos.flatMap((repo) => repo.usage_detail?.model_totals ?? []).reduce<Record<string, number>>((totals, item) => { const model = item.model ?? "unknown"; totals[model] = (totals[model] ?? 0) + (item.accounted_tokens ?? 0); return totals; }, {});
-  return <section className="activity-section"><div className="section-heading"><div><p className="eyebrow">SHIP STATUS</p><h2>Attention and crew activity</h2></div></div><div className="activity-grid"><div className="activity-panel"><h3>Attention queue</h3>{attention.length ? attention.map((event) => <div className="event-row attention" key={`${event.repo}:${event.created_at}:${event.event_type}`}><strong>{event.event_type.split("_").join(" ")}</strong><span>{event.repo} | {event.summary}</span><small>{event.reason}</small></div>) : <p className="muted">No blocking decisions.</p>}</div><div className="activity-panel"><h3>Crew activity</h3>{crew.length ? crew.map((event) => <div className="event-row" key={`${event.repo}:${event.created_at}:${event.event_type}`}><strong>{event.event_type.split("_").join(" ")}</strong><span>{event.repo} | {event.summary}</span><small>{String(event.evidence.worker ?? event.evidence.model ?? "Captain")}</small></div>) : <p className="muted">No recent crew events.</p>}</div><div className="activity-panel"><h3>Tokens by model</h3>{Object.keys(models).length ? Object.entries(models).sort((a, b) => b[1] - a[1]).map(([model, tokens]) => <div className="token-row" key={model}><span>{model}</span><strong>{tokens.toLocaleString()}</strong></div>) : <p className="muted">Provider token telemetry is not available yet.</p>}</div></div></section>;
+  const acknowledge = async (event: typeof attention[number]) => {
+    const fingerprint = String(event.evidence.fingerprint ?? "");
+    if (!fingerprint) return;
+    await callGateway("attention/ack", { full_name: event.repo, fingerprint, event_type: event.event_type });
+    onRefresh();
+  };
+  return <section className="activity-section">
+    <div className="section-heading"><div><p className="eyebrow">SHIP STATUS</p><h2>Attention and crew activity</h2></div></div>
+    <div className="activity-grid">
+      <div className="activity-panel"><h3>Attention queue</h3>{attention.length ? attention.map((event) => <div className="event-row attention" key={`${event.repo}:${event.created_at}:${event.event_type}`}><strong>{event.event_type.split("_").join(" ")}</strong><span>{event.repo} | {event.summary}</span><small>{event.reason}</small><div className="event-actions">{evidenceLink(event.evidence) && <a href={evidenceLink(event.evidence)!} target="_blank" rel="noreferrer">Open on GitHub</a>}{Boolean(event.evidence.fingerprint) && <button className="secondary compact" onClick={() => acknowledge(event)}>Acknowledge</button>}</div></div>) : <p className="muted">No blocking decisions.</p>}</div>
+      <div className="activity-panel"><h3>PR review and crew activity</h3>{crew.length ? crew.map((event) => <div className="event-row" key={`${event.repo}:${event.created_at}:${event.event_type}`}><strong>{event.event_type.split("_").join(" ")}</strong><span>{event.repo} | {event.summary}</span><small>{String(event.evidence.worker ?? event.evidence.model ?? "Captain")}</small>{evidenceLink(event.evidence) && <a href={evidenceLink(event.evidence)!} target="_blank" rel="noreferrer">Review evidence</a>}</div>) : <p className="muted">No recent crew events.</p>}</div>
+      <div className="activity-panel"><h3>Token efficiency by course, package, stage, model, and date</h3>{Object.keys(models).length ? Object.entries(models).sort((a, b) => b[1] - a[1]).map(([model, tokens]) => <div className="token-row" key={model}><span>{model}</span><strong>{tokens.toLocaleString()}</strong></div>) : <p className="muted">Provider token telemetry is not available yet.</p>}{repos.flatMap((repo) => repo.usage_detail?.dimensions ?? []).slice(0, 8).map((row, index) => <div className="token-row token-dimension" key={`${row.date}:${row.course_key}:${row.work_package_key}:${row.stage}:${row.model}:${index}`}><span>{row.date ?? "date unknown"} | {row.course_key ?? "portfolio"} / {row.work_package_key ?? "unscoped"} | {row.stage ?? "stage unknown"} | {row.model ?? "model unknown"}</span><strong>{(row.tokens ?? 0).toLocaleString()}</strong></div>)}</div>
+    </div>
+  </section>;
 }
 
 export function App() {
-  const [portfolio, setPortfolio] = useState<Portfolio | null>(null); const [courses, setCourses] = useState<Courses | null>(null); const [modelConfig, setModelConfig] = useState<ModelConfig | null>(null); const [error, setError] = useState<string | null>(null); const [refreshing, setRefreshing] = useState(false); const [scheduleMessage, setScheduleMessage] = useState<string | null>(null);
-  const refresh = () => { setRefreshing(true); setError(null); Promise.all([callGateway<Portfolio>("portfolio/status"), callGateway<Courses>("courses/list"), callGateway<ModelConfig>("models/config")]).then(([nextPortfolio, nextCourses, nextModelConfig]) => { setPortfolio(nextPortfolio); setCourses(nextCourses); setModelConfig(nextModelConfig); }).catch((reason: unknown) => setError(String(reason))).finally(() => setRefreshing(false)); };
+  const [portfolio, setPortfolio] = useState<Portfolio | null>(null); const [courses, setCourses] = useState<Courses | null>(null); const [modelConfig, setModelConfig] = useState<ModelConfig | null>(null); const [scheduleStatus, setScheduleStatus] = useState<ScheduleStatus | null>(null); const [error, setError] = useState<string | null>(null); const [refreshing, setRefreshing] = useState(false);
+  const refresh = () => { setRefreshing(true); setError(null); Promise.all([callGateway<Portfolio>("portfolio/status"), callGateway<Courses>("courses/list"), callGateway<ModelConfig>("models/config"), callGateway<ScheduleStatus>("schedule/status")]).then(([nextPortfolio, nextCourses, nextModelConfig, nextScheduleStatus]) => { setPortfolio(nextPortfolio); setCourses(nextCourses); setModelConfig(nextModelConfig); setScheduleStatus(nextScheduleStatus); }).catch((reason: unknown) => setError(String(reason))).finally(() => setRefreshing(false)); };
   const updateRepo = async (fullName: string, payload: UpdatePayload) => { await callGateway("repos/update", { full_name: fullName, ...payload }); refresh(); };
   const courseAction = async (path: string, params: Record<string, unknown>) => { try { await callGateway(path, params); refresh(); } catch (reason) { setError(String(reason)); } };
-  const installSchedules = async () => { setScheduleMessage(null); try { const response = await fetch("/captains-chair/api/schedule/install", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }); const payload = await response.json() as { error?: string; jobs?: Array<{ name?: string }> }; if (!response.ok) throw new Error(payload.error ?? `Schedule installation failed: ${response.status}`); setScheduleMessage(`Schedules ready: ${payload.jobs?.map((job) => job.name).join(", ") ?? "reconciled"}`); } catch (reason) { setScheduleMessage(String(reason)); } };
   useEffect(refresh, []);
   const repos = portfolio?.repos ?? [];
-  return <main className="shell"><header className="topbar"><div><p className="eyebrow">FLIGHT CONTROL</p><h1>Captain's Chair</h1><p className="subtitle">Set the course. Engage the crew.</p></div><div className="action-row"><button className="secondary" onClick={installSchedules}>Install schedules</button><button className="secondary" onClick={refresh} disabled={refreshing} aria-label="Refresh portfolio">{refreshing ? "Refreshing..." : "Refresh"}</button></div></header>
-    {scheduleMessage && <div className="alert" role="status">{scheduleMessage}</div>}{error && <div className="alert" role="alert">{error}</div>}
+  return <main className="shell"><header className="topbar"><div><p className="eyebrow">FLIGHT CONTROL</p><h1>Captain's Chair</h1><p className="subtitle">Set the course. Engage the crew.</p></div><div className="action-row"><button className="secondary" onClick={refresh} disabled={refreshing} aria-label="Refresh portfolio">{refreshing ? "Refreshing..." : "Refresh"}</button></div></header>
+    {error && <div className="alert" role="alert">{error}</div>}
     <section className="overview" aria-labelledby="overview-title"><div className="section-heading"><div><p className="eyebrow">MISSION OVERVIEW</p><h2 id="overview-title">Current courses</h2></div><span className="status-pill">{portfolio ? `${repos.length} registered` : "Connecting"}</span></div>{repos.length ? <div className="repo-grid">{repos.map((repo) => <RepoPanel key={repo.full_name} repo={repo} onSave={updateRepo} />)}</div> : <div className="empty"><h3>No repositories registered</h3><p>Register a repository to begin a readiness review.</p></div>}</section>
+    <SchedulePanel status={scheduleStatus} onRefresh={refresh} />
     {modelConfig && <><ModelPolicyPanel config={modelConfig} onSaved={refresh} /><UsagePolicyPanel config={modelConfig} onSaved={refresh} /></>}
     <section className="courses" aria-labelledby="courses-title"><div className="section-heading"><div><p className="eyebrow">COURSE CHARTER</p><h2 id="courses-title">Readiness and work packages</h2></div><span className="status-pill">{courses?.courses.length ?? 0} courses</span></div>{courses?.courses.length ? <div className="course-list">{courses.courses.map((item) => <CoursePanel key={`${item.repository}:${item.course.key}`} item={item} repo={repos.find((repo) => repo.full_name === item.repository)} onAction={courseAction} onRefresh={refresh} />)}</div> : <p className="muted">No course charter has been saved yet.</p>}</section>
-    <CourseCreatePanel repos={repos} onCreated={refresh} /><ActivityPanel repos={repos} /><GreenfieldPanel onCreated={refresh} /><RegisterPanel onRegistered={refresh} />
+    <CourseCreatePanel repos={repos} onCreated={refresh} /><ActivityPanel repos={repos} onRefresh={refresh} /><GreenfieldPanel onCreated={refresh} /><RegisterPanel onRegistered={refresh} />
   </main>;
 }
 

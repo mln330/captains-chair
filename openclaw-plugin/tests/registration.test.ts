@@ -17,7 +17,7 @@ describe("Captain's Chair OpenClaw registration", () => {
     ]);
   });
 
-  it("registers the dashboard, RPC, tools, hooks, CLI, routes, and sidecar service", () => {
+  it("registers the dashboard, RPC, tools, hooks, CLI, routes, and sidecar service", async () => {
     const registrations = {
       gateway: [] as string[],
       gatewayScopes: {} as Record<string, string | undefined>,
@@ -28,6 +28,8 @@ describe("Captain's Chair OpenClaw registration", () => {
       services: [] as string[],
       controls: [] as string[],
       cli: 0,
+      commands: [] as string[],
+      commandDefinitions: [] as Array<{ name: string; handler: (context: Record<string, unknown>) => Promise<{ text: string }> }>,
     };
     const api = {
       pluginConfig: { installSchedules: false },
@@ -55,6 +57,7 @@ describe("Captain's Chair OpenClaw registration", () => {
       },
       registerService: (service: { id: string }) => registrations.services.push(service.id),
       registerCli: () => { registrations.cli += 1; },
+      registerCommand: (command: { name: string; handler: (context: Record<string, unknown>) => Promise<{ text: string }> }) => { registrations.commands.push(command.name); registrations.commandDefinitions.push(command); },
     };
 
     const entry = plugin as unknown as { register: (value: typeof api) => void };
@@ -73,12 +76,15 @@ describe("Captain's Chair OpenClaw registration", () => {
     expect(registrations.gatewayScopes["captainsChair.health"]).toBe("operator.read");
     expect(registrations.gatewayScopes["captainsChair.course.create"]).toBe("operator.write");
     expect(registrations.gatewayScopes["captainsChair.schedule.install"]).toBe("operator.admin");
+    expect(registrations.gatewayScopes["captainsChair.schedule.status"]).toBe("operator.read");
     expect(registrations.tools).toContain("captains_chair_course_status");
     expect(registrations.tools).toContain("captains_chair_answer_readiness");
     expect(registrations.tools).toContain("captains_chair_start_planning");
     expect(registrations.hooks).toEqual(["captains-chair-workboard-reconciliation"]);
     expect(registrations.routes).toContain("/captains-chair/");
     expect(registrations.routes).toContain("/captains-chair/api/schedule/install");
+    expect(registrations.routes).toContain("/captains-chair/api/schedule/status");
+    expect(registrations.routes).toContain("/captains-chair/api/schedule/edit");
     expect(registrations.routes).toContain("/captains-chair/api/repos/create");
     expect(registrations.routes).toContain("/captains-chair/api/course/models");
     expect(registrations.routes).toContain("/captains-chair/api/models/config");
@@ -88,5 +94,9 @@ describe("Captain's Chair OpenClaw registration", () => {
     expect(registrations.routeAuth["/captains-chair/api/repos/create"]).toBe("gateway");
     expect(registrations.services).toEqual(["captains-chair"]);
     expect(registrations.cli).toBe(1);
+    expect(registrations.commands).toEqual(["captains-chair"]);
+    await expect(registrations.commandDefinitions[0].handler({ args: "approve example/project feature", senderIsOwner: false, gatewayClientScopes: ["operator.read"] })).resolves.toEqual({
+      text: "Captain's Chair refused that mutation: owner or operator.write scope is required.",
+    });
   });
 });

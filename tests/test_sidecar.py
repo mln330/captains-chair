@@ -49,6 +49,22 @@ def test_sidecar_reports_health_portfolio_and_schedule_contract(tmp_path: Path) 
     assert status["repos"][0]["state"] == "unbaselined"
     assert status["repos"][0]["events"] == []
     assert "model_totals" in status["repos"][0]["usage_detail"]
+    assert status["repos"][0]["usage_detail"]["dimensions"] == []
+    server.state.record_model_call(
+        "example/project",
+        "run-1",
+        "coder",
+        "test-model",
+        [{"total_tokens": 42, "success": True}],
+        course_key="feature-search",
+        work_package_key="api",
+        stage="implementation",
+    )
+    dimension = server.request("portfolio.status")["repos"][0]["usage_detail"]["dimensions"][0]
+    assert dimension["course_key"] == "feature-search"
+    assert dimension["work_package_key"] == "api"
+    assert dimension["stage"] == "implementation"
+    assert dimension["tokens"] == 42
     schedule = server.request("schedule.describe")
     assert schedule["source_of_truth"] == "openclaw_gateway_cron"
     assert [job["name"] for job in schedule["jobs"]] == [
@@ -56,6 +72,21 @@ def test_sidecar_reports_health_portfolio_and_schedule_contract(tmp_path: Path) 
         "captains-chair-course-review",
     ]
     assert [job["kind"] for job in schedule["jobs"]] == ["reconcile", "review"]
+    assert schedule["repository_enablement"] == {"example/project": True}
+
+    configured = server.request(
+        "schedule.configure",
+        {"reconcile_every": "10m", "review_every": "4h"},
+    )
+    assert [job["every"] for job in configured["jobs"]] == ["10m", "4h"]
+    assert load_config(config_path).schedules.review_every == "4h"
+
+    server.state.note_attention("example/project", "decision-1", "ATTENTION_REQUIRED")
+    acknowledged = server.request(
+        "attention.ack",
+        {"full_name": "example/project", "fingerprint": "decision-1"},
+    )
+    assert acknowledged["count"] == 1
 
 
 def test_sidecar_registers_and_updates_repositories_atomically(tmp_path: Path) -> None:
@@ -82,6 +113,12 @@ def test_sidecar_registers_and_updates_repositories_atomically(tmp_path: Path) -
     )
     assert updated["repo"]["operation_mode"] == "supervised"
     assert load_config(config_path).repo("example/second").operation_mode.value == "supervised"
+
+    scheduled = server.request(
+        "repo.update",
+        {"full_name": "example/second", "schedule_enabled": False},
+    )
+    assert scheduled["repo"]["schedule_enabled"] is False
 
 
 def test_sidecar_validates_model_routes_without_spending_model_tokens(tmp_path: Path) -> None:

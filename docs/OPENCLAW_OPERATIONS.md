@@ -79,9 +79,12 @@ captains_chair --config "$CAPTAINS_CHAIR_CONFIG" orchestrate canary --repo OWNER
 7. Promote only that repository to `autonomous`, run one bounded implementation
    PR with the configured completion policy, and verify the actual merge and
    post-merge default-branch checks.
-8. Install or restore the two-hour schedule only after the canary and bounded
-   autonomous PR pass. Keep worker reconciliation frequent enough to claim
-   ready cards; the Captain cycle is for planning and state review.
+8. Install or restore the managed schedules only after the canary and bounded
+   autonomous PR pass. Use the dashboard or `openclaw captains-chair schedule`
+   commands to inspect, edit, pause, resume, remove, or reconcile them. Pausing
+   a live OpenClaw cron survives plugin restarts and ordinary reconciliation.
+   Keep worker reconciliation frequent enough to claim ready cards; the Captain
+   cycle is for planning and state review.
 
 ## Existing Queue Migration
 

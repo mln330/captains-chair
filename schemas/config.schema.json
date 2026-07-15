@@ -952,6 +952,11 @@
           ],
           "default": null,
           "title": "Orchestration Board"
+        },
+        "schedule_enabled": {
+          "default": true,
+          "title": "Schedule Enabled",
+          "type": "boolean"
         }
       },
       "required": [
@@ -987,6 +992,25 @@
         }
       },
       "title": "RepositoryProvisioningConfig",
+      "type": "object"
+    },
+    "ScheduleConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "reconcile_every": {
+          "default": "5m",
+          "pattern": "^[1-9][0-9]*(s|m|h|d)$",
+          "title": "Reconcile Every",
+          "type": "string"
+        },
+        "review_every": {
+          "default": "2h",
+          "pattern": "^[1-9][0-9]*(s|m|h|d)$",
+          "title": "Review Every",
+          "type": "string"
+        }
+      },
+      "title": "ScheduleConfig",
       "type": "object"
     },
     "UsageConfig": {
@@ -1198,6 +1222,13 @@
         "block_on_unknown": true,
         "allow_incomplete_telemetry": false,
         "retention_days": 90
+      }
+    },
+    "schedules": {
+      "$ref": "#/$defs/ScheduleConfig",
+      "default": {
+        "reconcile_every": "5m",
+        "review_every": "2h"
       }
     },
     "repos": {

@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   buildCommandArgv,
   buildCronAddArgs,
+  buildCronEditArgs,
   findExistingCronJob,
+  inspectCronJob,
   parseCronJobs,
   type ScheduleDefinition,
 } from "../src/schedules.js";
@@ -40,7 +42,7 @@ describe("OpenClaw schedule reconciliation", () => {
     );
   });
 
-  it("reuses an exact existing job and rejects same-name drift", () => {
+  it("inspects exact, drifted, paused, and duplicate jobs without rejecting reconciliation", () => {
     const existing = {
       id: "job-1",
       name: definition.name,
@@ -51,24 +53,22 @@ describe("OpenClaw schedule reconciliation", () => {
     expect(
       findExistingCronJob([existing], definition, "python3", "/tmp/captains-chair.yaml"),
     ).toBe(existing);
-    expect(() =>
-      findExistingCronJob(
-        [{ ...existing, payload: { kind: "command", argv: ["python3", "wrong"] } }],
-        definition,
-        "python3",
-        "/tmp/captains-chair.yaml",
-      ),
-    ).toThrow(/different command/);
+    const drifted = { ...existing, enabled: false, payload: { kind: "command", argv: ["python3", "wrong"] } };
+    expect(inspectCronJob([drifted, existing], definition, "python3", "/tmp/captains-chair.yaml")).toMatchObject({
+      primary: drifted,
+      duplicates: [existing],
+      drift: ["command"],
+      enabled: false,
+    });
+    expect(buildCronEditArgs("job-1", definition, "python3", "/tmp/captains-chair.yaml", "/tmp")).toContain("edit");
   });
 
-  it("fails closed when a same-name job cannot be verified", () => {
-    expect(() =>
-      findExistingCronJob(
-        [{ id: "job-1", name: definition.name, schedule: { kind: "every", everyMs: 7_200_000 } }],
-        definition,
-        "python3",
-        "/tmp/captains-chair.yaml",
-      ),
-    ).toThrow(/cannot be verified/);
+  it("reports unreadable command drift for repair", () => {
+    expect(inspectCronJob(
+      [{ id: "job-1", name: definition.name, schedule: { kind: "every", everyMs: 7_200_000 } }],
+      definition,
+      "python3",
+      "/tmp/captains-chair.yaml",
+    ).drift).toEqual(["command_unreadable"]);
   });
 });

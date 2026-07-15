@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -14,15 +14,18 @@ function run(args) {
     cwd: root,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
+    timeout: 60_000,
   });
 }
 
 try {
-  run(["plugins", "install", root, "--link"]);
-  run(["plugins", "disable", "captains-chair"]);
-  const disabled = JSON.parse(run(["plugins", "inspect", "captains-chair", "--json"]));
-  if (disabled.plugin?.status !== "disabled") throw new Error("plugin did not disable cleanly");
-  run(["plugins", "enable", "captains-chair"]);
+  mkdirSync(profileDir, { recursive: true });
+  writeFileSync(join(profileDir, "openclaw.json"), JSON.stringify({
+    plugins: {
+      load: { paths: [root] },
+      entries: { "captains-chair": { enabled: true } },
+    },
+  }));
   const inspection = JSON.parse(run(["plugins", "inspect", "captains-chair", "--json", "--runtime"]));
   const plugin = inspection.plugin;
   if (plugin?.status !== "loaded") throw new Error(`plugin status was ${plugin?.status ?? "missing"}`);
@@ -40,6 +43,7 @@ try {
     throw new Error("missing Workboard reconciliation hook");
   }
   if (!plugin.services.includes("captains-chair")) throw new Error("missing sidecar service");
+  if (!plugin.commands.includes("captains-chair")) throw new Error("missing native /captains-chair command");
   const doctor = run(["plugins", "doctor"]);
   if (!doctor.includes("No plugin issues detected.")) throw new Error(`plugin doctor failed: ${doctor}`);
   process.stdout.write("OpenClaw host registration passed\n");
