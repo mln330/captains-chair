@@ -54,6 +54,7 @@ test("dashboard renders the course map and planning brief", async ({ page }) => 
   await page.getByRole("button", { name: "Open planning brief" }).click();
   await expect(page.getByRole("heading", { name: "Planning conversation handoff" })).toBeVisible();
   await expect(page.getByText("Which search users are in scope?")).toBeVisible();
+  await expect(page.getByRole("region", { name: "SDLC progress" })).toHaveAttribute("tabindex", "0");
   const accessibility = await new AxeBuilder({ page }).analyze();
   expect(accessibility.violations).toEqual([]);
   await expect(page).toHaveScreenshot("dashboard-planning-brief.png", { fullPage: true });

@@ -139,7 +139,7 @@ function Flow({ state }: { state: string }) {
       : state.includes("review") || state === "pr_open" || state === "repairing" ? 3
         : state === "completion_ready" || state === "post_merge_verification" ? 4
           : state === "merged" ? 5 : 2;
-  return <div className="flow" aria-label="SDLC progress">
+  return <div className="flow" role="region" aria-label="SDLC progress" tabIndex={0}>
     {stages.map((stage, index) => <div className={`flow-stage ${index <= active ? "active" : ""}`} key={stage}>
       <span className="flow-dot" aria-hidden="true" /><span>{stage}</span>
       {index < stages.length - 1 && <span className="flow-line" aria-hidden="true" />}
