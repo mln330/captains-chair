@@ -437,6 +437,15 @@
       "title": "QAProfile",
       "type": "object"
     },
+    "ReadinessCheckStatus": {
+      "enum": [
+        "verified",
+        "not_applicable",
+        "blocked"
+      ],
+      "title": "ReadinessCheckStatus",
+      "type": "string"
+    },
     "ReadinessRequirement": {
       "additionalProperties": false,
       "properties": {
@@ -540,6 +549,146 @@
       ],
       "title": "ReadinessRequirement",
       "type": "object"
+    },
+    "ReadinessReviewCheck": {
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": 1,
+          "default": 1,
+          "title": "Version",
+          "type": "integer"
+        },
+        "category": {
+          "minLength": 1,
+          "title": "Category",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/ReadinessCheckStatus"
+        },
+        "finding": {
+          "minLength": 1,
+          "title": "Finding",
+          "type": "string"
+        },
+        "evidence": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence",
+          "type": "array"
+        }
+      },
+      "required": [
+        "category",
+        "status",
+        "finding"
+      ],
+      "title": "ReadinessReviewCheck",
+      "type": "object"
+    },
+    "ReadinessReviewRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": 1,
+          "default": 1,
+          "title": "Version",
+          "type": "integer"
+        },
+        "verdict": {
+          "$ref": "#/$defs/ReadinessReviewVerdict"
+        },
+        "summary": {
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        },
+        "input_sha": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Input Sha",
+          "type": "string"
+        },
+        "evidence_sha": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha",
+          "type": "string"
+        },
+        "provider": {
+          "minLength": 1,
+          "title": "Provider",
+          "type": "string"
+        },
+        "model": {
+          "minLength": 1,
+          "title": "Model",
+          "type": "string"
+        },
+        "reasoning": {
+          "$ref": "#/$defs/ReasoningEffort"
+        },
+        "prompt_version": {
+          "minLength": 1,
+          "title": "Prompt Version",
+          "type": "string"
+        },
+        "reviewer": {
+          "minLength": 1,
+          "title": "Reviewer",
+          "type": "string"
+        },
+        "session_id": {
+          "minLength": 1,
+          "title": "Session Id",
+          "type": "string"
+        },
+        "reviewed_at": {
+          "format": "date-time",
+          "title": "Reviewed At",
+          "type": "string"
+        },
+        "checks": {
+          "items": {
+            "$ref": "#/$defs/ReadinessReviewCheck"
+          },
+          "title": "Checks",
+          "type": "array"
+        },
+        "next_questions": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Next Questions",
+          "type": "array"
+        }
+      },
+      "required": [
+        "verdict",
+        "summary",
+        "input_sha",
+        "evidence_sha",
+        "provider",
+        "model",
+        "reasoning",
+        "prompt_version",
+        "reviewer",
+        "session_id",
+        "reviewed_at",
+        "checks"
+      ],
+      "title": "ReadinessReviewRecord",
+      "type": "object"
+    },
+    "ReadinessReviewVerdict": {
+      "enum": [
+        "ready",
+        "needs_input"
+      ],
+      "title": "ReadinessReviewVerdict",
+      "type": "string"
     },
     "ReasoningEffort": {
       "enum": [
@@ -773,6 +922,17 @@
       },
       "title": "Readiness",
       "type": "array"
+    },
+    "readiness_review": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ReadinessReviewRecord"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "work_packages": {
       "default": [],

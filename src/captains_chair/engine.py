@@ -17,6 +17,7 @@ from captains_chair.courses import (
     CourseError,
     CourseStore,
     eligible_work_packages,
+    readiness_report,
     set_work_package_status,
 )
 from captains_chair.documents import assert_durable_document
@@ -61,6 +62,11 @@ from captains_chair.policy import (
     evaluate_owner_completion,
 )
 from captains_chair.prompting import load_prompt
+from captains_chair.readiness import (
+    ReadinessReviewDecision,
+    apply_readiness_review,
+    build_readiness_prompt,
+)
 from captains_chair.security import safe_changed_paths, scan_secrets
 from captains_chair.state import StateStore
 from captains_chair.usage import dispatch_budget
@@ -185,7 +191,12 @@ class ControlPlaneEngine:
         try:
             selected = self.models.for_role(role)
         except ValueError:
-            selected = self.models.reviewer if role == "comment_adjudicator" else self.models.coder
+            if role == "comment_adjudicator":
+                selected = self.models.reviewer
+            elif role == "readiness_reviewer":
+                selected = self.models.planner
+            else:
+                selected = self.models.coder
         try:
             if course is None:
                 courses = CourseStore(repo.local_path).list()
@@ -216,6 +227,44 @@ class ControlPlaneEngine:
                     if key in layer:
                         selected = layer[key]
         return selected
+
+    def review_course_readiness(
+        self,
+        repo: RepoConfig,
+        course_key: str,
+        run_id: str,
+    ) -> Course:
+        """Run and persist a fresh, read-only review bound to course inputs."""
+        store = CourseStore(repo.local_path)
+        course = store.load(course_key)
+        models = self._models_for(repo, "readiness_reviewer", course=course)
+        prompt = build_readiness_prompt(course)
+        result = self.run_model(
+            repo,
+            run_id,
+            "readiness_reviewer",
+            prompt,
+            models=models,
+            output_model=ReadinessReviewDecision,
+            cwd=repo.local_path,
+            writable=False,
+        )
+        decision = ReadinessReviewDecision.model_validate(result.output)
+        updated = apply_readiness_review(
+            course,
+            decision,
+            result,
+            models,
+            provider=self._runtime_name(),
+        )
+        status = (
+            CourseStatus.AWAITING_APPROVAL
+            if readiness_report(updated).ready
+            else CourseStatus.READINESS_REVIEW
+        )
+        updated = updated.model_copy(update={"status": status})
+        store.save(updated)
+        return updated
 
     def _set_course_package_status(
         self,

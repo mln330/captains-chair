@@ -22,15 +22,17 @@ from captains_chair.models import (
     OperationMode,
     PlanDecision,
     RepoConfig,
+    RequirementStatus,
     RunState,
     UsageConfig,
     WorkerResult,
     WorkPackageStatus,
 )
+from captains_chair.readiness import REQUIRED_READINESS_CATEGORIES
 from captains_chair.state import StateStore
 from captains_chair.worktrees import Worktree
 from tests.helpers import app_config, model_policy, repo_config
-from tests.test_courses import course, ready_course
+from tests.test_courses import course, ready_course, rebind_readiness_review
 
 
 class NoopNotifier:
@@ -68,6 +70,40 @@ class EmptyAttemptFailingHarness(FailingHarness):
     def run(self, **kwargs: Any) -> HarnessResult:
         del kwargs
         raise HarnessExecutionError("provider unavailable without attempts")
+
+
+class ReadinessHarness(SuccessfulHarness):
+    def run(self, **kwargs: Any) -> HarnessResult:
+        assert kwargs["role"] == "readiness_reviewer"
+        assert kwargs["writable"] is False
+        return HarnessResult(
+            role="readiness_reviewer",
+            output={
+                "verdict": "ready",
+                "summary": "All prerequisites are covered.",
+                "checks": [
+                    {
+                        "category": category,
+                        "status": "verified",
+                        "finding": f"{category} covered",
+                        "evidence": ["repository evidence"],
+                    }
+                    for category in REQUIRED_READINESS_CATEGORIES
+                ],
+                "requirements": [
+                    {
+                        "key": "success",
+                        "verified": True,
+                        "finding": "Success is measurable.",
+                        "evidence": ["README.md"],
+                    }
+                ],
+                "next_questions": [],
+            },
+            attempts=(ModelAttempt(model="test-model", success=True, duration_ms=1),),
+            resolved_model="test-model",
+            session_id="readiness-session",
+        )
 
 
 class SnapshotGitHub:
@@ -188,6 +224,28 @@ def test_run_model_records_success_and_respects_disabled_mode(tmp_path: Path) ->
             cwd=tmp_path,
             writable=False,
         )
+
+
+def test_engine_runs_readiness_reviewer_and_persists_awaiting_approval(tmp_path: Path) -> None:
+    engine, state = make_engine(tmp_path, harness=ReadinessHarness())
+    repo = repo_config(tmp_path, mode=OperationMode.SUPERVISED)
+    value = course()
+    answered = value.readiness[0].model_copy(
+        update={
+            "status": RequirementStatus.ANSWERED,
+            "answer": "The ranked search flow meets its documented latency target.",
+        }
+    )
+    CourseStore(tmp_path).save(value.model_copy(update={"readiness": (answered,)}))
+
+    reviewed = engine.review_course_readiness(repo, value.key, "run-readiness")
+
+    assert reviewed.status == CourseStatus.AWAITING_APPROVAL
+    assert reviewed.readiness_review is not None
+    assert reviewed.readiness_review.session_id == "readiness-session"
+    assert CourseStore(tmp_path).load(value.key).status == CourseStatus.AWAITING_APPROVAL
+    usage = state.usage_summary(repo=repo.full_name)
+    assert usage["direct_calls"]["calls"] == 1
 
 
 def test_run_model_records_failed_attempts_and_usage_suppression(tmp_path: Path) -> None:
@@ -479,7 +537,7 @@ def test_course_context_reports_each_gate_status(
 def test_course_context_fails_closed_for_multiple_active_courses(tmp_path: Path) -> None:
     engine, _ = make_engine(tmp_path)
     first = approve_course(
-        ready_course().model_copy(update={"key": "first"}),
+        rebind_readiness_review(ready_course().model_copy(update={"key": "first"})),
         "owner@example.com",
     )
     second = course().model_copy(update={"key": "second", "status": CourseStatus.DRAFT})
@@ -497,7 +555,7 @@ def test_engine_resolves_course_package_and_stage_model_layers(tmp_path: Path) -
         update={"model_profiles": {"coder": ModelProfile(primary=ModelTarget(model="package-model"))}}
     )
     engaged = approve_course(
-        ready_course().model_copy(
+        rebind_readiness_review(ready_course().model_copy(
             update={
                 "work_packages": (package, *course().work_packages[1:]),
                 "model_profiles": {
@@ -505,7 +563,7 @@ def test_engine_resolves_course_package_and_stage_model_layers(tmp_path: Path) -
                     "stage:implementation": ModelProfile(primary=ModelTarget(model="stage-model")),
                 },
             }
-        ),
+        )),
         "owner@example.com",
     )
     CourseStore(tmp_path).save(engaged)

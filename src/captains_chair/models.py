@@ -66,6 +66,17 @@ class RequirementStatus(enum.StrEnum):
     BLOCKED = "blocked"
 
 
+class ReadinessReviewVerdict(enum.StrEnum):
+    READY = "ready"
+    NEEDS_INPUT = "needs_input"
+
+
+class ReadinessCheckStatus(enum.StrEnum):
+    VERIFIED = "verified"
+    NOT_APPLICABLE = "not_applicable"
+    BLOCKED = "blocked"
+
+
 class CheckpointKind(enum.StrEnum):
     COURSE_APPROVAL = "course_approval"
     ARCHITECTURE = "architecture"
@@ -647,6 +658,42 @@ class ReadinessRequirement(StrictModel):
         return self
 
 
+class ReadinessReviewCheck(StrictModel):
+    version: Literal[1] = 1
+    category: str = Field(min_length=1)
+    status: ReadinessCheckStatus
+    finding: str = Field(min_length=1)
+    evidence: tuple[str, ...] = ()
+
+
+class ReadinessReviewRecord(StrictModel):
+    version: Literal[1] = 1
+    verdict: ReadinessReviewVerdict
+    summary: str = Field(min_length=1)
+    input_sha: str = Field(pattern=r"^[0-9a-f]{64}$")
+    evidence_sha: str = Field(pattern=r"^[0-9a-f]{64}$")
+    provider: str = Field(min_length=1)
+    model: str = Field(min_length=1)
+    reasoning: ReasoningEffort
+    prompt_version: str = Field(min_length=1)
+    reviewer: str = Field(min_length=1)
+    session_id: str = Field(min_length=1)
+    reviewed_at: datetime
+    checks: tuple[ReadinessReviewCheck, ...]
+    next_questions: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_checks(self) -> ReadinessReviewRecord:
+        categories = [check.category for check in self.checks]
+        if len(categories) != len(set(categories)):
+            raise ValueError("readiness review check categories must be unique")
+        if self.verdict == ReadinessReviewVerdict.READY and any(
+            check.status == ReadinessCheckStatus.BLOCKED for check in self.checks
+        ):
+            raise ValueError("ready readiness review cannot contain blocked checks")
+        return self
+
+
 class Checkpoint(StrictModel):
     version: Literal[1] = 1
     key: str = Field(min_length=1)
@@ -712,6 +759,7 @@ class Course(StrictModel):
     acceptance_criteria: tuple[str, ...] = ()
     exit_criteria: tuple[str, ...] = ()
     readiness: tuple[ReadinessRequirement, ...] = ()
+    readiness_review: ReadinessReviewRecord | None = None
     work_packages: tuple[WorkPackage, ...] = ()
     checkpoints: tuple[Checkpoint, ...] = ()
     qa_profiles: tuple[QAProfile, ...] = ()

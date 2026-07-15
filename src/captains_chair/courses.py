@@ -20,6 +20,7 @@ from captains_chair.models import (
     WorkPackage,
     WorkPackageStatus,
 )
+from captains_chair.readiness import REQUIRED_READINESS_CATEGORIES, readiness_input_sha
 
 
 class CourseError(RuntimeError):
@@ -34,6 +35,10 @@ class ReadinessReport(StrictModel):
     unresolved: tuple[str, ...] = ()
     owner_decisions: tuple[str, ...] = ()
     verified: tuple[str, ...] = ()
+    review_current: bool = False
+    review_verdict: str | None = None
+    review_summary: str | None = None
+    missing_categories: tuple[str, ...] = ()
 
 
 def readiness_report(course: Course) -> ReadinessReport:
@@ -48,13 +53,31 @@ def readiness_report(course: Course) -> ReadinessReport:
         unresolved.append(requirement.key)
         if requirement.owner_decision_required:
             owner_decisions.append(requirement.key)
+    review = course.readiness_review
+    reviewed_categories: set[str] = (
+        {item.category for item in review.checks} if review is not None else set()
+    )
+    missing_categories = tuple(
+        category for category in REQUIRED_READINESS_CATEGORIES if category not in reviewed_categories
+    )
+    review_current = bool(
+        review
+        and review.input_sha == readiness_input_sha(course)
+        and review.verdict.value == "ready"
+        and not missing_categories
+        and all(item.status.value != "blocked" for item in review.checks)
+    )
     return ReadinessReport(
         course_key=course.key,
-        ready=not unresolved,
+        ready=not unresolved and review_current,
         required_count=len(required),
         unresolved=tuple(unresolved),
         owner_decisions=tuple(owner_decisions),
         verified=tuple(verified),
+        review_current=review_current,
+        review_verdict=review.verdict.value if review else None,
+        review_summary=review.summary if review else None,
+        missing_categories=missing_categories,
     )
 
 
@@ -147,7 +170,7 @@ def approve_course(course: Course, approved_by: str, approved_at: datetime | Non
         raise CourseError("course approval requires at least one work package")
     report = readiness_report(course)
     if not report.ready:
-        unresolved = ", ".join(report.unresolved)
+        unresolved = ", ".join(report.unresolved) or "independent readiness review is missing or stale"
         raise CourseError(f"course {course.key!r} is not ready for approval: {unresolved}")
     timestamp = approved_at or datetime.now(UTC)
     return course.model_copy(

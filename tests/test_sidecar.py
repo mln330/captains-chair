@@ -18,7 +18,7 @@ from captains_chair.models import (
 )
 from captains_chair.sidecar import SidecarError, SidecarServer
 from tests.helpers import app_config, repo_config
-from tests.test_courses import ready_course
+from tests.test_courses import ready_course, rebind_readiness_review
 
 
 class GreenfieldProvider:
@@ -217,8 +217,15 @@ def test_greenfield_repo_creation_waits_for_course_approval_and_seeds_durable_fi
     provider = GreenfieldProvider()
     server = SidecarServer(config_path, github=cast(Any, provider))
     local_path = tmp_path / "new-project"
-    course = ready_course().model_copy(
-        update={"key": "first-course", "kind": CourseKind.GREENFIELD, "title": "New project"}
+    course = rebind_readiness_review(
+        ready_course().model_copy(
+            update={
+                "key": "first-course",
+                "repository": "example/new-project",
+                "kind": CourseKind.GREENFIELD,
+                "title": "New project",
+            }
+        )
     ).model_dump(mode="json")
 
     pending = server.request(
@@ -260,7 +267,9 @@ def test_sidecar_supports_all_onboarding_course_kinds(tmp_path: Path, kind: Cour
     config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
     server = SidecarServer(config_path, github=cast(Any, GreenfieldProvider()))
     course_key = f"{kind.value}-course"
-    course = ready_course().model_copy(update={"key": course_key, "kind": kind}).model_dump(mode="json")
+    course = rebind_readiness_review(
+        ready_course().model_copy(update={"key": course_key, "kind": kind})
+    ).model_dump(mode="json")
 
     created = server.request("course.create", {"full_name": "example/project", "course": course})
     assert created["course"]["kind"] == kind.value
@@ -341,19 +350,19 @@ def test_sidecar_course_lifecycle_and_surface_configuration(tmp_path: Path) -> N
     planning = server.request("course.planning_session", params)
     assert planning["interaction"] == "host_agent_conversation"
     assert planning["next_questions"] == []
-    answered = server.request(
-        "course.requirement",
-        {
-            **params,
-            "requirement_key": "success",
-            "status": "verified",
+    with pytest.raises(SidecarError, match="cannot self-verify"):
+        server.request(
+            "course.requirement",
+            {
+                **params,
+                "requirement_key": "success",
+                "status": "verified",
                 "answer": "The search flow is fast and ranked.",
-                "evidence": ["repository-review"],
-                "verified_by": "readiness-reviewer",
+                "evidence": ["owner"],
+                "verified_by": "owner",
                 "verification_model": "test-model",
-        },
-    )
-    assert answered["status"] == "verified"
+            },
+        )
     approved = server.request("course.approve", {**params, "approved_by": "owner"})
     assert approved["course"]["status"] == "engaged"
     assert server.request("course.ready_work", params)["work_packages"]
@@ -377,6 +386,53 @@ def test_sidecar_course_lifecycle_and_surface_configuration(tmp_path: Path) -> N
     )
     assert updated["repo"]["surfaces"] == ["cli"]
     assert updated["repo"]["orchestrator"] == "direct"
+
+
+def test_sidecar_readiness_review_uses_the_durable_cli_operation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = app_config(tmp_path, repo_config(tmp_path))
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+    server = SidecarServer(config_path)
+    server.request(
+        "course.create",
+        {"full_name": "example/project", "course": ready_course().model_dump(mode="json")},
+    )
+    commands: list[list[str]] = []
+
+    def fake_run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        del kwargs
+        commands.append(command)
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout='{"status":"awaiting_approval","repository":"example/project"}',
+            stderr="",
+        )
+
+    monkeypatch.setattr("captains_chair.sidecar.subprocess.run", fake_run)
+    result = server.request(
+        "course.readiness_review",
+        {"full_name": "example/project", "course_key": "feature-search", "harness": "test"},
+    )
+
+    assert result["status"] == "awaiting_approval"
+    assert commands[0][0:3] == [sys.executable, "-m", "captains_chair.cli"]
+    assert commands[0][-6:] == [
+        "--repo",
+        "example/project",
+        "--course-key",
+        "feature-search",
+        "--harness",
+        "test",
+    ]
+
+    with pytest.raises(SidecarError, match="requires a harness"):
+        server.request(
+            "course.readiness_review",
+            {"full_name": "example/project", "course_key": "feature-search"},
+        )
 
     with pytest.raises(SidecarError, match="unknown sidecar method"):
         server.request("unknown")

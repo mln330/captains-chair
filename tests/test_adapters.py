@@ -3,12 +3,15 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from captains_chair.adapters import (
     CallbackUsageTelemetryAdapter,
     InteractionAdapter,
     NativeInteractionAdapter,
     UsageTelemetryAdapter,
 )
+from captains_chair.courses import CourseError
 from captains_chair.models import CheckpointStatus, RepoConfig, RequirementStatus
 from captains_chair.notifications import NotifierAdapter, StdoutNotifier
 from captains_chair.scheduler import InstalledSchedule, SchedulerAdapter, ScheduleSpec
@@ -25,11 +28,9 @@ def test_native_interaction_adapter_preserves_durable_course_operations() -> Non
     answered = adapter.resolve_requirement(
         value,
         "success",
-        RequirementStatus.VERIFIED,
+        RequirementStatus.ANSWERED,
         answer="The search flow is fast and ranked.",
         evidence=("owner",),
-        verified_by="readiness-reviewer",
-        verification_model="test-model",
     )
     resolved = adapter.resolve_checkpoint(
         ready_course(),
@@ -39,8 +40,18 @@ def test_native_interaction_adapter_preserves_durable_course_operations() -> Non
         evidence=("demo",),
     )
 
-    assert answered.readiness[0].status == RequirementStatus.VERIFIED
+    assert answered.readiness[0].status == RequirementStatus.ANSWERED
     assert resolved.checkpoints[0].status == CheckpointStatus.RESOLVED
+    with pytest.raises(CourseError, match="cannot self-verify"):
+        adapter.resolve_requirement(
+            value,
+            "success",
+            RequirementStatus.VERIFIED,
+            answer="Owner says it is ready.",
+            evidence=("owner",),
+            verified_by="owner",
+            verification_model="test-model",
+        )
 
 
 def test_callback_usage_adapter_is_a_replaceable_telemetry_boundary(tmp_path: Path) -> None:

@@ -23,11 +23,17 @@ from captains_chair.models import (
     Course,
     CourseKind,
     CourseStatus,
+    ReadinessCheckStatus,
     ReadinessRequirement,
+    ReadinessReviewCheck,
+    ReadinessReviewRecord,
+    ReadinessReviewVerdict,
+    ReasoningEffort,
     RequirementStatus,
     WorkPackage,
     WorkPackageStatus,
 )
+from captains_chair.readiness import REQUIRED_READINESS_CATEGORIES, readiness_input_sha
 
 
 def course() -> Course:
@@ -89,7 +95,38 @@ def ready_course() -> Course:
             "verification_model": "test-model",
         }
     )
-    return value.model_copy(update={"readiness": (requirement,)})
+    value = value.model_copy(update={"readiness": (requirement,)})
+    review = ReadinessReviewRecord(
+        verdict=ReadinessReviewVerdict.READY,
+        summary="All course inputs are independently verified.",
+        input_sha=readiness_input_sha(value),
+        evidence_sha="a" * 64,
+        provider="test",
+        model="test-model",
+        reasoning=ReasoningEffort.HIGH,
+        prompt_version="test-v1",
+        reviewer="readiness_reviewer",
+        session_id="test-session",
+        reviewed_at=datetime(2026, 1, 1, tzinfo=UTC),
+        checks=tuple(
+            ReadinessReviewCheck(
+                category=category,
+                status=ReadinessCheckStatus.VERIFIED,
+                finding=f"{category} verified",
+                evidence=("test evidence",),
+            )
+            for category in REQUIRED_READINESS_CATEGORIES
+        ),
+    )
+    return value.model_copy(update={"readiness_review": review})
+
+
+def rebind_readiness_review(value: Course) -> Course:
+    """Represent a fresh independent review after a test changes course inputs."""
+    if value.readiness_review is None:
+        raise AssertionError("test course must already have a readiness review")
+    review = value.readiness_review.model_copy(update={"input_sha": readiness_input_sha(value)})
+    return value.model_copy(update={"readiness_review": review})
 
 
 def test_readiness_requires_verified_required_items() -> None:
@@ -121,7 +158,8 @@ def test_readiness_requirement_answer_can_be_verified_durably() -> None:
         verification_model="test-model",
     )
     assert verified.readiness[0].status == RequirementStatus.VERIFIED
-    assert readiness_report(verified).ready is True
+    assert readiness_report(verified).ready is False
+    assert readiness_report(verified).review_current is False
 
     with pytest.raises(CourseError, match="needs an answer"):
         resolve_readiness_requirement(course(), "success", RequirementStatus.VERIFIED)
@@ -149,6 +187,16 @@ def test_course_approval_records_human_provenance() -> None:
         approve_course(course(), "owner@example.com")
     with pytest.raises(CourseError, match="requires an approver"):
         approve_course(ready_course(), "   ")
+
+
+def test_readiness_review_is_invalidated_when_semantic_inputs_change() -> None:
+    value = ready_course()
+    assert readiness_report(value).ready is True
+
+    changed = value.model_copy(update={"exit_criteria": ("A different exit criterion",)})
+
+    assert readiness_report(changed).ready is False
+    assert readiness_report(changed).review_current is False
 
 
 def test_course_approval_requires_an_actionable_work_package() -> None:

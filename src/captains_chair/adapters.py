@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
 
 from captains_chair.courses import (
+    CourseError,
     planning_session,
     resolve_checkpoint,
     resolve_readiness_requirement,
@@ -86,6 +87,10 @@ class NativeInteractionAdapter:
         verified_at: datetime | None = None,
         verification_model: str | None = None,
     ) -> Course:
+        if status == RequirementStatus.VERIFIED:
+            raise CourseError(
+                "owner-facing requirement updates cannot self-verify; run the independent readiness review"
+            )
         return resolve_readiness_requirement(
             course,
             requirement_key,
