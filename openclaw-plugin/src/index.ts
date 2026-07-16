@@ -2,7 +2,7 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { readFile } from "node:fs/promises";
-import { SidecarSupervisor, type RpcResult } from "./sidecar.js";
+import { SidecarSupervisor, withSidecarShutdown, type RpcResult } from "./sidecar.js";
 import {
   buildCronAddArgs,
   buildCronEditArgs,
@@ -517,50 +517,52 @@ export default definePluginEntry({
     api.registerCli?.(
       async ({ program }) => {
         const command = program.command("captains-chair").description("Set the course and inspect the agent crew");
-        command.command("status").description("Show portfolio status").action(async () => {
+        const cliAction = <Args extends unknown[]>(action: (...args: Args) => Promise<void>) =>
+          withSidecarShutdown(sidecar, action);
+        command.command("status").description("Show portfolio status").action(cliAction(async () => {
           const result = await request("portfolio.status");
           process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-        });
-        command.command("schedules").description("Describe Captain's Chair schedules").action(async () => {
+        }));
+        command.command("schedules").description("Describe Captain's Chair schedules").action(cliAction(async () => {
           const result = await scheduleStatus();
           process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-        });
-        command.command("setup").description("Validate the sidecar and install managed schedules").action(async () => {
+        }));
+        command.command("setup").description("Validate the sidecar and install managed schedules").action(cliAction(async () => {
           const health = await request("health");
           const schedules = await reconcileSchedules();
           process.stdout.write(`${JSON.stringify({ health, schedules }, null, 2)}\n`);
-        });
-        command.command("diagnostics").description("Inspect sidecar and managed schedule health").action(async () => {
+        }));
+        command.command("diagnostics").description("Inspect sidecar and managed schedule health").action(cliAction(async () => {
           const health = await request("health");
           const schedules = await scheduleStatus();
           process.stdout.write(`${JSON.stringify({ health, schedules }, null, 2)}\n`);
-        });
-        command.command("migration").description("Validate configuration compatibility without mutation").action(async () => {
+        }));
+        command.command("migration").description("Validate configuration compatibility without mutation").action(cliAction(async () => {
           const result = await request("health");
           process.stdout.write(`${JSON.stringify({ status: "compatible", ...result }, null, 2)}\n`);
-        });
-        command.command("recovery").description("Run one bounded reconciliation pass").action(async () => {
+        }));
+        command.command("recovery").description("Run one bounded reconciliation pass").action(cliAction(async () => {
           const result = await request("run.once", { kind: "reconcile" });
           process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-        });
+        }));
         const schedule = command.command("schedule").description("Manage OpenClaw Gateway schedules");
-        schedule.command("status").action(async () => process.stdout.write(`${JSON.stringify(await scheduleStatus(), null, 2)}\n`));
-        schedule.command("install").action(async () => process.stdout.write(`${JSON.stringify(await reconcileSchedules(), null, 2)}\n`));
+        schedule.command("status").action(cliAction(async () => { process.stdout.write(`${JSON.stringify(await scheduleStatus(), null, 2)}\n`); }));
+        schedule.command("install").action(cliAction(async () => { process.stdout.write(`${JSON.stringify(await reconcileSchedules(), null, 2)}\n`); }));
         for (const action of ["pause", "resume", "remove"] as const) {
-          schedule.command(`${action} [name]`).action(async (name?: string) => process.stdout.write(`${JSON.stringify(await mutateSchedules(action, name), null, 2)}\n`));
+          schedule.command(`${action} [name]`).action(cliAction(async (name?: string) => { process.stdout.write(`${JSON.stringify(await mutateSchedules(action, name), null, 2)}\n`); }));
         }
-        schedule.command("edit").option("--reconcile-every <duration>").option("--review-every <duration>").action(async (options: { reconcileEvery?: string; reviewEvery?: string }) => {
+        schedule.command("edit").option("--reconcile-every <duration>").option("--review-every <duration>").action(cliAction(async (options: { reconcileEvery?: string; reviewEvery?: string }) => {
           await request("schedule.configure", { reconcile_every: options.reconcileEvery, review_every: options.reviewEvery });
           process.stdout.write(`${JSON.stringify(await reconcileSchedules(), null, 2)}\n`);
-        });
-        command.command("workboard <fullName> <board>").description("Configure the optional OpenClaw Workboard tracker").action(async (fullName: string, board: string) => {
+        }));
+        command.command("workboard <fullName> <board>").description("Configure the optional OpenClaw Workboard tracker").action(cliAction(async (fullName: string, board: string) => {
           const result = await request("repo.update", { full_name: fullName, orchestrator: "openclaw", orchestration_board: board });
           process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-        });
-        command.command("plan <fullName> <courseKey>").description("Start a native planning conversation").action(async (fullName: string, courseKey: string) => {
+        }));
+        command.command("plan <fullName> <courseKey>").description("Start a native planning conversation").action(cliAction(async (fullName: string, courseKey: string) => {
           const result = await request("course.planning_session", { full_name: fullName, course_key: courseKey });
           process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-        });
+        }));
       },
       { descriptors: [{ name: "captains-chair", description: "Set the course and inspect the agent crew", hasSubcommands: true }] },
     );

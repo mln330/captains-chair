@@ -25,6 +25,19 @@ export type SidecarOptions = {
   env?: NodeJS.ProcessEnv;
 };
 
+export function withSidecarShutdown<Args extends unknown[], Result>(
+  sidecar: Pick<SidecarSupervisor, "stop">,
+  action: (...args: Args) => Promise<Result>,
+): (...args: Args) => Promise<Result> {
+  return async (...args: Args) => {
+    try {
+      return await action(...args);
+    } finally {
+      await sidecar.stop();
+    }
+  };
+}
+
 export class SidecarSupervisor {
   private child: ChildProcessWithoutNullStreams | undefined;
   private lines: Interface | undefined;

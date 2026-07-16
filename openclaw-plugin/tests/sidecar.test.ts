@@ -1,8 +1,17 @@
 import { execPath } from "node:process";
 import { describe, expect, it } from "vitest";
-import { SidecarSupervisor } from "../src/sidecar.js";
+import { SidecarSupervisor, withSidecarShutdown } from "../src/sidecar.js";
 
 describe("SidecarSupervisor", () => {
+  it("stops CLI sidecars after both successful and failed actions", async () => {
+    let stops = 0;
+    const sidecar = { stop: async () => { stops += 1; } };
+
+    await expect(withSidecarShutdown(sidecar, async () => "ok")()).resolves.toBe("ok");
+    await expect(withSidecarShutdown(sidecar, async () => { throw new Error("failed"); })()).rejects.toThrow("failed");
+    expect(stops).toBe(2);
+  });
+
   it("starts, correlates JSON-RPC responses, and stops cleanly", async () => {
     const child = [
       "process.stdin.setEncoding('utf8');",
