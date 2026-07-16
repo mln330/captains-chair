@@ -153,14 +153,12 @@ def test_codex_tools_create_and_control_every_course_type(tmp_path: Path) -> Non
                 "repo": "example/project",
                 "course_key": course.key,
                 "requirement_key": "success",
-                "status": "verified",
+                "status": "answered",
                 "answer": "The ranked search flow passes.",
-                "evidence": ["independent-review"],
-                "verified_by": "readiness-reviewer",
-                "verification_model": "test-model",
+                "evidence": ["owner-answer"],
             },
         )
-        assert answered["result"]["course"]["readiness"][0]["status"] == "verified"
+        assert answered["result"]["course"]["readiness"][0]["status"] == "answered"
         checkpoint = run_tool(
             "captains_chair_course_checkpoint",
             {

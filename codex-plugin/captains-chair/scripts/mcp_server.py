@@ -88,18 +88,15 @@ TOOLS: tuple[dict[str, Any], ...] = (
     },
     {
         "name": "captains_chair_course_answer",
-        "description": "Record, verify, or waive one durable readiness requirement.",
+        "description": "Record or waive one owner readiness answer for independent review.",
         "inputSchema": _object_schema(
             ("repo", "course_key", "requirement_key", "status"),
             {
                 **COURSE,
                 "requirement_key": {"type": "string"},
-                "status": {"type": "string", "enum": ["answered", "verified", "waived"]},
+                "status": {"type": "string", "enum": ["answered", "waived"]},
                 "answer": {"type": "string"},
                 "evidence": {"type": "array", "items": {"type": "string"}},
-                "verified_by": {"type": "string"},
-                "verified_at": {"type": "string"},
-                "verification_model": {"type": "string"},
             },
         ),
     },
