@@ -236,6 +236,7 @@ class FakeGateway:
 def _config(*, require_live: bool = False) -> OpenClawWorkboardConfig:
     return OpenClawWorkboardConfig(
         max_retries=1,
+        dispatch_strategy="workboard",
         require_live_completion_validation=require_live,
         workers=WorkerAssignments(
             captain="captains-chair",
