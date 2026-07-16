@@ -693,7 +693,12 @@ class ControlPlaneEngine:
                     return CycleResult(event, 2)
             stored = self.state.approved_proposal(repo.full_name)
             if stored is not None:
-                if stored["snapshot_fingerprint"] != snapshot_fingerprint:
+                decision = PlanDecision.model_validate(stored["decision"])
+                approval_fingerprint = _approval_fingerprint(snapshot)
+                if stored["snapshot_fingerprint"] not in {
+                    snapshot_fingerprint,
+                    approval_fingerprint,
+                }:
                     self.state.set_proposal_status(repo.full_name, stored["action_id"], "stale")
                     event = self._emit(
                         repo,
@@ -706,7 +711,6 @@ class ControlPlaneEngine:
                         {"next_action": "Run a fresh planning cycle and approve its new action ID."},
                     )
                     return CycleResult(event, 2)
-                decision = PlanDecision.model_validate(stored["decision"])
                 action_id = str(stored["action_id"])
                 self.state.transition(repo.full_name, RunState.PLANNING)
                 policy = evaluate_action(repo, decision, execute=execute, shadow=shadow, approved=True)
@@ -943,6 +947,7 @@ class ControlPlaneEngine:
                     "decision": decision.model_dump(mode="json"),
                 }
             )
+            approval_fingerprint = _approval_fingerprint(snapshot)
             cycle_fingerprint = _fingerprint(
                 {
                     "snapshot": snapshot_fingerprint,
@@ -1021,7 +1026,7 @@ class ControlPlaneEngine:
             self.state.save_proposal(
                 repo.full_name,
                 action_id,
-                snapshot_fingerprint,
+                approval_fingerprint,
                 decision.model_dump(mode="json"),
             )
 
@@ -1041,6 +1046,7 @@ class ControlPlaneEngine:
                         "next_action": _next_action(decision, policy.reason),
                         "decision": decision.model_dump(mode="json"),
                         "action_id": action_id,
+                        "approval_fingerprint": approval_fingerprint,
                         "plan_input_fingerprint": plan_input_fingerprint,
                         **model_evidence,
                     },
@@ -1073,6 +1079,7 @@ class ControlPlaneEngine:
                         ),
                         "decision": decision.model_dump(mode="json"),
                         "action_id": action_id,
+                        "approval_fingerprint": approval_fingerprint,
                         "plan_input_fingerprint": plan_input_fingerprint,
                         **model_evidence,
                     },
@@ -1477,7 +1484,8 @@ class ControlPlaneEngine:
         if (
             stored is None
             or stored["status"] != "proposed"
-            or stored["snapshot_fingerprint"] != snapshot_fingerprint
+            or stored["snapshot_fingerprint"]
+            not in {snapshot_fingerprint, event.evidence.get("approval_fingerprint")}
         ):
             return None
         self.state.transition(repo.full_name, RunState.PLANNING)
@@ -3207,6 +3215,13 @@ class ControlPlaneEngine:
 
 def _fingerprint(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, default=str).encode()).hexdigest()
+
+
+def _approval_fingerprint(snapshot: RepositorySnapshot) -> str:
+    """Bind approval to repository state while ignoring volatile workflow history."""
+    evidence = snapshot.as_dict()
+    evidence.pop("workflow_runs", None)
+    return _fingerprint(evidence)
 
 
 def _worker_result_or_raise(value: dict[str, Any]) -> WorkerResult:
