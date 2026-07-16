@@ -688,6 +688,7 @@ class ReadinessReviewRecord(StrictModel):
     summary: str = Field(min_length=1)
     input_sha: str = Field(pattern=r"^[0-9a-f]{64}$")
     evidence_sha: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_evidence_sha: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     provider: str = Field(min_length=1)
     model: str = Field(min_length=1)
     reasoning: ReasoningEffort

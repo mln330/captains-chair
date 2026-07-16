@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol, cast
 
@@ -35,6 +36,8 @@ class GitHubProvider(Protocol):
     """Portable GitHub boundary used by the Captain engine and baseline collector."""
 
     def snapshot(self, repo: RepoConfig) -> RepositorySnapshot: ...
+
+    def readiness_evidence(self, repo: RepoConfig) -> dict[str, Any]: ...
 
     def pull_request(self, repo: RepoConfig, number: int) -> dict[str, Any]: ...
 
@@ -156,6 +159,86 @@ class GhGitHubProvider:
         run_objects = _object_list(runs, "workflow runs")
         branches = [str(item["name"]) for item in branch_objects if item.get("name")]
         return RepositorySnapshot(repo_object, issue_objects, pr_objects, branches, run_objects)
+
+    def readiness_evidence(self, repo: RepoConfig) -> dict[str, Any]:
+        """Collect sanitized live control-plane evidence for independent planning review."""
+        evidence: dict[str, Any] = {
+            "collected_at": datetime.now(UTC).isoformat(),
+            "repository": repo.full_name,
+            "collector": "gh",
+            "collection_errors": {},
+        }
+
+        def collect(key: str, operation: Any) -> None:
+            try:
+                evidence[key] = operation()
+            except (GitHubProviderError, KeyError, TypeError, ValueError) as exc:
+                cast(dict[str, str], evidence["collection_errors"])[key] = str(exc)[:1000]
+
+        snapshot_holder: dict[str, RepositorySnapshot] = {}
+
+        def collect_snapshot() -> dict[str, Any]:
+            snapshot = self.snapshot(repo)
+            snapshot_holder["value"] = snapshot
+            return {
+                "repository": snapshot.repo,
+                "open_issues": [
+                    {key: item.get(key) for key in ("number", "title", "updatedAt", "url")}
+                    for item in snapshot.issues
+                ],
+                "open_pull_requests": [
+                    {
+                        key: item.get(key)
+                        for key in (
+                            "number", "title", "headRefName", "headRefOid", "baseRefName",
+                            "isDraft", "mergeStateStatus", "reviewDecision", "updatedAt", "url",
+                        )
+                    }
+                    for item in snapshot.pull_requests
+                ],
+                "branches": snapshot.branches,
+                "recent_workflow_runs": snapshot.workflow_runs[:20],
+            }
+
+        collect("snapshot", collect_snapshot)
+        collect("default_branch_sha", lambda: self.default_branch_sha(repo))
+        collect("required_checks", lambda: sorted(self.required_check_names(repo)))
+        collect("environments", lambda: self._json(["api", f"repos/{repo.full_name}/environments"]))
+
+        snapshot = snapshot_holder.get("value")
+        if snapshot is not None:
+            pull_requests: list[dict[str, Any]] = []
+            for summary in snapshot.pull_requests:
+                number = summary.get("number")
+                if not isinstance(number, int):
+                    continue
+                row: dict[str, Any] = {"number": number, "collection_errors": {}}
+                try:
+                    detail = self.pull_request(repo, number)
+                    row["state"] = {
+                        key: detail.get(key)
+                        for key in (
+                            "number", "title", "headRefName", "headRefOid", "baseRefName",
+                            "isDraft", "mergeable", "mergeStateStatus", "reviewDecision",
+                            "statusCheckRollup", "updatedAt", "url",
+                        )
+                    }
+                except GitHubProviderError as exc:
+                    cast(dict[str, str], row["collection_errors"])["state"] = str(exc)[:1000]
+                try:
+                    threads = self.review_threads(repo, number)
+                    row["review_threads"] = {
+                        "total": len(threads),
+                        "unresolved_blocking": sum(
+                            1 for thread in threads
+                            if not thread.get("isResolved") and not thread.get("isOutdated")
+                        ),
+                    }
+                except GitHubProviderError as exc:
+                    cast(dict[str, str], row["collection_errors"])["review_threads"] = str(exc)[:1000]
+                pull_requests.append(row)
+            evidence["pull_requests"] = pull_requests
+        return evidence
 
     def pull_request(self, repo: RepoConfig, number: int) -> dict[str, Any]:
         value = self._json(

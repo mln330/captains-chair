@@ -24,7 +24,7 @@ from captains_chair.models import (
     StrictModel,
 )
 
-READINESS_PROMPT_VERSION = "course-readiness-v1"
+READINESS_PROMPT_VERSION = "course-readiness-v2"
 REQUIRED_READINESS_CATEGORIES = (
     "goals",
     "non-goals",
@@ -160,9 +160,15 @@ def readiness_input_sha(course: Course) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def build_readiness_prompt(course: Course) -> str:
+def readiness_evidence_sha(evidence: dict[str, object]) -> str:
+    encoded = json.dumps(evidence, sort_keys=True, separators=(",", ":"), default=str).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def build_readiness_prompt(course: Course, evidence: dict[str, object] | None = None) -> str:
     categories = "\n".join(f"- {category}" for category in REQUIRED_READINESS_CATEGORIES)
     context = json.dumps(course.model_dump(mode="json", exclude={"readiness_review"}), indent=2)
+    live_context = json.dumps(evidence or {}, indent=2, default=str)
     return (
         "You are the independent readiness reviewer for Captain's Chair. Inspect the repository "
         "and assess whether this course contains everything an agent crew needs to execute to completion. "
@@ -170,8 +176,13 @@ def build_readiness_prompt(course: Course) -> str:
         "where possible. Mark a category not_applicable only with a concrete reason. Return exactly one "
         "check for every category below and exactly one decision for every readiness requirement. A ready "
         "verdict requires an actionable, acyclic work-package graph and no blocked category or required "
-        "requirement. Ask concise owner questions only for information that cannot be discovered locally.\n\n"
-        f"Required categories:\n{categories}\n\nCourse context:\n{context}"
+        "requirement. A provided live evidence envelope is authenticated machine evidence, not an owner "
+        "claim. Treat a named collection error as unavailable evidence, but do not treat successfully "
+        "collected facts as locally unverifiable. Never infer secret values; secret names and configured "
+        "protection rules are sufficient when the course does not require a live deployment. Ask concise "
+        "owner questions only for information that cannot be discovered from either source.\n\n"
+        f"Required categories:\n{categories}\n\nCourse context:\n{context}\n\n"
+        f"Live evidence envelope (SHA-256 {readiness_evidence_sha(evidence or {})}):\n{live_context}"
     )
 
 
@@ -182,6 +193,7 @@ def apply_readiness_review(
     models: RoleModels,
     *,
     provider: str,
+    source_evidence: dict[str, object] | None = None,
     reviewed_at: datetime | None = None,
 ) -> Course:
     expected_categories = set(REQUIRED_READINESS_CATEGORIES)
@@ -263,6 +275,7 @@ def apply_readiness_review(
         summary=decision.summary,
         input_sha=readiness_input_sha(course),
         evidence_sha=evidence_sha,
+        source_evidence_sha=readiness_evidence_sha(source_evidence or {}),
         provider=target.provider or provider,
         model=result.resolved_model,
         reasoning=target.thinking if target else ReasoningEffort.HIGH,
@@ -288,4 +301,5 @@ __all__ = [
     "apply_readiness_review",
     "build_readiness_prompt",
     "readiness_input_sha",
+    "readiness_evidence_sha",
 ]

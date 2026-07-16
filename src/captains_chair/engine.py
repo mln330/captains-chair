@@ -238,7 +238,21 @@ class ControlPlaneEngine:
         store = CourseStore(repo.local_path)
         course = store.load(course_key)
         models = self._models_for(repo, "readiness_reviewer", course=course)
-        prompt = build_readiness_prompt(course)
+        source_evidence: dict[str, object] = {
+            "github": self.github.readiness_evidence(repo),
+            "runtime_policy": {
+                "harness": self._runtime_name(),
+                "operation_mode": repo.operation_mode.value,
+                "completion_policy": repo.completion_policy.value,
+                "allow_autonomous_merge": repo.allow_autonomous_merge,
+                "deploy_is_merge_gate": repo.deploy_is_merge_gate,
+                "schedule_enabled": repo.schedule_enabled,
+                "daily_token_limit": self.config.usage.daily_token_limit,
+                "model_daily_token_limits": self.config.usage.model_daily_token_limits,
+                "block_on_unknown_usage": self.config.usage.block_on_unknown,
+            },
+        }
+        prompt = build_readiness_prompt(course, source_evidence)
         result = self.run_model(
             repo,
             run_id,
@@ -256,6 +270,7 @@ class ControlPlaneEngine:
             result,
             models,
             provider=self._runtime_name(),
+            source_evidence=source_evidence,
         )
         status = (
             CourseStatus.AWAITING_APPROVAL
