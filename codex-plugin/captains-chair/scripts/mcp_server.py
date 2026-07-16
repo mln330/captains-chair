@@ -11,72 +11,201 @@ import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 from typing import Any
+
+from captains_chair.models import Course
+from captains_chair.sidecar import SidecarServer
+
+
+def _object_schema(required: tuple[str, ...], properties: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": list(required),
+        "properties": {"config_path": {"type": "string"}, **properties},
+    }
+
+
+REPO = {"repo": {"type": "string"}}
+COURSE = {**REPO, "course_key": {"type": "string"}}
 
 TOOLS: tuple[dict[str, Any], ...] = (
     {
         "name": "captains_chair_doctor",
         "description": "Validate Captain's Chair configuration and runtime prerequisites.",
-        "inputSchema": {"type": "object", "properties": {"config_path": {"type": "string"}}},
+        "inputSchema": _object_schema((), {}),
     },
     {
         "name": "captains_chair_baseline",
         "description": "Run a deep repository baseline in the configured harness.",
-        "inputSchema": {
-            "type": "object",
-            "required": ["repo", "harness"],
-            "properties": {
-                "config_path": {"type": "string"},
+        "inputSchema": _object_schema(
+            ("repo", "harness"),
+            {
                 "repo": {"type": "string"},
                 "harness": {"type": "string"},
                 "run_checks": {"type": "boolean"},
             },
-        },
+        ),
     },
     {
         "name": "captains_chair_status",
         "description": "Read durable repository state, recent events, and model token telemetry.",
-        "inputSchema": {
-            "type": "object",
-            "required": ["repo"],
-            "properties": {"config_path": {"type": "string"}, "repo": {"type": "string"}},
-        },
+        "inputSchema": _object_schema(("repo",), REPO),
     },
     {
         "name": "captains_chair_planning_session",
         "description": "Return durable course context and next questions for the native Codex planning conversation.",
-        "inputSchema": {
-            "type": "object",
-            "required": ["repo", "course_key"],
-            "properties": {
-                "config_path": {"type": "string"},
-                "repo": {"type": "string"},
-                "course_key": {"type": "string"},
-            },
-        },
+        "inputSchema": _object_schema(("repo", "course_key"), COURSE),
     },
     {
         "name": "captains_chair_cycle",
         "description": "Run one bounded Captain's Chair cycle; policy gates determine whether it can mutate.",
-        "inputSchema": {
-            "type": "object",
-            "required": ["repo", "harness"],
-            "properties": {
-                "config_path": {"type": "string"},
+        "inputSchema": _object_schema(
+            ("repo", "harness"),
+            {
                 "repo": {"type": "string"},
                 "harness": {"type": "string"},
                 "live": {"type": "boolean"},
                 "continue_run": {"type": "boolean"},
             },
-        },
+        ),
     },
     {
         "name": "captains_chair_usage",
         "description": "Report provider-reported token usage by model and workflow role.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {"config_path": {"type": "string"}, "repo": {"type": "string"}},
-        },
+        "inputSchema": _object_schema((), REPO),
+    },
+    {
+        "name": "captains_chair_course_create",
+        "description": "Create a durable course charter for greenfield, takeover, or feature work.",
+        "inputSchema": _object_schema(("repo", "course"), {**REPO, "course": Course.model_json_schema()}),
+    },
+    {
+        "name": "captains_chair_course_readiness",
+        "description": "Read the current course charter and readiness evidence without mutation.",
+        "inputSchema": _object_schema(("repo", "course_key"), COURSE),
+    },
+    {
+        "name": "captains_chair_course_answer",
+        "description": "Record or waive one owner readiness answer for independent review.",
+        "inputSchema": _object_schema(
+            ("repo", "course_key", "requirement_key", "status"),
+            {
+                **COURSE,
+                "requirement_key": {"type": "string"},
+                "status": {"type": "string", "enum": ["answered", "waived"]},
+                "answer": {"type": "string"},
+                "evidence": {"type": "array", "items": {"type": "string"}},
+            },
+        ),
+    },
+    {
+        "name": "captains_chair_course_approve",
+        "description": "Engage a readiness-complete course after explicit builder approval.",
+        "inputSchema": _object_schema(
+            ("repo", "course_key", "approved_by"), {**COURSE, "approved_by": {"type": "string"}}
+        ),
+    },
+    {
+        "name": "captains_chair_course_pause",
+        "description": "Pause an engaged course without discarding its durable state.",
+        "inputSchema": _object_schema(("repo", "course_key"), COURSE),
+    },
+    {
+        "name": "captains_chair_course_resume",
+        "description": "Resume a paused course.",
+        "inputSchema": _object_schema(("repo", "course_key"), COURSE),
+    },
+    {
+        "name": "captains_chair_course_checkpoint",
+        "description": "Resolve a dependency-scoped course checkpoint.",
+        "inputSchema": _object_schema(
+            ("repo", "course_key", "checkpoint_key", "status"),
+            {
+                **COURSE,
+                "checkpoint_key": {"type": "string"},
+                "status": {"type": "string", "enum": ["approved", "blocked", "resolved", "waived"]},
+                "resolved_by": {"type": "string"},
+                "evidence": {"type": "array", "items": {"type": "string"}},
+            },
+        ),
+    },
+    {
+        "name": "captains_chair_attention_ack",
+        "description": "Acknowledge one repeated attention item after the builder has seen it.",
+        "inputSchema": _object_schema(
+            ("repo", "fingerprint"),
+            {**REPO, "fingerprint": {"type": "string"}, "event_type": {"type": "string"}},
+        ),
+    },
+    {
+        "name": "captains_chair_ready_work",
+        "description": "Discover dependency-ready work packages for an engaged course.",
+        "inputSchema": _object_schema(("repo", "course_key"), COURSE),
+    },
+    {
+        "name": "captains_chair_worker_discover",
+        "description": "List runtime-neutral direct worker cards and their current lifecycle state.",
+        "inputSchema": _object_schema(("repo",), REPO),
+    },
+    {
+        "name": "captains_chair_worker_claim",
+        "description": "Claim a ready direct-worker card or the next dependency-ready card.",
+        "inputSchema": _object_schema(
+            ("repo", "owner_id", "claim_token"),
+            {
+                **REPO,
+                "card": {"type": "string"},
+                "agent_id": {"type": "string"},
+                "owner_id": {"type": "string"},
+                "claim_token": {"type": "string"},
+            },
+        ),
+    },
+    {
+        "name": "captains_chair_worker_heartbeat",
+        "description": "Heartbeat a claimed worker card with bounded progress evidence.",
+        "inputSchema": _object_schema(
+            ("repo", "card", "owner_id", "claim_token"),
+            {
+                **REPO,
+                "card": {"type": "string"},
+                "owner_id": {"type": "string"},
+                "claim_token": {"type": "string"},
+                "note": {"type": "string"},
+            },
+        ),
+    },
+    {
+        "name": "captains_chair_worker_complete",
+        "description": "Complete a claimed worker card with summary and verifiable proof.",
+        "inputSchema": _object_schema(
+            ("repo", "card", "owner_id", "claim_token", "summary", "proof_note"),
+            {
+                **REPO,
+                "card": {"type": "string"},
+                "owner_id": {"type": "string"},
+                "claim_token": {"type": "string"},
+                "summary": {"type": "string"},
+                "proof_note": {"type": "string"},
+                "proof_url": {"type": "string"},
+            },
+        ),
+    },
+    {
+        "name": "captains_chair_worker_block",
+        "description": "Block a claimed worker card with a precise technical or owner reason.",
+        "inputSchema": _object_schema(
+            ("repo", "card", "owner_id", "claim_token", "reason"),
+            {
+                **REPO,
+                "card": {"type": "string"},
+                "owner_id": {"type": "string"},
+                "claim_token": {"type": "string"},
+                "reason": {"type": "string"},
+            },
+        ),
     },
 )
 
@@ -93,6 +222,21 @@ def _run_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     repo = str(arguments.get("repo") or "").strip()
     harness = str(arguments.get("harness") or "").strip()
     command: list[str]
+    sidecar_methods = {
+        "captains_chair_course_create": "course.create",
+        "captains_chair_course_readiness": "course.get",
+        "captains_chair_course_answer": "course.requirement",
+        "captains_chair_course_approve": "course.approve",
+        "captains_chair_course_pause": "course.pause",
+        "captains_chair_course_resume": "course.resume",
+        "captains_chair_course_checkpoint": "course.checkpoint",
+        "captains_chair_ready_work": "course.ready_work",
+    }
+    if name in sidecar_methods:
+        params = {**arguments, "full_name": repo}
+        params.pop("config_path", None)
+        params.pop("repo", None)
+        return {"exit_code": 0, "result": SidecarServer(Path(config)).request(sidecar_methods[name], params)}
     if name == "captains_chair_doctor":
         command = ["doctor"]
     elif name == "captains_chair_baseline":
@@ -121,6 +265,45 @@ def _run_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         command = ["usage", "report"]
         if repo:
             command.extend(["--repo", repo])
+    elif name == "captains_chair_attention_ack":
+        if not repo or not str(arguments.get("fingerprint") or "").strip():
+            raise ValueError("attention acknowledgement requires repo and fingerprint")
+        command = ["ack", "--repo", repo, "--fingerprint", str(arguments["fingerprint"])]
+        if str(arguments.get("event_type") or "").strip():
+            command.extend(["--event-type", str(arguments["event_type"])])
+    elif name == "captains_chair_worker_discover":
+        if not repo:
+            raise ValueError("worker discovery requires repo")
+        command = ["orchestrate", "status", "--repo", repo]
+    elif name.startswith("captains_chair_worker_"):
+        action = name.removeprefix("captains_chair_worker_")
+        if (
+            not repo
+            or not str(arguments.get("owner_id") or "").strip()
+            or not str(arguments.get("claim_token") or "")
+        ):
+            raise ValueError(f"worker {action} requires repo, owner_id, and claim_token")
+        command = [
+            "worker-protocol",
+            action,
+            "--repo",
+            repo,
+            "--owner-id",
+            str(arguments["owner_id"]),
+            "--token",
+            str(arguments["claim_token"]),
+        ]
+        for key, option in (
+            ("card", "--card"),
+            ("agent_id", "--agent-id"),
+            ("note", "--note"),
+            ("summary", "--summary"),
+            ("proof_note", "--proof-note"),
+            ("proof_url", "--proof-url"),
+            ("reason", "--reason"),
+        ):
+            if arguments.get(key) is not None:
+                command.extend([option, str(arguments[key])])
     else:
         raise ValueError(f"unknown tool: {name}")
 

@@ -180,8 +180,10 @@ engages the course, so a half-formed idea cannot silently become a public reposi
 ## Codex P1 host
 
 `codex-plugin/captains-chair/` is the Codex boundary. Its MCP bridge exposes
-doctor, baseline, status, bounded-cycle, and token-report tools, while the
-`DirectOrchestrator` keeps workflow state durable without requiring a kanban
-board. The plugin's `serve_ui.py` hosts the same React build used by OpenClaw
-and proxies its API to the Python sidecar. Codex-specific process details stay
-inside this plugin; the core remains usable by another harness adapter.
+doctor, baseline, status, bounded-cycle, token-report, course control, readiness,
+checkpoint, attention, and claimed-worker lifecycle tools. `DirectOrchestrator`
+keeps workflow state durable without requiring a kanban board. The plugin's
+`serve_ui.py` hosts the same React build used by OpenClaw and proxies its API to
+the Python sidecar with loopback defaults, same-origin checks, security headers,
+and token-required remote binding. Codex-specific process details stay inside
+this plugin; the core remains usable by another harness adapter.
