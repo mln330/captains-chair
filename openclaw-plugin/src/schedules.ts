@@ -7,12 +7,32 @@ export type ScheduleDefinition = {
 
 export type CronJob = Record<string, unknown>;
 
+export type OpenClawCommandResult = {
+  code?: number;
+  stdout?: unknown;
+  stderr?: unknown;
+};
+
+export type OpenClawCommandRunner = (
+  argv: string[],
+  options?: { timeoutMs?: number },
+) => Promise<OpenClawCommandResult>;
+
 export type ScheduleInspection = {
   primary?: CronJob;
   duplicates: CronJob[];
   drift: string[];
   enabled: boolean;
 };
+
+export async function runOpenClawCommand(
+  runner: OpenClawCommandRunner,
+  executable: string,
+  args: string[],
+  timeoutMs = 120_000,
+): Promise<OpenClawCommandResult> {
+  return runner([executable, ...args], { timeoutMs });
+}
 
 export function parseCronJobs(stdout: string): CronJob[] {
   let parsed: unknown;
