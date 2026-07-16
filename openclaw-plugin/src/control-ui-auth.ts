@@ -1,5 +1,6 @@
 const CONTROL_UI_PATH = "/plugin";
 const PLUGIN_ID = "captains-chair";
+const PLUGIN_UI_PATH = "/captains-chair/";
 
 type RequestLike = { method?: string; headers?: Record<string, unknown> };
 
@@ -17,14 +18,16 @@ function header(request: RequestLike, name: string): string | undefined {
 export function isCaptainUiRequest(request: RequestLike): boolean {
   const site = header(request, "sec-fetch-site")?.toLowerCase();
   if (site === "same-origin") return true;
+  if (header(request, "origin")?.toLowerCase() === "null") return true;
 
   const referer = header(request, "referer") ?? header(request, "referrer");
   if (!referer) return false;
   try {
     const url = new URL(referer);
-    return url.pathname === CONTROL_UI_PATH
+    return (url.pathname === CONTROL_UI_PATH
       && url.searchParams.get("plugin") === PLUGIN_ID
-      && url.searchParams.get("id") === PLUGIN_ID;
+      && url.searchParams.get("id") === PLUGIN_ID)
+      || url.pathname === PLUGIN_UI_PATH;
   } catch {
     return false;
   }

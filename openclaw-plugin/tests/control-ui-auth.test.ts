@@ -8,6 +8,8 @@ describe("Captain's Chair Control UI route guard", () => {
 
   it("accepts a dashboard referer when fetch metadata is unavailable", () => {
     expect(isCaptainUiRequest({ headers: { referer: "https://openclaw.example/plugin?plugin=captains-chair&id=captains-chair" } })).toBe(true);
+    expect(isCaptainUiRequest({ headers: { referer: "https://openclaw.example/captains-chair/" } })).toBe(true);
+    expect(isCaptainUiRequest({ headers: { origin: "null" } })).toBe(true);
   });
 
   it("rejects direct and cross-site requests", () => {
