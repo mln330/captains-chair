@@ -6,8 +6,8 @@ import json
 import sys
 from pathlib import Path
 
-LINE_FLOOR = 85.0
-BRANCH_FLOOR = 70.0
+LINE_FLOOR = 90.0
+BRANCH_FLOOR = 85.0
 LINE_TARGET = 90.0
 BRANCH_TARGET = 85.0
 

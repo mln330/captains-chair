@@ -369,6 +369,7 @@ def test_standalone_server_requires_and_enforces_token_for_remote_binding(tmp_pa
         with pytest.raises(urllib.error.HTTPError) as unauthorized:
             urllib.request.urlopen(f"{base_url}/", timeout=5)
         assert unauthorized.value.code == 401
+        unauthorized.value.close()
         request = urllib.request.Request(
             f"{base_url}/api/portfolio/status",
             data=b"{}",
@@ -383,3 +384,7 @@ def test_standalone_server_requires_and_enforces_token_for_remote_binding(tmp_pa
     finally:
         process.terminate()
         process.wait(timeout=10)
+        if process.stdout is not None:
+            process.stdout.close()
+        if process.stderr is not None:
+            process.stderr.close()

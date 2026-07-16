@@ -23,7 +23,11 @@ jobs:
       - run: python -m pip install -e ".[dev]"
       - run: ruff check .
       - run: pyright
-      - run: python -W error::ResourceWarning -m pytest --cov=captains_chair --cov-branch --cov-report=term-missing --cov-report=json:coverage.json
+      - run: >-
+          python -W error::ResourceWarning -m pytest
+          --cov=captains_chair --cov-branch
+          --cov-report=term-missing --cov-report=json:coverage.json
+          --junitxml=pytest-results.xml
       - run: python scripts/check_coverage.py coverage.json
       - name: Enforce portable-core coverage
         run: >-
@@ -31,6 +35,15 @@ jobs:
           --include='src/captains_chair/models.py,src/captains_chair/orchestration.py,src/captains_chair/policy.py,src/captains_chair/state.py,src/captains_chair/openclaw_workboard.py,src/captains_chair/openclaw_runtime.py,src/captains_chair/merge_gate.py,src/captains_chair/queue_events.py'
           --fail-under=80
       - run: python -m build
+      - name: Publish Python evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-evidence-${{ matrix.python-version }}
+          path: |
+            coverage.json
+            pytest-results.xml
+          if-no-files-found: error
 
   test-windows:
     runs-on: windows-latest
@@ -89,6 +102,31 @@ jobs:
         working-directory: openclaw-plugin
       - run: npm audit --omit=optional --audit-level=high
         working-directory: openclaw-plugin
+
+  conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e ".[dev]"
+      - name: Run runtime-neutral lifecycle conformance
+        run: >-
+          python -m pytest
+          tests/test_openclaw_conformance.py
+          tests/test_codex_plugin.py
+          tests/test_disposable_repository_e2e.py
+          tests/test_orchestration_e2e.py
+          --junitxml=conformance-results.xml
+      - name: Publish conformance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-conformance
+          path: conformance-results.xml
+          if-no-files-found: error
 
   secrets:
     runs-on: ubuntu-latest
