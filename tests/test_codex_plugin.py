@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import importlib
 import json
 import os
 import runpy
@@ -106,6 +107,13 @@ def test_codex_tools_create_and_control_every_course_type(tmp_path: Path) -> Non
         course = ready_course().model_copy(
             update={"key": f"{kind.value}-course", "kind": kind, "title": f"{kind.value} course"}
         )
+        review = getattr(course, "readiness_review", None)
+        if review is not None:
+            readiness_module = importlib.import_module("captains_chair.readiness")
+            input_sha = cast(Any, readiness_module).readiness_input_sha(course)
+            course = course.model_copy(
+                update={"readiness_review": review.model_copy(update={"input_sha": input_sha})}
+            )
         arguments = {
             "config_path": str(config_path),
             "repo": "example/project",
