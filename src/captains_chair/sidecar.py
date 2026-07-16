@@ -46,6 +46,7 @@ from captains_chair.models import (
     RepoConfig,
     RepositoryProvisioningConfig,
     RequirementStatus,
+    ScheduleConfig,
     UsageConfig,
 )
 from captains_chair.state import StateStore
@@ -126,6 +127,10 @@ class SidecarServer:
             return self._set_course_status(payload, resume_course)
         if method == "schedule.describe":
             return self._schedule_description()
+        if method == "schedule.configure":
+            return self._configure_schedules(payload)
+        if method == "attention.ack":
+            return self._acknowledge_attention(payload)
         if method == "run.once":
             return self._run_once(str(payload.get("kind") or "reconcile"))
         raise SidecarError(f"unknown sidecar method: {method}")
@@ -161,6 +166,8 @@ class SidecarServer:
             "completion_policy": repo.completion_policy.value,
             "state": self.state.current_state(repo.full_name).value,
             "orchestrator": repo.orchestrator or "direct",
+            "orchestration_board": repo.orchestration_board,
+            "schedule_enabled": repo.schedule_enabled,
             "notification_route": repo.notification.route,
             "surfaces": sorted(surface.value for surface in repo.surfaces),
             "qa_profiles": [profile.model_dump(mode="json") for profile in repo.qa_profiles],
@@ -174,6 +181,7 @@ class SidecarServer:
                 "efficiency": usage["efficiency"],
                 "failed_attempts": usage["failed_attempts"],
                 "warnings": usage["warnings"][:5],
+                "dimensions": self.state.usage_dimensions(repo.full_name)[:50],
             },
             "telemetry": usage["telemetry"],
             "warnings": usage["warnings"][:5],
@@ -277,6 +285,7 @@ class SidecarServer:
                 "model_profiles",
                 "surfaces",
                 "qa_profiles",
+                "schedule_enabled",
             }
         }
         if "notification_route" in payload:
@@ -749,18 +758,51 @@ class SidecarServer:
             "jobs": [
                 {
                     "name": "captains-chair-reconcile",
-                    "every": "5m",
+                    "every": self.config.schedules.reconcile_every,
                     "kind": "reconcile",
                     "command": ["python", "-m", "captains_chair.sidecar", "--once", "reconcile"],
                 },
                 {
                     "name": "captains-chair-course-review",
-                    "every": "2h",
+                    "every": self.config.schedules.review_every,
                     "kind": "review",
                     "command": ["python", "-m", "captains_chair.sidecar", "--once", "review"],
                 },
             ],
             "install_requires_operator_action": True,
+            "repository_enablement": {
+                repo.full_name: repo.schedule_enabled for repo in self.config.repos
+            },
+        }
+
+    def _configure_schedules(self, payload: dict[str, Any]) -> dict[str, Any]:
+        allowed = {
+            key: payload[key]
+            for key in ("reconcile_every", "review_every")
+            if key in payload
+        }
+        try:
+            schedules = ScheduleConfig.model_validate(
+                {**self.config.schedules.model_dump(mode="python"), **allowed}
+            )
+        except ValueError as exc:
+            raise SidecarError(f"invalid schedule configuration: {exc}") from exc
+        self._write_config(self.config.model_copy(update={"schedules": schedules}))
+        return {"status": "updated", **self._schedule_description()}
+
+    def _acknowledge_attention(self, payload: dict[str, Any]) -> dict[str, Any]:
+        full_name = str(payload.get("full_name") or "").strip()
+        fingerprint = str(payload.get("fingerprint") or "").strip()
+        event_type = str(payload.get("event_type") or "").strip() or None
+        if not full_name or not fingerprint:
+            raise SidecarError("attention.ack requires full_name and fingerprint")
+        self.config.repo(full_name)
+        count = self.state.acknowledge_attention(full_name, fingerprint, event_type)
+        return {
+            "status": "acknowledged",
+            "repository": full_name,
+            "fingerprint": fingerprint,
+            "count": count,
         }
 
     def _run_once(self, kind: str) -> dict[str, Any]:
@@ -776,6 +818,9 @@ class SidecarServer:
         for repo in self.config.repos:
             if repo.operation_mode.value == "disabled":
                 rows.append({"repo": repo.full_name, "status": "disabled", "exit_code": 0})
+                continue
+            if not repo.schedule_enabled:
+                rows.append({"repo": repo.full_name, "status": "skipped", "exit_code": 0})
                 continue
             command = [
                 sys.executable,

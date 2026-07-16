@@ -7,6 +7,13 @@ export type ScheduleDefinition = {
 
 export type CronJob = Record<string, unknown>;
 
+export type ScheduleInspection = {
+  primary?: CronJob;
+  duplicates: CronJob[];
+  drift: string[];
+  enabled: boolean;
+};
+
 export function parseCronJobs(stdout: string): CronJob[] {
   let parsed: unknown;
   try {
@@ -14,11 +21,8 @@ export function parseCronJobs(stdout: string): CronJob[] {
   } catch (error) {
     throw new Error(`OpenClaw returned invalid cron JSON: ${String(error)}`);
   }
-
   if (Array.isArray(parsed)) return parsed.filter(isRecord);
-  if (isRecord(parsed) && Array.isArray(parsed.jobs)) {
-    return parsed.jobs.filter(isRecord);
-  }
+  if (isRecord(parsed) && Array.isArray(parsed.jobs)) return parsed.jobs.filter(isRecord);
   throw new Error("OpenClaw cron JSON did not contain a jobs array");
 }
 
@@ -28,8 +32,6 @@ export function buildCommandArgv(
   configPath: string,
 ): string[] {
   if (job.command.length === 0) throw new Error(`schedule ${job.name} has no command`);
-  // The sidecar description uses python as a portable executable placeholder;
-  // the plugin replaces only that executable and keeps the remaining argv exact.
   const command = job.command[0].toLowerCase().includes("python")
     ? [pythonExecutable, ...job.command.slice(1)]
     : [...job.command];
@@ -42,55 +44,63 @@ export function buildCronAddArgs(
   configPath: string,
   cwd: string,
 ): string[] {
-  const commandArgv = buildCommandArgv(job, pythonExecutable, configPath);
   return [
-    "cron",
-    "add",
-    "--name",
-    job.name,
-    "--every",
-    job.every,
-    "--command-argv",
-    JSON.stringify(commandArgv),
-    "--command-cwd",
-    cwd,
-    "--no-deliver",
-    "--json",
+    "cron", "add", "--name", job.name, "--every", job.every,
+    "--command-argv", JSON.stringify(buildCommandArgv(job, pythonExecutable, configPath)),
+    "--command-cwd", cwd, "--no-deliver", "--json",
   ];
 }
 
+export function buildCronEditArgs(
+  id: string,
+  job: ScheduleDefinition,
+  pythonExecutable: string,
+  configPath: string,
+  cwd: string,
+): string[] {
+  return [
+    "cron", "edit", id, "--name", job.name, "--every", job.every,
+    "--command-argv", JSON.stringify(buildCommandArgv(job, pythonExecutable, configPath)),
+    "--command-cwd", cwd, "--no-deliver",
+  ];
+}
+
+export function inspectCronJob(
+  jobs: CronJob[],
+  definition: ScheduleDefinition,
+  pythonExecutable: string,
+  configPath: string,
+): ScheduleInspection {
+  const matching = jobs.filter((job) => job.name === definition.name);
+  const primary = matching[0];
+  if (!primary) return { duplicates: [], drift: ["missing"], enabled: false };
+  const drift: string[] = [];
+  try {
+    if (readEvery(primary) !== definition.every) drift.push("interval");
+  } catch {
+    drift.push("interval_unreadable");
+  }
+  const actualArgv = readArgv(primary);
+  if (!actualArgv) drift.push("command_unreadable");
+  else if (!sameArray(actualArgv, buildCommandArgv(definition, pythonExecutable, configPath))) {
+    drift.push("command");
+  }
+  return {
+    primary,
+    duplicates: matching.slice(1),
+    drift,
+    enabled: primary.enabled !== false,
+  };
+}
+
+/** Compatibility helper retained for extensions that only need the primary job. */
 export function findExistingCronJob(
   jobs: CronJob[],
   definition: ScheduleDefinition,
   pythonExecutable: string,
   configPath: string,
 ): CronJob | undefined {
-  const expectedArgv = buildCommandArgv(definition, pythonExecutable, configPath);
-  const existing = jobs.find((job) => job.name === definition.name);
-  if (!existing) return undefined;
-
-  const id = stringValue(existing.id);
-  if (!id) throw new Error(`OpenClaw schedule ${definition.name} has no ID`);
-
-  const existingEvery = readEvery(existing);
-  if (existingEvery !== definition.every) {
-    throw new Error(
-      `OpenClaw schedule ${definition.name} already exists with a different interval`,
-    );
-  }
-
-  const actualArgv = readArgv(existing);
-  if (!actualArgv) {
-    throw new Error(
-      `OpenClaw schedule ${definition.name} exists but its command cannot be verified`,
-    );
-  }
-  if (!sameArray(actualArgv, expectedArgv)) {
-    throw new Error(
-      `OpenClaw schedule ${definition.name} already exists with a different command`,
-    );
-  }
-  return existing;
+  return inspectCronJob(jobs, definition, pythonExecutable, configPath).primary;
 }
 
 export function cronIdentifier(job: CronJob): string {
@@ -111,16 +121,9 @@ function readEvery(job: CronJob): string {
 
 function readArgv(job: CronJob): string[] | undefined {
   const payload = isRecord(job.payload) ? job.payload : undefined;
-  const candidates: unknown[] = [
-    payload?.argv,
-    payload?.commandArgv,
-    job.argv,
-    job.commandArgv,
-  ];
+  const candidates: unknown[] = [payload?.argv, payload?.commandArgv, job.argv, job.commandArgv];
   const value = candidates.find((candidate) => Array.isArray(candidate));
-  return Array.isArray(value) && value.every((item) => typeof item === "string")
-    ? value
-    : undefined;
+  return Array.isArray(value) && value.every((item) => typeof item === "string") ? value : undefined;
 }
 
 function millisecondsToEvery(value: number): string {

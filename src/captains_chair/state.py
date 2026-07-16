@@ -200,6 +200,9 @@ class StateStore:
                     session_id TEXT,
                     runtime TEXT NOT NULL DEFAULT 'legacy',
                     role TEXT NOT NULL,
+                    course_key TEXT,
+                    work_package_key TEXT,
+                    stage TEXT,
                     resolved_model TEXT,
                     attempts_json TEXT NOT NULL,
                     input_tokens INTEGER,
@@ -303,6 +306,9 @@ class StateStore:
                 "model_mismatch_count": "INTEGER NOT NULL DEFAULT 0",
                 "duration_ms": "INTEGER NOT NULL DEFAULT 0",
                 "prompt_fingerprint": "TEXT",
+                "course_key": "TEXT",
+                "work_package_key": "TEXT",
+                "stage": "TEXT",
             }
             for name, definition in migrations.items():
                 if name not in columns:
@@ -687,6 +693,9 @@ class StateStore:
         prompt_fingerprint: str | None = None,
         session_id: str | None = None,
         runtime: str = "captains_chair",
+        course_key: str | None = None,
+        work_package_key: str | None = None,
+        stage: str | None = None,
     ) -> None:
         serialized = attempts if isinstance(attempts, str) else json.dumps(attempts, default=str)
         if prompt is not None:
@@ -716,16 +725,19 @@ class StateStore:
         usage_known = int(any(value is not None for value in (input_tokens, cached_input_tokens, output_tokens, total_tokens)))
         with self._connect() as conn:
             conn.execute(
-                "INSERT INTO model_calls(repo,run_id,session_id,runtime,role,resolved_model,attempts_json,input_tokens,"
+                "INSERT INTO model_calls(repo,run_id,session_id,runtime,role,course_key,work_package_key,stage,resolved_model,attempts_json,input_tokens,"
                 "cached_input_tokens,reasoning_tokens,output_tokens,total_tokens,prompt_bytes,response_bytes,usage_known,"
                 "fallback_count,model_mismatch_count,duration_ms,prompt_fingerprint,created_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     repo,
                     run_id,
                     session_id,
                     runtime.strip() or "captains_chair",
                     role,
+                    course_key,
+                    work_package_key,
+                    stage or role,
                     resolved_model,
                     serialized,
                     input_tokens,
@@ -743,6 +755,19 @@ class StateStore:
                     datetime.now(UTC).isoformat(),
                 ),
             )
+
+    def usage_dimensions(self, repo: str) -> list[dict[str, Any]]:
+        """Group direct provider telemetry by the operator-facing workflow dimensions."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT substr(created_at,1,10) AS date, course_key, work_package_key, "
+                "COALESCE(stage, role) AS stage, resolved_model AS model, COUNT(*) AS calls, "
+                "SUM(COALESCE(total_tokens, COALESCE(input_tokens,0) + COALESCE(cached_input_tokens,0) + COALESCE(output_tokens,0))) AS tokens "
+                "FROM model_calls WHERE repo=? GROUP BY date,course_key,work_package_key,stage,resolved_model "
+                "ORDER BY date DESC,tokens DESC",
+                (repo,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def direct_session_ids(self, repo: str) -> set[str]:
         """Return opaque direct-harness IDs that may be correlated with OpenClaw sessions."""

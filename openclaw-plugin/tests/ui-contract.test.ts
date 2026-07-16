@@ -11,7 +11,8 @@ describe("shared control UI contract", () => {
     expect(source).toContain("Create from the Chair");
     expect(source).toContain("repos/create");
     expect(source).toContain("repository is created only after the course passes readiness");
-    expect(source).toContain("Install schedules");
+    expect(source).toContain("Managed schedules");
+    expect(source).toContain("Save cadence");
     expect(source).toContain("Application surface");
     expect(source).toContain("model_profiles");
     expect(source).toContain("models/validate");
@@ -29,6 +30,8 @@ describe("shared control UI contract", () => {
     expect(source).toContain("Open planning brief");
     expect(source).toContain("course/requirement");
     expect(source).toContain("Attention queue");
-    expect(source).toContain("Tokens by model");
+    expect(source).toContain("Acknowledge");
+    expect(source).toContain("Work-package dependency map");
+    expect(source).toContain("Token efficiency by course, package, stage, model, and date");
   });
 });

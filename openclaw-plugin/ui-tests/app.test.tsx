@@ -12,6 +12,7 @@ const repo = {
   operation_mode: "advisory",
   completion_policy: "owner_approval",
   state: "ready",
+  schedule_enabled: true,
   notification_route: "notifications",
   surfaces: ["web_ui"],
   tokens: { total_tokens: 1200 },
@@ -42,6 +43,7 @@ describe("shared dashboard components", () => {
         if (path.includes("portfolio/status")) return Promise.resolve(response({ repos: [repo] }));
         if (path.includes("courses/list")) return Promise.resolve(response({ courses: [{ repository: repo.full_name, course, readiness: { ready: true } }] }));
         if (path.includes("models/config")) return Promise.resolve(response({ global_profiles: {}, runtime_profiles: {}, runtimes: ["openclaw"], usage: { daily_token_limit: null, model_daily_token_limits: {}, block_on_unknown: true } }));
+        if (path.includes("schedule/status")) return Promise.resolve(response({ status: "inspected", jobs: [{ name: "captains-chair-course-review", every: "2h", enabled: true, health: "healthy" }, { name: "captains-chair-reconcile", every: "5m", enabled: true, health: "healthy" }] }));
         if (path.includes("schedule/install")) return Promise.resolve(response({ jobs: [{ name: "captains-chair-course-review" }] }));
         return Promise.resolve(response({ status: "updated" }));
       }),
@@ -58,9 +60,9 @@ describe("shared dashboard components", () => {
 
     await waitFor(() => expect(screen.getByText("example/project")).toBeTruthy());
     expect(screen.getByText("Search feature")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Install schedules" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reconcile" }));
 
-    await waitFor(() => expect(screen.getByRole("status").textContent).toContain("captains-chair-course-review"));
+    await waitFor(() => expect(screen.getByRole("status").textContent).toContain("Schedule install"));
   });
 
   it("opens repository registration and sends the submitted fields", async () => {

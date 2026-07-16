@@ -297,6 +297,10 @@ class ControlPlaneEngine:
         role: str,
         result: Any,
         prompt: str,
+        *,
+        course_key: str | None = None,
+        work_package_key: str | None = None,
+        stage: str | None = None,
     ) -> None:
         """Persist model-cost telemetry without retaining prompt contents."""
         self.state.record_model_call(
@@ -308,6 +312,9 @@ class ControlPlaneEngine:
             prompt_fingerprint=_fingerprint(prompt),
             session_id=result.session_id,
             runtime=self._runtime_name(),
+            course_key=course_key,
+            work_package_key=work_package_key,
+            stage=stage or role,
         )
 
     def run_model(
@@ -321,6 +328,9 @@ class ControlPlaneEngine:
         output_model: type[Any],
         cwd: Path,
         writable: bool,
+        course_key: str | None = None,
+        work_package_key: str | None = None,
+        stage: str | None = None,
     ) -> Any:
         if repo.operation_mode == OperationMode.DISABLED:
             raise ModelCallSuppressedError(
@@ -392,9 +402,21 @@ class ControlPlaneEngine:
                     prompt=prompt,
                     session_id=exc.session_id,
                     runtime=self._runtime_name(),
+                    course_key=course_key,
+                    work_package_key=work_package_key,
+                    stage=stage or role,
                 )
             raise
-        self._record_model_call(repo.full_name, run_id, role, result, prompt)
+        self._record_model_call(
+            repo.full_name,
+            run_id,
+            role,
+            result,
+            prompt,
+            course_key=course_key,
+            work_package_key=work_package_key,
+            stage=stage,
+        )
         return result
 
     def _model_suppressed_result(
@@ -1551,6 +1573,8 @@ class ControlPlaneEngine:
             output_model=PlanDecision,
             cwd=repo.local_path,
             writable=False,
+            course_key=course.key if course else None,
+            stage="planning",
         )
         return PlanDecision.model_validate(result.output), {
             "model": result.resolved_model,
@@ -2141,6 +2165,9 @@ class ControlPlaneEngine:
                 output_model=WorkerResult,
                 cwd=worktree.path,
                 writable=True,
+                course_key=decision.course_key,
+                work_package_key=decision.work_package_key,
+                stage="implementation",
             )
             _worker_result_or_raise(result.output)
             self._assert_worktree_identity(worktree)
@@ -2255,6 +2282,9 @@ class ControlPlaneEngine:
                 output_model=WorkerResult,
                 cwd=worktree.path,
                 writable=True,
+                course_key=decision.course_key,
+                work_package_key=decision.work_package_key,
+                stage="repair",
             )
             _worker_result_or_raise(result.output)
             self._assert_worktree_identity(worktree)
@@ -2374,6 +2404,9 @@ class ControlPlaneEngine:
             output_model=CommentTriage,
             cwd=repo.local_path,
             writable=False,
+            course_key=decision.course_key,
+            work_package_key=decision.work_package_key,
+            stage="comment_adjudication",
         )
         triage = CommentTriage.model_validate(result.output)
         if triage.head_sha != head_sha:
@@ -2450,6 +2483,9 @@ class ControlPlaneEngine:
                 output_model=UXReview,
                 cwd=worktree.path,
                 writable=False,
+                course_key=decision.course_key,
+                work_package_key=decision.work_package_key,
+                stage="ux_review",
             )
             review = UXReview.model_validate(result.output)
             cleanup_warning = self._cleanup_successful_worktree(repo, worktree)
@@ -2558,6 +2594,9 @@ class ControlPlaneEngine:
             output_model=IndependentReview,
             cwd=repo.local_path,
             writable=False,
+            course_key=decision.course_key,
+            work_package_key=decision.work_package_key,
+            stage="independent_review",
         )
         independent = IndependentReview.model_validate(independent_result.output)
         if independent.verdict == ReviewVerdict.REQUEST_CHANGES:
@@ -2653,6 +2692,9 @@ class ControlPlaneEngine:
             output_model=FinalReview,
             cwd=repo.local_path,
             writable=False,
+            course_key=decision.course_key,
+            work_package_key=decision.work_package_key,
+            stage="final_review",
         )
         final = FinalReview.model_validate(final_result.output)
         if final.owner_blocker:

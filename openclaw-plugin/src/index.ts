@@ -5,8 +5,9 @@ import { readFile } from "node:fs/promises";
 import { SidecarSupervisor, type RpcResult } from "./sidecar.js";
 import {
   buildCronAddArgs,
+  buildCronEditArgs,
   cronIdentifier,
-  findExistingCronJob,
+  inspectCronJob,
   parseCronJobs,
   type ScheduleDefinition,
 } from "./schedules.js";
@@ -35,6 +36,15 @@ type Api = {
   }) => void;
   registerService?: (service: { id: string; start: () => Promise<void>; stop: () => Promise<void> }) => void;
   registerCli?: (registrar: (context: { program: any }) => Promise<void>, opts: Record<string, unknown>) => void;
+  registerCommand?: (command: {
+    name: string;
+    description: string;
+    acceptsArgs?: boolean;
+    requireAuth?: boolean;
+    requiredScopes?: string[];
+    exposeSenderIsOwner?: boolean;
+    handler: (context: { args?: string; senderId?: string; senderIsOwner?: boolean; gatewayClientScopes?: string[] }) => Promise<{ text: string }>;
+  }) => void;
   session?: { controls?: { registerControlUiDescriptor?: (descriptor: Record<string, unknown>) => void } };
   runtime?: {
     system?: { runCommandWithTimeout?: (command: string, args: string[], options?: Record<string, unknown>) => Promise<any> };
@@ -191,6 +201,8 @@ export default definePluginEntry({
     apiRoute("/captains-chair/api/course/pause", "course.pause");
     apiRoute("/captains-chair/api/course/resume", "course.resume");
     apiRoute("/captains-chair/api/schedule/describe", "schedule.describe");
+    apiRoute("/captains-chair/api/schedule/configure", "schedule.configure");
+    apiRoute("/captains-chair/api/attention/ack", "attention.ack");
 
     api.registerTool?.({
       name: "captains_chair_course_status",
@@ -305,12 +317,11 @@ export default definePluginEntry({
     gateway("captainsChair.course.pause", "course.pause", "operator.write");
     gateway("captainsChair.course.resume", "course.resume", "operator.write");
     gateway("captainsChair.schedule.describe", "schedule.describe");
-    const installSchedules = async (): Promise<{ status: string; jobs: unknown[] }> => {
-      if (config.installSchedules !== true) {
-        throw new Error("schedule installation is disabled in plugin configuration");
-      }
+    gateway("captainsChair.schedule.configure", "schedule.configure", "operator.admin");
+    gateway("captainsChair.attention.ack", "attention.ack", "operator.write");
+    const scheduleDefinitions = async (): Promise<ScheduleDefinition[]> => {
       const description = await request("schedule.describe");
-      const jobs = Array.isArray(description.jobs)
+      return Array.isArray(description.jobs)
         ? description.jobs.filter((job): job is ScheduleDefinition => {
             return Boolean(
               job &&
@@ -322,42 +333,101 @@ export default definePluginEntry({
             );
           })
         : [];
-      const executable = configString(config, "openclawExecutable", "openclaw");
-      const runCommand = api.runtime?.system?.runCommandWithTimeout;
+    };
+    const executable = configString(config, "openclawExecutable", "openclaw");
+    const runCommand = api.runtime?.system?.runCommandWithTimeout;
+    const invokeCron = async (args: string[]): Promise<CommandResult> => {
       if (!runCommand) throw new Error("OpenClaw command runtime is unavailable");
-      const invoke = async (args: string[]): Promise<CommandResult> => {
-        const result = (await runCommand(executable, args, { timeoutMs: 120_000 })) as CommandResult;
-        if (typeof result?.code === "number" && result.code !== 0) {
-          throw new Error(String(result.stderr ?? `openclaw exited with code ${result.code}`));
-        }
-        return result ?? {};
+      const result = (await runCommand(executable, args, { timeoutMs: 120_000 })) as CommandResult;
+      if (typeof result?.code === "number" && result.code !== 0) {
+        throw new Error(String(result.stderr ?? `openclaw exited with code ${result.code}`));
+      }
+      return result ?? {};
+    };
+    const liveCronJobs = async () => {
+      const listed = await invokeCron(["cron", "list", "--json"]);
+      return parseCronJobs(String(listed.stdout ?? ""));
+    };
+    const scheduleStatus = async (): Promise<{ status: string; jobs: unknown[] }> => {
+      const definitions = await scheduleDefinitions();
+      const jobs = await liveCronJobs();
+      const pythonExecutable = configString(config, "pythonExecutable", "python3");
+      return {
+        status: "inspected",
+        jobs: definitions.map((definition) => {
+          const inspection = inspectCronJob(jobs, definition, pythonExecutable, configPath);
+          return {
+            name: definition.name,
+            every: definition.every,
+            id: inspection.primary ? cronIdentifier(inspection.primary) : null,
+            enabled: inspection.enabled,
+            health: !inspection.primary ? "missing" : inspection.duplicates.length ? "duplicate" : inspection.drift.length ? "drifted" : inspection.enabled ? "healthy" : "paused",
+            drift: inspection.drift,
+            duplicates: inspection.duplicates.length,
+          };
+        }),
       };
-      const listed = await invoke(["cron", "list", "--json"]);
-      const cronJobs = parseCronJobs(String(listed.stdout ?? ""));
+    };
+    const reconcileSchedules = async (): Promise<{ status: string; jobs: unknown[] }> => {
+      if (config.installSchedules !== true) throw new Error("schedule management is disabled in plugin configuration");
+      const jobs = await scheduleDefinitions();
+      const cronJobs = await liveCronJobs();
       const installed: unknown[] = [];
       const pythonExecutable = configString(config, "pythonExecutable", "python3");
       for (const job of jobs) {
-        const existing = findExistingCronJob(cronJobs, job, pythonExecutable, configPath);
-        if (existing) {
-          const id = cronIdentifier(existing);
-          const enabled = existing.enabled !== false;
-          if (!enabled) await invoke(["cron", "enable", id]);
-          installed.push({ name: job.name, id, status: enabled ? "unchanged" : "enabled" });
-          continue;
+        const inspection = inspectCronJob(cronJobs, job, pythonExecutable, configPath);
+        for (const duplicate of inspection.duplicates) {
+          await invokeCron(["cron", "rm", cronIdentifier(duplicate)]);
         }
-        const result = await invoke(buildCronAddArgs(job, pythonExecutable, configPath, dirname(configPath)));
-        installed.push({ name: job.name, status: "created", result: result.stdout ?? result });
+        if (!inspection.primary) {
+          const result = await invokeCron(buildCronAddArgs(job, pythonExecutable, configPath, dirname(configPath)));
+          installed.push({ name: job.name, status: "created", result: result.stdout ?? result });
+        } else {
+          const id = cronIdentifier(inspection.primary);
+          if (inspection.drift.length) {
+            await invokeCron(buildCronEditArgs(id, job, pythonExecutable, configPath, dirname(configPath)));
+          }
+          installed.push({ name: job.name, id, enabled: inspection.enabled, status: inspection.drift.length ? "updated" : "unchanged", removed_duplicates: inspection.duplicates.length });
+        }
       }
       return { status: "reconciled", jobs: installed };
     };
 
+    const mutateSchedules = async (action: "pause" | "resume" | "remove", name?: string) => {
+      if (config.installSchedules !== true) throw new Error("schedule management is disabled in plugin configuration");
+      if (action === "resume") await reconcileSchedules();
+      const definitions = await scheduleDefinitions();
+      const selected = name ? definitions.filter((item) => item.name === name) : definitions;
+      if (!selected.length) throw new Error(`unknown Captain's Chair schedule: ${name}`);
+      const jobs = await liveCronJobs();
+      const results: unknown[] = [];
+      for (const definition of selected) {
+        const matches = jobs.filter((job) => job.name === definition.name);
+        for (const job of matches) {
+          const id = cronIdentifier(job);
+          await invokeCron(["cron", action === "remove" ? "rm" : action === "pause" ? "disable" : "enable", id]);
+          results.push({ name: definition.name, id, status: action === "pause" ? "paused" : action === "resume" ? "enabled" : "removed" });
+        }
+      }
+      return { status: action, jobs: results };
+    };
+
     api.registerGatewayMethod?.("captainsChair.schedule.install", async ({ respond }) => {
       try {
-        respond(true, await installSchedules());
+        respond(true, await reconcileSchedules());
       } catch (error) {
         respond(false, { error: String(error) });
       }
     }, { scope: "operator.admin" });
+    api.registerGatewayMethod?.("captainsChair.schedule.status", async ({ respond }) => {
+      try { respond(true, await scheduleStatus()); } catch (error) { respond(false, { error: String(error) }); }
+    }, { scope: "operator.read" });
+    for (const action of ["pause", "resume", "remove"] as const) {
+      api.registerGatewayMethod?.(`captainsChair.schedule.${action}`, async ({ respond, params }) => {
+        try { respond(true, await mutateSchedules(action, typeof params?.name === "string" ? params.name : undefined)); }
+        catch (error) { respond(false, { error: String(error) }); }
+      }, { scope: "operator.admin" });
+    }
 
     api.registerHttpRoute?.({
       path: "/captains-chair/api/schedule/install",
@@ -365,7 +435,7 @@ export default definePluginEntry({
       gatewayRuntimeScopeSurface: "trusted-operator",
       handler: async (_req, res) => {
         try {
-          const result = await installSchedules();
+          const result = await reconcileSchedules();
           res.statusCode = 200;
           res.setHeader("content-type", "application/json; charset=utf-8");
           res.end(JSON.stringify(result));
@@ -373,6 +443,72 @@ export default definePluginEntry({
           res.statusCode = 500;
           res.end(JSON.stringify({ error: String(error) }));
         }
+      },
+    });
+
+    const scheduleRoute = (path: string, operation: (params: Record<string, unknown>) => Promise<unknown>) => {
+      api.registerHttpRoute?.({
+        path,
+        auth: "gateway",
+        gatewayRuntimeScopeSurface: "trusted-operator",
+        handler: async (req, res) => {
+          try {
+            const params = req?.body && typeof req.body === "object" ? req.body : {};
+            const result = await operation(params);
+            res.statusCode = 200;
+            res.setHeader("content-type", "application/json; charset=utf-8");
+            res.end(JSON.stringify(result));
+          } catch (error) {
+            res.statusCode = 500;
+            res.setHeader("content-type", "application/json; charset=utf-8");
+            res.end(JSON.stringify({ error: String(error) }));
+          }
+        },
+      });
+    };
+    scheduleRoute("/captains-chair/api/schedule/status", async () => scheduleStatus());
+    scheduleRoute("/captains-chair/api/schedule/pause", async (params) => mutateSchedules("pause", typeof params.name === "string" ? params.name : undefined));
+    scheduleRoute("/captains-chair/api/schedule/resume", async (params) => mutateSchedules("resume", typeof params.name === "string" ? params.name : undefined));
+    scheduleRoute("/captains-chair/api/schedule/remove", async (params) => mutateSchedules("remove", typeof params.name === "string" ? params.name : undefined));
+    scheduleRoute("/captains-chair/api/schedule/edit", async (params) => {
+      await request("schedule.configure", params);
+      return reconcileSchedules();
+    });
+
+    api.registerCommand?.({
+      name: "captains-chair",
+      description: "Inspect and control Captain's Chair courses",
+      acceptsArgs: true,
+      requireAuth: true,
+      requiredScopes: ["operator.read"],
+      exposeSenderIsOwner: true,
+      handler: async ({ args, senderId, senderIsOwner, gatewayClientScopes }) => {
+        const parts = (args ?? "status").trim().split(/\s+/).filter(Boolean);
+        const action = parts.shift()?.toLowerCase() ?? "status";
+        const actor = senderId ?? "openclaw-owner";
+        let result: RpcResult;
+        if (action === "status") {
+          result = await request("portfolio.status");
+          const repos = Array.isArray(result.repos) ? result.repos : [];
+          const selected = parts[0] ? repos.filter((item) => typeof item === "object" && item !== null && (item as { full_name?: unknown }).full_name === parts[0]) : repos;
+          const lines = selected.map((item) => {
+            const repo = item as Record<string, unknown>;
+            return `${repo.full_name}: ${repo.state} | ${repo.operation_mode} | ${repo.active_work ? "work active" : "idle"}`;
+          });
+          return { text: lines.length ? `Captain's Chair status\n${lines.join("\n")}\nDashboard: /captains-chair/` : "No matching repository is registered." };
+        }
+        const mayWrite = senderIsOwner === true || gatewayClientScopes?.some((scope) => scope === "operator.write" || scope === "operator.admin") === true;
+        if (action !== "plan" && !mayWrite) return { text: "Captain's Chair refused that mutation: owner or operator.write scope is required." };
+        const fullName = parts.shift();
+        const courseKey = parts.shift();
+        if (action === "plan" && fullName && courseKey) result = await request("course.planning_session", { full_name: fullName, course_key: courseKey });
+        else if (action === "approve" && fullName && courseKey) result = await request("course.approve", { full_name: fullName, course_key: courseKey, approved_by: actor });
+        else if ((action === "pause" || action === "resume") && fullName && courseKey) result = await request(`course.${action}`, { full_name: fullName, course_key: courseKey });
+        else if (action === "checkpoint" && fullName && courseKey && parts.length >= 2) result = await request("course.checkpoint", { full_name: fullName, course_key: courseKey, checkpoint_key: parts[0], status: parts[1], resolved_by: actor, evidence: ["openclaw-command"] });
+        else if (action === "ack" && fullName && courseKey) result = await request("attention.ack", { full_name: fullName, fingerprint: courseKey, event_type: parts[0] });
+        else return { text: "Usage: /captains-chair status [repo] | plan|approve|pause|resume <repo> <course> | checkpoint <repo> <course> <key> <status> | ack <repo> <fingerprint> [event]" };
+        const status = String(result.status ?? result.interaction ?? "completed");
+        return { text: `Captain's Chair: ${action} ${status}. Dashboard: /captains-chair/` };
       },
     });
 
@@ -384,7 +520,39 @@ export default definePluginEntry({
           process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
         });
         command.command("schedules").description("Describe Captain's Chair schedules").action(async () => {
-          const result = await request("schedule.describe");
+          const result = await scheduleStatus();
+          process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        });
+        command.command("setup").description("Validate the sidecar and install managed schedules").action(async () => {
+          const health = await request("health");
+          const schedules = await reconcileSchedules();
+          process.stdout.write(`${JSON.stringify({ health, schedules }, null, 2)}\n`);
+        });
+        command.command("diagnostics").description("Inspect sidecar and managed schedule health").action(async () => {
+          const health = await request("health");
+          const schedules = await scheduleStatus();
+          process.stdout.write(`${JSON.stringify({ health, schedules }, null, 2)}\n`);
+        });
+        command.command("migration").description("Validate configuration compatibility without mutation").action(async () => {
+          const result = await request("health");
+          process.stdout.write(`${JSON.stringify({ status: "compatible", ...result }, null, 2)}\n`);
+        });
+        command.command("recovery").description("Run one bounded reconciliation pass").action(async () => {
+          const result = await request("run.once", { kind: "reconcile" });
+          process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        });
+        const schedule = command.command("schedule").description("Manage OpenClaw Gateway schedules");
+        schedule.command("status").action(async () => process.stdout.write(`${JSON.stringify(await scheduleStatus(), null, 2)}\n`));
+        schedule.command("install").action(async () => process.stdout.write(`${JSON.stringify(await reconcileSchedules(), null, 2)}\n`));
+        for (const action of ["pause", "resume", "remove"] as const) {
+          schedule.command(`${action} [name]`).action(async (name?: string) => process.stdout.write(`${JSON.stringify(await mutateSchedules(action, name), null, 2)}\n`));
+        }
+        schedule.command("edit").option("--reconcile-every <duration>").option("--review-every <duration>").action(async (options: { reconcileEvery?: string; reviewEvery?: string }) => {
+          await request("schedule.configure", { reconcile_every: options.reconcileEvery, review_every: options.reviewEvery });
+          process.stdout.write(`${JSON.stringify(await reconcileSchedules(), null, 2)}\n`);
+        });
+        command.command("workboard <fullName> <board>").description("Configure the optional OpenClaw Workboard tracker").action(async (fullName: string, board: string) => {
+          const result = await request("repo.update", { full_name: fullName, orchestrator: "openclaw", orchestration_board: board });
           process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
         });
         command.command("plan <fullName> <courseKey>").description("Start a native planning conversation").action(async (fullName: string, courseKey: string) => {

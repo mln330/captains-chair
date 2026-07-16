@@ -532,6 +532,7 @@ class RepoConfig(StrictModel):
     require_engaged_course: bool = True
     orchestrator: str | None = None
     orchestration_board: str | None = None
+    schedule_enabled: bool = True
 
     @field_validator("planning_doc", "project_manifest")
     @classmethod
@@ -554,6 +555,11 @@ class RepoConfig(StrictModel):
         return self
 
 
+class ScheduleConfig(StrictModel):
+    reconcile_every: str = Field(default="5m", pattern=r"^[1-9][0-9]*(s|m|h|d)$")
+    review_every: str = Field(default="2h", pattern=r"^[1-9][0-9]*(s|m|h|d)$")
+
+
 class AppConfig(StrictModel):
     version: Literal[1]
     state_dir: Path
@@ -563,6 +569,7 @@ class AppConfig(StrictModel):
     models: ModelPolicy
     harness_model_overrides: dict[str, ModelPolicy] = Field(default_factory=dict)
     usage: UsageConfig = UsageConfig()
+    schedules: ScheduleConfig = ScheduleConfig()
     repos: tuple[RepoConfig, ...]
 
     @model_validator(mode="after")

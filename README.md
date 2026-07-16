@@ -144,9 +144,10 @@ failed calls, repeated prompt fingerprints, and high-consumption workflow stages
 Build the plugin and install it into the OpenClaw plugin directory from
 `openclaw-plugin/`. Configure the Python sidecar path and a config file in the
 OpenClaw host, then use the Captain's Chair tab to register repositories and
-courses. The plugin reconciles the five-minute worker schedule and two-hour
-course-review schedule without creating duplicate cron jobs. Schedule commands
-are verified before an existing job is reused.
+courses. The default five-minute worker schedule and two-hour course-review
+schedule are configurable in the dashboard or typed `schedules` configuration.
+OpenClaw remains the live schedule source of truth: reconciliation repairs drift,
+removes duplicate plugin-owned jobs, and preserves an operator-paused job.
 
 ```text
 cd openclaw-plugin
@@ -155,6 +156,14 @@ npm run check
 npm test
 npm run build
 ```
+
+Use `/captains-chair status [OWNER/REPO]` for a concise chat summary. The native
+command also supports `plan`, `approve`, `pause`, `resume`, `checkpoint`, and
+`ack`; mutating subcommands require owner or `operator.write` scope. The
+`openclaw captains-chair` CLI provides setup, diagnostics, migration validation,
+bounded recovery, schedule management, and optional Workboard configuration.
+The dashboard exposes the same schedule state and controls, including per-repo
+scheduled-run enablement.
 
 The first course remains in readiness review until the builder approves it.
 Autonomy and merge policy are configured separately, so a course can continue

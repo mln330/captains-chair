@@ -50,7 +50,7 @@ h3 { font-size: 17px; margin-bottom: 5px; }
 .secondary { border: 1px solid #405154; background: #182326; color: #dce9e8; }
 .secondary:disabled { opacity: .5; cursor: not-allowed; }
 .alert { background: #482e34; border: 1px solid #9d5964; color: #ffd5da; margin: 22px 0 0; padding: 12px 14px; border-radius: 6px; }
-.register-panel, .courses { border-top: 1px solid #2e3b3e; padding: 30px 0; }
+.register-panel, .courses, .schedule-section, .model-policy-panel { border-top: 1px solid #2e3b3e; padding: 30px 0; }
 .register-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 20px; max-width: 860px; }
 .register-form label, .settings-grid label, fieldset label { color: #b5c3c5; display: grid; font-size: 12px; gap: 6px; }
 input, select, textarea { width: 100%; min-height: 38px; border: 1px solid #405154; border-radius: 5px; background: #101719; color: #f2f5f7; padding: 8px 10px; font: inherit; }
@@ -111,6 +111,24 @@ legend { color: #7fc7c0; font-size: 12px; padding: 0 5px; }
 .token-row { align-items: center; border-top: 1px solid #2e3b3e; display: flex; gap: 10px; justify-content: space-between; padding: 10px 0; }
 .token-row span { color: #b5c3c5; font-size: 12px; overflow-wrap: anywhere; }
 .token-row strong { color: #f2f5f7; font-size: 12px; white-space: nowrap; }
+.schedule-grid { border: 1px solid #344347; border-radius: 8px; margin-top: 20px; overflow: hidden; }
+.schedule-row { align-items: center; background: #182326; border-bottom: 1px solid #2e3b3e; display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr) auto auto; padding: 14px 16px; }
+.schedule-row:last-child { border-bottom: 0; }
+.schedule-row strong, .schedule-row span { display: block; overflow-wrap: anywhere; }
+.schedule-row div > span { color: #9eb0b2; font-size: 12px; margin-top: 3px; }
+.health { border-radius: 999px; color: #d9e8e7; font-size: 12px; padding: 5px 9px; }
+.health.healthy { background: #254436; color: #cce6bc; }
+.health.paused { background: #473c22; color: #f2d993; }
+.health.missing, .health.drifted, .health.duplicate { background: #482e34; color: #ffd5da; }
+.schedule-editor { align-items: end; margin-top: 16px; }
+.inline-status { color: #b9d8d4; margin: 12px 0 0; }
+.danger { border-color: #7f4a52; color: #f0bfc6; }
+.plan-diff { border-left: 3px solid #528e89; margin: 14px 0; padding-left: 14px; }
+.plan-diff div { display: grid; gap: 10px; grid-template-columns: 110px minmax(0, 1fr); padding: 5px 0; }
+.plan-diff dt { color: #7fc7c0; font-size: 12px; font-weight: 700; }
+.plan-diff dd { color: #d9e8e7; margin: 0; overflow-wrap: anywhere; }
+.event-actions { align-items: center; display: flex; gap: 8px; margin-top: 5px; }
+.event-row a { color: #8bd0c6; font-size: 12px; }
 .course-row { align-items: center; background: #182326; border-bottom: 1px solid #2e3b3e; display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr) auto auto; padding: 16px 18px; }
 .course-row:last-child { border-bottom: 0; }
 .course-row div { min-width: 0; }
@@ -122,5 +140,5 @@ legend { color: #7fc7c0; font-size: 12px; padding: 0 5px; }
 .readiness.waiting { background: #473c22; color: #f2d993; }
 .muted { color: #9eb0b2; margin: 20px 0 0; }
 @media (max-width: 900px) { .activity-grid { grid-template-columns: 1fr; } }
-@media (max-width: 720px) { .register-form, .settings-grid, .route-grid, .route-preview { grid-template-columns: 1fr; } .course-heading, .requirement, .checkpoint { align-items: start; grid-template-columns: 1fr; } .course-form .wide { grid-column: auto; } .check-label { padding-top: 0; } }
+@media (max-width: 720px) { .register-form, .settings-grid, .route-grid, .route-preview { grid-template-columns: 1fr; } .course-heading, .requirement, .checkpoint, .schedule-row { align-items: start; grid-template-columns: 1fr; } .course-form .wide { grid-column: auto; } .check-label { padding-top: 0; } .plan-diff div { grid-template-columns: 1fr; gap: 2px; } }
 @media (max-width: 620px) { .shell { padding-top: 22px; } h1 { font-size: 34px; } .topbar { align-items: flex-start; flex-direction: column; } .repo-meta { align-items: flex-start; flex-direction: column; } }
