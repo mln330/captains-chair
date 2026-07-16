@@ -40,7 +40,9 @@ MANIFEST_NAMES = {
     "docker-compose.yml",
 }
 SOURCE_SUFFIXES = {".py", ".cs", ".ts", ".tsx", ".js", ".go", ".rs", ".java"}
-BASELINE_BATCH_CHARS = 70_000
+# OpenClaw runs model calls inside the gateway process. Keep evidence batches
+# conservative so deep baselines do not put memory pressure on small hosts.
+BASELINE_BATCH_CHARS = 24_000
 ModelInvoker = Callable[..., HarnessResult]
 
 

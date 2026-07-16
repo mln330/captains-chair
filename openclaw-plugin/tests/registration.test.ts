@@ -7,7 +7,8 @@ describe("Captain's Chair OpenClaw registration", () => {
   it("declares every agent tool in the host manifest contract", () => {
     const manifest = JSON.parse(
       readFileSync(resolve(process.cwd(), "openclaw.plugin.json"), "utf8"),
-    ) as { contracts?: { tools?: string[] } };
+    ) as { activation?: { onStartup?: boolean }; contracts?: { tools?: string[] } };
+    expect(manifest.activation?.onStartup).toBe(true);
     expect(manifest.contracts?.tools).toEqual([
       "captains_chair_course_status",
       "captains_chair_resolve_checkpoint",

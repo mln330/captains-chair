@@ -187,6 +187,49 @@ def test_create_card_uses_gateway_rpc_and_preserves_worker_metadata(tmp_path: Pa
     )
 
 
+def test_create_card_bounds_labels_for_openclaw_limit(tmp_path: Path) -> None:
+    commands: list[Sequence[str]] = []
+
+    def runner(
+        command: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        input_text: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        del cwd, input_text, timeout
+        commands.append(command)
+        return CommandResult(
+            0,
+            json.dumps(
+                {
+                    "card": {
+                        "id": "card-1",
+                        "title": "Implement issue",
+                        "status": "todo",
+                        "labels": ["captains_chair"],
+                    }
+                }
+            ),
+            "",
+        )
+
+    OpenClawWorkboardAdapter(config(), runner).create_card(
+        "board",
+        QueueCardSpec(
+            key="key",
+            title="Implement issue",
+            notes="Use the isolated worktree.",
+            labels=("repo:mln330/captains-chair-e2e-smoke-20260716-0958", " stage:implementation "),
+            workspace=WorkspaceRef(kind="dir", path=tmp_path),
+        ),
+    )
+
+    params = json.loads(list(commands[0])[list(commands[0]).index("--params") + 1])
+    assert all(len(label) <= 40 for label in params["labels"])
+    assert params["labels"] == ["repo:mln330/captains-chair-e2e-smoke-...", "stage:implementation"]
+
+
 def test_card_normalizes_metadata_workspace_push_branch() -> None:
     def runner(
         command: Sequence[str],
@@ -901,6 +944,55 @@ def test_managed_dispatch_completes_one_ready_card(monkeypatch: pytest.MonkeyPat
     assert cards["card-1"]["status"] == "done"
     assert cards["card-2"]["status"] == "ready"
     assert "workboard.cards.dispatch" not in calls
+
+
+def test_managed_dispatch_collapses_multiple_worker_proof_records(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cards = {"card-1": _managed_card("card-1", status="ready", agent_id="tester")}
+    _patch_worker_executor(
+        monkeypatch,
+        WorkerExecutionResult(
+            status="completed",
+            summary="completed",
+            proof=(
+                {"status": "passed", "note": "primary"},
+                {"status": "passed", "note": "secondary"},
+            ),
+        ),
+    )
+
+    result = OpenClawWorkboardAdapter(config(), _managed_runner(cards, [])).dispatch("board")
+
+    assert result["completed"] == ["card-1"]
+    proof = cards["card-1"]["metadata"]["proof"]
+    assert len(proof) == 1
+    assert proof[0]["note"] == "primary"
+    assert [item["note"] for item in proof[0]["evidence"]] == ["primary", "secondary"]
+
+
+def test_managed_dispatch_canonicalizes_canary_style_proof_note(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cards = {"card-1": _managed_card("card-1", status="ready", agent_id="tester")}
+    _patch_worker_executor(
+        monkeypatch,
+        WorkerExecutionResult(
+            status="completed",
+            summary="completed",
+            proof=(
+                {"command": "pwd", "output": "ok"},
+                {"proof_note": "CAPTAINS_CHAIR_CANARY_PROOF:smoke"},
+            ),
+        ),
+    )
+
+    result = OpenClawWorkboardAdapter(config(), _managed_runner(cards, [])).dispatch("board")
+
+    assert result["completed"] == ["card-1"]
+    proof = cards["card-1"]["metadata"]["proof"][0]
+    assert proof["status"] == "passed"
+    assert proof["note"] == "CAPTAINS_CHAIR_CANARY_PROOF:smoke"
 
 
 def test_managed_dispatch_promotes_dependency_ready_card(monkeypatch: pytest.MonkeyPatch) -> None:
