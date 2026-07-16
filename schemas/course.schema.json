@@ -616,6 +616,19 @@
           "title": "Evidence Sha",
           "type": "string"
         },
+        "source_evidence_sha": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Evidence Sha"
+        },
         "provider": {
           "minLength": 1,
           "title": "Provider",

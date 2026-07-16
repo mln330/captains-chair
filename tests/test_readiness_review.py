@@ -15,6 +15,8 @@ from captains_chair.readiness import (
     REQUIRED_READINESS_CATEGORIES,
     ReadinessReviewDecision,
     apply_readiness_review,
+    build_readiness_prompt,
+    readiness_evidence_sha,
 )
 from tests.test_courses import course
 
@@ -99,7 +101,8 @@ def test_review_persists_provenance_and_unlocks_all_course_kinds(kind: CourseKin
     assert reviewed.readiness_review.provider == "openai"
     assert reviewed.readiness_review.model == "frontier-reviewer"
     assert reviewed.readiness_review.reasoning == ReasoningEffort.MEDIUM
-    assert reviewed.readiness_review.prompt_version == "course-readiness-v1"
+    assert reviewed.readiness_review.prompt_version == "course-readiness-v2"
+    assert reviewed.readiness_review.source_evidence_sha == readiness_evidence_sha({})
     assert reviewed.readiness_review.session_id == "session-1"
 
 
@@ -119,3 +122,16 @@ def test_ready_verdict_rejects_an_incomplete_category_set() -> None:
 
     with pytest.raises(ValueError, match="categories do not match policy"):
         apply_readiness_review(value, incomplete, result(), models(), provider="openclaw")
+
+
+def test_prompt_includes_hash_bound_live_evidence_and_collection_guidance() -> None:
+    evidence: dict[str, object] = {
+        "github": {"default_branch_sha": "abc123", "collection_errors": {}}
+    }
+
+    prompt = build_readiness_prompt(course(), evidence)
+
+    assert readiness_evidence_sha(evidence) in prompt
+    assert '"default_branch_sha": "abc123"' in prompt
+    assert "authenticated machine evidence" in prompt
+    assert "do not treat successfully collected facts as locally unverifiable" in prompt

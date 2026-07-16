@@ -62,6 +62,55 @@ def test_snapshot_collects_and_normalizes_all_github_collections(tmp_path: Path)
     assert all(cwd == tmp_path for _, cwd in calls)
 
 
+def test_readiness_evidence_collects_live_proof_without_issue_or_pr_bodies(tmp_path: Path) -> None:
+    def runner(
+        command: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        input_text: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        del cwd, input_text, timeout
+        values = list(command)
+        if values[1:3] == ["repo", "view"]:
+            return json_result({"nameWithOwner": "example/project", "defaultBranchRef": {"name": "main"}})
+        if values[1:3] == ["issue", "list"]:
+            return json_result([{"number": 7, "title": "Gap", "body": "private planning detail"}])
+        if values[1:3] == ["pr", "list"]:
+            return json_result([{"number": 8, "title": "Change", "headRefOid": "head-8", "body": "omit me"}])
+        if values[1:3] == ["api", "repos/example/project/branches"]:
+            return json_result([{"name": "main"}])
+        if values[1:3] == ["run", "list"]:
+            return json_result([{"databaseId": 9, "conclusion": "success"}])
+        if values[1:3] == ["api", "repos/example/project/commits/main"]:
+            return json_result({"sha": "main-sha"})
+        if values[1:3] == ["api", "repos/example/project/branches/main/protection/required_status_checks"]:
+            return json_result({"contexts": ["build"]})
+        if values[1:3] == ["api", "repos/example/project/environments"]:
+            return json_result({"environments": [{"name": "prod", "protection_rules": [{"type": "required_reviewers"}]}]})
+        if values[1:3] == ["pr", "view"]:
+            return json_result({
+                "number": 8,
+                "headRefOid": "head-8",
+                "isDraft": False,
+                "mergeable": "MERGEABLE",
+                "statusCheckRollup": [{"name": "build", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+            })
+        if values[1:3] == ["api", "graphql"]:
+            return json_result({"data": {"repository": {"pullRequest": {"reviewThreads": {"nodes": []}}}}})
+        raise AssertionError(f"unexpected command: {values}")
+
+    evidence = GhGitHubProvider(runner, cwd=tmp_path).readiness_evidence(repo(tmp_path))
+
+    assert evidence["default_branch_sha"] == "main-sha"
+    assert evidence["required_checks"] == ["build"]
+    assert evidence["pull_requests"][0]["review_threads"]["unresolved_blocking"] == 0
+    serialized = json.dumps(evidence)
+    assert "private planning detail" not in serialized
+    assert "omit me" not in serialized
+    assert evidence["collection_errors"] == {}
+
+
 def test_gate_filters_required_checks_and_counts_only_active_review_threads(tmp_path: Path) -> None:
     def runner(
         command: Sequence[str],

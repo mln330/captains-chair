@@ -76,6 +76,8 @@ class ReadinessHarness(SuccessfulHarness):
     def run(self, **kwargs: Any) -> HarnessResult:
         assert kwargs["role"] == "readiness_reviewer"
         assert kwargs["writable"] is False
+        assert '"authenticated": true' in kwargs["prompt"]
+        assert '"operation_mode": "supervised"' in kwargs["prompt"]
         return HarnessResult(
             role="readiness_reviewer",
             output={
@@ -114,6 +116,10 @@ class SnapshotGitHub:
         del repo
         self.calls += 1
         return RepositorySnapshot({}, [], [], ["main"], [])
+
+    def readiness_evidence(self, repo: Any) -> dict[str, Any]:
+        del repo
+        return {"authenticated": True, "default_branch_sha": "main-sha"}
 
 
 class ActivePrGitHub(SnapshotGitHub):
@@ -228,6 +234,7 @@ def test_run_model_records_success_and_respects_disabled_mode(tmp_path: Path) ->
 
 def test_engine_runs_readiness_reviewer_and_persists_awaiting_approval(tmp_path: Path) -> None:
     engine, state = make_engine(tmp_path, harness=ReadinessHarness())
+    engine.github = cast(Any, SnapshotGitHub())
     repo = repo_config(tmp_path, mode=OperationMode.SUPERVISED)
     value = course()
     answered = value.readiness[0].model_copy(
