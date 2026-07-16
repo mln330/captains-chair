@@ -438,9 +438,9 @@ export default definePluginEntry({
 
     api.registerHttpRoute?.({
       path: "/captains-chair/api/schedule/install",
-      auth: "gateway",
-      gatewayRuntimeScopeSurface: "trusted-operator",
-      handler: async (_req, res) => {
+      auth: "plugin",
+      handler: async (req, res) => {
+        if (rejectNonControlUiRequest(req, res)) return;
         try {
           const result = await reconcileSchedules();
           res.statusCode = 200;
@@ -456,9 +456,9 @@ export default definePluginEntry({
     const scheduleRoute = (path: string, operation: (params: Record<string, unknown>) => Promise<unknown>) => {
       api.registerHttpRoute?.({
         path,
-        auth: "gateway",
-        gatewayRuntimeScopeSurface: "trusted-operator",
+        auth: "plugin",
         handler: async (req, res) => {
+          if (rejectNonControlUiRequest(req, res)) return;
           try {
             const params = req?.body && typeof req.body === "object" ? req.body : {};
             const result = await operation(params);

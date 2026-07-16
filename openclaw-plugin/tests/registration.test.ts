@@ -94,6 +94,8 @@ describe("Captain's Chair OpenClaw registration", () => {
     expect(registrations.routeAuth["/captains-chair/"]).toBe("plugin");
     expect(registrations.routeAuth["/captains-chair/assets/index.js"]).toBe("plugin");
     expect(registrations.routeAuth["/captains-chair/api/repos/create"]).toBe("plugin");
+    expect(registrations.routeAuth["/captains-chair/api/schedule/install"]).toBe("plugin");
+    expect(registrations.routeAuth["/captains-chair/api/schedule/status"]).toBe("plugin");
     expect(registrations.services).toEqual(["captains-chair"]);
     expect(registrations.cli).toBe(1);
     expect(registrations.commands).toEqual(["captains-chair"]);
