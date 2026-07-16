@@ -1,7 +1,7 @@
 const CONTROL_UI_PATH = "/plugin";
 const PLUGIN_ID = "captains-chair";
 
-type RequestLike = { headers?: Record<string, unknown> };
+type RequestLike = { method?: string; headers?: Record<string, unknown> };
 
 function header(request: RequestLike, name: string): string | undefined {
   const value = request.headers?.[name];
@@ -31,6 +31,14 @@ export function isCaptainUiRequest(request: RequestLike): boolean {
 }
 
 export function rejectNonControlUiRequest(request: RequestLike, response: { statusCode: number; setHeader: (name: string, value: string) => void; end: (body: string) => void }): boolean {
+  response.setHeader("access-control-allow-origin", "*");
+  response.setHeader("access-control-allow-methods", "GET,POST,OPTIONS");
+  response.setHeader("access-control-allow-headers", "content-type");
+  if (request.method?.toUpperCase() === "OPTIONS") {
+    response.statusCode = 204;
+    response.end("");
+    return true;
+  }
   if (isCaptainUiRequest(request)) return false;
   response.statusCode = 403;
   response.setHeader("content-type", "application/json; charset=utf-8");
