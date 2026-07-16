@@ -3,6 +3,7 @@ import {
   buildCommandArgv,
   buildCronAddArgs,
   buildCronEditArgs,
+  cronListArgs,
   findExistingCronJob,
   inspectCronJob,
   parseCronJobs,
@@ -28,6 +29,10 @@ const expectedArgv = [
 ];
 
 describe("OpenClaw schedule reconciliation", () => {
+  it("includes disabled jobs when inspecting managed schedules", () => {
+    expect(cronListArgs()).toEqual(["cron", "list", "--all", "--json"]);
+  });
+
   it("uses the OpenClaw 2026 command-runner contract", async () => {
     const calls: unknown[][] = [];
     const result = await runOpenClawCommand(async (argv, options) => {
