@@ -1,16 +1,16 @@
 {
   "name": "captains-chair",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Captain's Chair SDLC control plane for Codex",
   "author": {
-    "name": "Local developer"
+    "name": "mln330"
   },
   "skills": "./skills/",
   "interface": {
     "displayName": "Captain's Chair",
     "shortDescription": "Run policy-gated repository courses in Codex.",
     "longDescription": "Captain's Chair gives Codex durable courses, adapter-neutral orchestration, PR evidence gates, and token telemetry.",
-    "developerName": "Local developer",
+    "developerName": "mln330",
     "category": "Productivity",
     "capabilities": [],
     "defaultPrompt": "Use Captain's Chair to inspect the repository, report readiness, and advance only policy-approved work."

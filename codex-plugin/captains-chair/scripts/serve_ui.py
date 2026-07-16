@@ -5,10 +5,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import secrets
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from captains_chair.sidecar import SidecarServer
 
@@ -53,6 +55,8 @@ def _read_json(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     length = int(handler.headers.get("content-length", "0"))
     if length == 0:
         return {}
+    if length < 0 or length > 1_048_576:
+        raise ValueError("request body exceeds the 1 MiB API limit")
     value = json.loads(handler.rfile.read(length))
     if not isinstance(value, dict):
         raise ValueError("request body must be a JSON object")
@@ -77,16 +81,65 @@ def _serve_file(handler: BaseHTTPRequestHandler, root: Path, relative: str) -> N
     elif target.suffix == ".png":
         content_type = "image/png"
     handler.send_response(200)
+    _security_headers(handler)
     handler.send_header("content-type", content_type)
     handler.send_header("content-length", str(len(body)))
     handler.end_headers()
     handler.wfile.write(body)
 
 
-def build_handler(root: Path, sidecar: SidecarServer) -> type[BaseHTTPRequestHandler]:
+def _security_headers(handler: BaseHTTPRequestHandler) -> None:
+    handler.send_header("cache-control", "no-store")
+    handler.send_header(
+        "content-security-policy",
+        "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'",
+    )
+    handler.send_header("referrer-policy", "no-referrer")
+    handler.send_header("x-content-type-options", "nosniff")
+    handler.send_header("x-frame-options", "DENY")
+
+
+def build_handler(
+    root: Path,
+    sidecar: SidecarServer,
+    access_token: str | None = None,
+) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
+        def _authorized(self, parsed: Any) -> bool:
+            if access_token is None:
+                return True
+            supplied = self.headers.get("authorization", "").removeprefix("Bearer ")
+            supplied = supplied or self.headers.get("x-captains-chair-token", "")
+            cookies = dict(
+                part.strip().split("=", 1)
+                for part in self.headers.get("cookie", "").split(";")
+                if "=" in part
+            )
+            supplied = supplied or cookies.get("captains_chair_token", "")
+            supplied = supplied or parse_qs(parsed.query).get("token", [""])[0]
+            return secrets.compare_digest(supplied, access_token)
+
+        def _reject_unauthorized(self) -> None:
+            self.send_response(401)
+            _security_headers(self)
+            self.send_header("content-type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(b'{"error":"unauthorized"}')
+
         def do_GET(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
+            if not self._authorized(parsed):
+                self._reject_unauthorized()
+                return
+            if access_token is not None and parse_qs(parsed.query).get("token"):
+                self.send_response(303)
+                _security_headers(self)
+                self.send_header(
+                    "set-cookie", f"captains_chair_token={access_token}; HttpOnly; SameSite=Strict; Path=/"
+                )
+                self.send_header("location", parsed.path or "/captains-chair/")
+                self.end_headers()
+                return
             path = parsed.path
             if path in {"/", "/captains-chair", "/captains-chair/"}:
                 _serve_file(self, root, "/index.html")
@@ -101,6 +154,16 @@ def build_handler(root: Path, sidecar: SidecarServer) -> type[BaseHTTPRequestHan
 
         def do_POST(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
+            if not self._authorized(parsed):
+                self._reject_unauthorized()
+                return
+            origin = self.headers.get("origin")
+            if origin and urlparse(origin).netloc != self.headers.get("host"):
+                self.send_error(403)
+                return
+            if self.headers.get_content_type() != "application/json":
+                self.send_error(415)
+                return
             prefix = "/captains-chair/api/"
             if not parsed.path.startswith(prefix):
                 self.send_error(404)
@@ -113,6 +176,7 @@ def build_handler(root: Path, sidecar: SidecarServer) -> type[BaseHTTPRequestHan
                 result = sidecar.request(method, _read_json(self))
                 body = json.dumps(result, default=str).encode("utf-8")
                 self.send_response(200)
+                _security_headers(self)
                 self.send_header("content-type", "application/json; charset=utf-8")
                 self.send_header("content-length", str(len(body)))
                 self.end_headers()
@@ -120,6 +184,7 @@ def build_handler(root: Path, sidecar: SidecarServer) -> type[BaseHTTPRequestHan
             except Exception as exc:
                 body = json.dumps({"error": str(exc)}).encode("utf-8")
                 self.send_response(500)
+                _security_headers(self)
                 self.send_header("content-type", "application/json; charset=utf-8")
                 self.send_header("content-length", str(len(body)))
                 self.end_headers()
@@ -137,13 +202,28 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--ui-root", type=Path)
     parser.add_argument("--bind", default="127.0.0.1")
     parser.add_argument("--port", default=8787, type=int)
+    parser.add_argument("--token", help="required bearer/cookie token for non-loopback binding")
     return parser
 
 
 def main() -> int:
     args = _parser().parse_args()
     root = _ui_root(str(args.ui_root) if args.ui_root else None)
-    server = ThreadingHTTPServer((args.bind, args.port), build_handler(root, SidecarServer(args.config)))
+    token = args.token or os.environ.get("CAPTAINS_CHAIR_UI_TOKEN")
+    if token and (len(token) < 16 or any(character.isspace() or character in ";," for character in token)):
+        raise ValueError(
+            "UI token must be at least 16 characters and contain no whitespace, semicolons, or commas"
+        )
+    try:
+        loopback = ip_address(args.bind).is_loopback
+    except ValueError:
+        loopback = args.bind.lower() == "localhost"
+    if not loopback and not token:
+        raise ValueError("non-loopback UI binding requires --token or CAPTAINS_CHAIR_UI_TOKEN")
+    server = ThreadingHTTPServer(
+        (args.bind, args.port),
+        build_handler(root, SidecarServer(args.config), token),
+    )
     print(
         json.dumps({"url": f"http://{args.bind}:{server.server_port}/captains-chair/", "ui_root": str(root)}),
         flush=True,
