@@ -256,7 +256,7 @@ def _token_totals(
 def _model_totals(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
     totals: dict[str, dict[str, Any]] = {}
     for group in groups:
-        model = str(group.get("model") or "unknown")
+        model = _qualified_model(group)
         item = totals.setdefault(
             model,
             {
@@ -283,6 +283,19 @@ def _model_totals(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
             group.get("unknown_sessions")
         )
     return sorted(totals.values(), key=lambda item: item["accounted_tokens"], reverse=True)
+
+
+def _qualified_model(group: dict[str, Any]) -> str:
+    """Keep provider identity visible when aggregating heterogeneous runtimes."""
+    model = str(group.get("model") or "unknown")
+    if "/" in model:
+        return model
+    provider = str(group.get("provider") or "").strip()
+    if provider:
+        return f"{provider}/{model}"
+    if str(group.get("runtime") or "").strip().lower() == "codex":
+        return f"codex/{model}"
+    return model
 
 
 def _failure_hotspots(records: Any) -> list[dict[str, Any]]:

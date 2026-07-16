@@ -142,3 +142,50 @@ legend { color: #7fc7c0; font-size: 12px; padding: 0 5px; }
 @media (max-width: 900px) { .activity-grid { grid-template-columns: 1fr; } }
 @media (max-width: 720px) { .register-form, .settings-grid, .route-grid, .route-preview { grid-template-columns: 1fr; } .course-heading, .requirement, .checkpoint, .schedule-row { align-items: start; grid-template-columns: 1fr; } .course-form .wide { grid-column: auto; } .check-label { padding-top: 0; } .plan-diff div { grid-template-columns: 1fr; gap: 2px; } }
 @media (max-width: 620px) { .shell { padding-top: 22px; } h1 { font-size: 34px; } .topbar { align-items: flex-start; flex-direction: column; } .repo-meta { align-items: flex-start; flex-direction: column; } }
+
+/* OpenClaw's default Control UI is light. The plugin frame is sandboxed, so
+   host CSS variables cannot cross into it; follow the browser color scheme. */
+@media (prefers-color-scheme: light) {
+  :root { background: #f3f0eb; color: #292724; color-scheme: light; }
+  body { background: #f3f0eb; }
+  .topbar, .repo-meta, .settings, .course-detail, .detail-section,
+  .route-preview, .course-builder, .activity-section, .register-panel,
+  .courses, .schedule-section, .model-policy-panel { border-color: #ded8d0; }
+  .eyebrow, .route-preview h3, .detail-section h3, legend, .event-row strong { color: #c6442f; }
+  .subtitle, .repo-meta, .repo-heading p, .route-preview span, .route-preview small,
+  .register-form label, .settings-grid label, fieldset label, .course-actions label,
+  .requirement div span, .checkpoint div span, .package-list span, .event-row small,
+  .token-row span, .schedule-row div > span, .muted, .planning-brief p { color: #6f6a63; }
+  .icon-button, .secondary { background: #fff; border-color: #cfc8bf; color: #292724; }
+  .primary { background: #c6442f; color: #fff; }
+  .status-pill { background: #f5ddd7; color: #8d2f22; }
+  .repo-panel, .course-card, .activity-panel, .schedule-row { background: #fff; border-color: #ded8d0; }
+  .mode { background: #e1eedb; color: #32602b; }
+  .mode.supervised, .health.paused, .readiness.waiting { background: #fff0c9; color: #7b5b12; }
+  .mode.advisory { background: #e1eef7; color: #265a7c; }
+  .mode.disabled, .health.missing, .health.drifted, .health.duplicate { background: #f7dfdf; color: #8d2f36; }
+  .flow-stage { color: #8b857d; }
+  .flow-stage.active { color: #3d3935; }
+  .flow-dot { background: #e2ddd6; border-color: #aaa198; }
+  .flow-stage.active .flow-dot { background: #c6442f; border-color: #e17868; box-shadow: 0 0 0 4px #f5ddd7; }
+  .flow-line { background: #d2cbc2; }
+  .flow-stage.active .flow-line { background: #d77a6d; }
+  .empty { border-color: #cfc8bf; color: #6f6a63; }
+  .empty h3, .activity-panel h3, .course-goal, .planning-brief ul, .plan-diff dd,
+  .route-preview strong, .event-row span { color: #292724; }
+  .settings summary { color: #292724; }
+  .alert { background: #f7dfdf; border-color: #d48c8c; color: #8d2f36; }
+  input, select, textarea { background: #fff; border-color: #cfc8bf; color: #292724; }
+  input:focus, select:focus, textarea:focus, button:focus-visible { outline-color: #c6442f; }
+  fieldset, .requirement, .checkpoint, .schedule-grid, .course-list, .activity-panel { border-color: #ded8d0; }
+  .package-list div, .event-row, .token-row { border-color: #ded8d0; }
+  .warning, .status-text, .readiness.waiting { color: #7b5b12; }
+  .route-preview div { border-color: #ded8d0; }
+  .health { color: #3d3935; }
+  .health.healthy, .readiness.ready { background: #e1eedb; color: #32602b; }
+  .inline-status { color: #32602b; }
+  .danger { border-color: #d48c8c; color: #8d2f36; }
+  .plan-diff { border-color: #c6442f; }
+  .event-row a { color: #a83324; }
+  .token-row strong { color: #292724; }
+}

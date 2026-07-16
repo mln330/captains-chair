@@ -503,6 +503,25 @@ def test_usage_report_ranks_external_token_hotspots_and_marks_partial_telemetry(
     assert [item["role"] for item in report["token_hotspots"]] == ["coder", "reviewer"]
     assert report["token_hotspots"][0]["telemetry_status"] == "partial"
     assert report["token_hotspots"][0]["accounted_tokens"] == 2_000_000
+    assert {item["model"] for item in report["model_totals"]} == {"codex/gpt-5.3-codex-spark"}
+
+
+def test_usage_report_keeps_openai_and_codex_model_totals_separate() -> None:
+    report = build_usage_report(
+        {
+            "direct_calls": {"calls": 0},
+            "direct_groups": [],
+            "external_sessions": {"calls": 2, "unknown_sessions": 0},
+            "external_groups": [
+                {"provider": "openai", "model": "gpt-5.5", "calls": 1, "total_tokens": 3_500_000},
+                {"provider": "codex", "model": "gpt-5.5", "calls": 1, "total_tokens": 108_660},
+            ],
+        },
+        UsageConfig(),
+    )
+
+    totals = {item["model"]: item["accounted_tokens"] for item in report["model_totals"]}
+    assert totals == {"openai/gpt-5.5": 3_500_000, "codex/gpt-5.5": 108_660}
 
 
 def test_usage_report_surfaces_fallbacks_and_large_prompt_groups() -> None:

@@ -761,7 +761,10 @@ class StateStore:
         with self._connect() as conn:
             rows = conn.execute(
                 "SELECT substr(created_at,1,10) AS date, course_key, work_package_key, "
-                "COALESCE(stage, role) AS stage, resolved_model AS model, COUNT(*) AS calls, "
+                "COALESCE(stage, role) AS stage, "
+                "CASE WHEN instr(resolved_model, '/') > 0 THEN resolved_model "
+                "WHEN runtime='codex' THEN 'codex/' || resolved_model ELSE resolved_model END AS model, "
+                "COUNT(*) AS calls, "
                 "SUM(COALESCE(total_tokens, COALESCE(input_tokens,0) + COALESCE(cached_input_tokens,0) + COALESCE(output_tokens,0))) AS tokens "
                 "FROM model_calls WHERE repo=? GROUP BY date,course_key,work_package_key,stage,resolved_model "
                 "ORDER BY date DESC,tokens DESC",
