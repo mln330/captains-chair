@@ -54,6 +54,14 @@ def stage_card(
     return matches[-1] if retry else matches[0]
 
 
+def qa_cards(adapter: WorkQueueAdapter, board_id: str, workflow_id: str) -> list[QueueCard]:
+    return [
+        card
+        for card in adapter.list_cards(board_id)
+        if workflow_label(workflow_id) in card.labels and card.metadata.get("qaProfile")
+    ]
+
+
 def run_full_autonomous_workflow(
     orchestrator: WorkflowOrchestrator,
     adapter: WorkQueueAdapter,
@@ -92,33 +100,43 @@ def run_full_autonomous_workflow(
         (
             {
                 "status": "passed",
-                "note": "PR head abcdef1",
+                "note": "PR head bcdef12",
                 "url": "https://github.com/example/project/pull/7",
             },
         ),
     )
     parallel = orchestrator.reconcile(repo)
+    review_card = stage_card(adapter, workflow.board_id, "review", workflow_id=workflow.workflow_id)
+    capability_cards = qa_cards(adapter, workflow.board_id, workflow.workflow_id)
+    _expect(review_card.id in set(parallel.dispatch["promoted"]), "independent review was not promoted")
+    _expect(bool(capability_cards), "no capability QA cards were materialized")
     _expect(
-        {
-            stage_card(adapter, workflow.board_id, "review", workflow_id=workflow.workflow_id).id,
-            stage_card(adapter, workflow.board_id, "test", workflow_id=workflow.workflow_id).id,
-            stage_card(adapter, workflow.board_id, "ux_review", workflow_id=workflow.workflow_id).id,
-        }.issubset(set(parallel.dispatch["promoted"])),
-        "independent review, test, and UX gates were not all promoted in parallel",
+        all(card.status == QueueStatus.READY for card in capability_cards),
+        "capability QA cards were not ready in parallel",
     )
-
-    complete(
-        stage_card(adapter, workflow.board_id, "test", workflow_id=workflow.workflow_id).id,
-        "Checks passed",
-        ({"status": "passed", "note": "CI passed on abcdef1"},),
-    )
-    complete(
-        stage_card(adapter, workflow.board_id, "ux_review", workflow_id=workflow.workflow_id).id,
-        "UX passed",
-        ({"status": "passed", "note": "Browser flows passed on abcdef1"},),
-    )
+    for qa_card in capability_cards:
+        profile = str(qa_card.metadata["qaProfile"])
+        complete(
+            qa_card.id,
+            f"{profile} passed",
+            (
+                {
+                    "status": "passed",
+                    "note": f"QA_PASSED:{profile}:bcdef12",
+                    "model": "conformance-model",
+                    "provider": "conformance",
+                    "evidence": [
+                        "accessibility checked",
+                        "contrast checked",
+                        "responsive behavior checked",
+                        "flow checked",
+                        "cohesion checked",
+                    ],
+                },
+            ),
+        )
     block_card(
-        stage_card(adapter, workflow.board_id, "review", workflow_id=workflow.workflow_id).id,
+        review_card.id,
         "TECHNICAL: missing assertion",
     )
 

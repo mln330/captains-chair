@@ -41,6 +41,7 @@ class InMemoryWorkQueue:
             source_url=spec.source_url,
             workspace=spec.workspace,
             metadata={
+                **spec.metadata,
                 "parents": list(spec.parents),
                 "automation": {"maxRetries": spec.max_retries},
             },

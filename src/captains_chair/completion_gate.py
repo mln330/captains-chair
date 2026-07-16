@@ -1,11 +1,21 @@
 from __future__ import annotations
 
+import json
 import re
 from typing import Any, Protocol, cast
 
-from captains_chair.models import CompletionPolicy, FinalVerdict, PullRequestGate, RepoConfig
+from captains_chair.config import load_project_manifest
+from captains_chair.models import (
+    ApplicationSurface,
+    CompletionPolicy,
+    FinalVerdict,
+    PullRequestGate,
+    QAProfile,
+    RepoConfig,
+)
 from captains_chair.orchestration import (
     CompletionValidation,
+    QARequirementContext,
     QueueCard,
     WorkStage,
 )
@@ -14,6 +24,7 @@ from captains_chair.policy import (
     evaluate_merge,
     evaluate_owner_completion,
 )
+from captains_chair.qa import select_qa
 
 
 class CompletionGateProvider(Protocol):
@@ -32,7 +43,23 @@ class GitHubCompletionValidator:
         card: QueueCard,
         workflow_cards: list[QueueCard],
     ) -> CompletionValidation:
-        if _stage(card) != WorkStage.FINAL_REVIEW:
+        stage = _stage(card)
+        if stage in {WorkStage.TEST, WorkStage.UX_REVIEW} and card.metadata.get("qaProfile"):
+            context = self.required_qa(repo, workflow_cards)
+            if context is None:
+                return CompletionValidation(False, "QA proof cannot be validated before a PR exists")
+            profile_key = str(card.metadata.get("qaProfile") or "")
+            profile = next(
+                (item for item in context.selection.profiles if item.key == profile_key),
+                None,
+            )
+            if profile is None:
+                return CompletionValidation(
+                    True,
+                    f"QA profile {profile_key!r} is no longer required by current paths",
+                )
+            return _validate_qa_evidence(card, profile, context.head_sha)
+        if stage != WorkStage.FINAL_REVIEW:
             return CompletionValidation(False, "completion validation requires a final-review card")
         marker, verdict, reviewed_head = _final_review_evidence(repo, card)
         if marker is None or verdict is None or reviewed_head is None:
@@ -52,6 +79,29 @@ class GitHubCompletionValidator:
                 "workflow proof contains inconsistent GitHub pull-request URLs",
             )
         pr_number = next(iter(pr_numbers))
+        if any(card.metadata.get("qaEvidenceVersion") for card in workflow_cards):
+            qa_context = self.required_qa(repo, workflow_cards)
+            if qa_context is None:
+                return CompletionValidation(False, "required QA cannot be resolved from live GitHub state")
+            for profile in qa_context.selection.profiles:
+                candidates = [
+                    item
+                    for item in workflow_cards
+                    if str(item.metadata.get("qaProfile") or "") == profile.key
+                ]
+                valid = next(
+                    (
+                        item
+                        for item in reversed(candidates)
+                        if _validate_qa_evidence(item, profile, qa_context.head_sha).allowed
+                    ),
+                    None,
+                )
+                if valid is None:
+                    return CompletionValidation(
+                        False,
+                        f"required QA profile {profile.key!r} lacks current-head evidence",
+                    )
         try:
             gate = self.provider.gate(repo, pr_number, reviewed_head)
         except Exception as exc:
@@ -63,6 +113,105 @@ class GitHubCompletionValidator:
         else:
             result = evaluate_merge(repo, verdict, gate)
         return CompletionValidation(result.allowed, result.reason)
+
+    def required_qa(
+        self,
+        repo: RepoConfig,
+        workflow_cards: list[QueueCard],
+    ) -> QARequirementContext | None:
+        pr_numbers = _pull_request_numbers(repo, workflow_cards)
+        if len(pr_numbers) != 1:
+            return None
+        pr_number = next(iter(pr_numbers))
+        pull_request = getattr(self.provider, "pull_request", None)
+        pull_request_files = getattr(self.provider, "pull_request_files", None)
+        if not callable(pull_request) or not callable(pull_request_files):
+            return None
+        pr = pull_request(repo, pr_number)
+        if not isinstance(pr, dict):
+            return None
+        pr_value = cast(dict[str, Any], pr)
+        head_sha = str(pr_value.get("headRefOid") or "").strip()
+        if not head_sha:
+            return None
+        actual_value = pull_request_files(repo, pr_number)
+        if not isinstance(actual_value, tuple):
+            return None
+        actual_items = cast(tuple[object, ...], actual_value)
+        if any(not isinstance(item, str) for item in actual_items):
+            return None
+        actual_paths = cast(tuple[str, ...], actual_items)
+        planned_paths = tuple(
+            dict.fromkeys(
+                str(path)
+                for card in workflow_cards
+                for value in (card.metadata.get("plannedChangedPaths"),)
+                if isinstance(value, list)
+                for path in cast(list[Any], value)
+                if str(path).strip()
+            )
+        )
+        manifest = load_project_manifest(repo.local_path, repo.project_manifest)
+        selection = select_qa(repo, planned_paths, manifest, actual_paths)
+        return QARequirementContext(
+            pr_number=pr_number,
+            pr_url=f"https://github.com/{repo.full_name}/pull/{pr_number}",
+            head_sha=head_sha,
+            planned_paths=planned_paths,
+            actual_paths=actual_paths,
+            selection=selection,
+        )
+
+
+def _validate_qa_evidence(
+    card: QueueCard,
+    profile: QAProfile,
+    head_sha: str,
+) -> CompletionValidation:
+    proof = card.metadata.get("proof")
+    if not isinstance(proof, list):
+        return CompletionValidation(False, f"QA profile {profile.key!r} has no structured proof")
+    latest = next(
+        (
+            cast(dict[str, Any], item)
+            for item in reversed(cast(list[Any], proof))
+            if isinstance(item, dict)
+            and str(cast(dict[str, Any], item).get("status") or "").lower() == "passed"
+        ),
+        None,
+    )
+    if latest is None:
+        return CompletionValidation(False, f"QA profile {profile.key!r} has no passed proof")
+    marker = re.compile(
+        rf"QA_PASSED:{re.escape(profile.key)}:([0-9a-f]{{7,64}})\b",
+        re.IGNORECASE,
+    )
+    marker_head: str | None = None
+    for field in ("label", "note"):
+        match = marker.search(str(latest.get(field) or ""))
+        if match:
+            marker_head = match.group(1)
+            break
+    if marker_head is None or marker_head.lower() != head_sha.lower():
+        return CompletionValidation(False, f"QA profile {profile.key!r} proof is stale for {head_sha}")
+    if not str(latest.get("model") or "").strip() or not str(latest.get("provider") or "").strip():
+        return CompletionValidation(False, f"QA profile {profile.key!r} proof lacks model provenance")
+    evidence = latest.get("evidence")
+    if not isinstance(evidence, list) or not evidence:
+        return CompletionValidation(False, f"QA profile {profile.key!r} proof lacks evidence")
+    if ApplicationSurface.WEB_UI in profile.surfaces:
+        evidence_text = json.dumps(evidence, sort_keys=True).lower()
+        missing = [
+            item
+            for item in ("accessibility", "contrast", "responsive", "flow", "cohesion")
+            if item not in evidence_text
+        ]
+        if missing:
+            return CompletionValidation(
+                False,
+                f"UI QA profile {profile.key!r} evidence is missing: {', '.join(missing)}",
+            )
+    return CompletionValidation(True, f"QA profile {profile.key!r} passed for {head_sha}")
 
 
 def _final_review_evidence(

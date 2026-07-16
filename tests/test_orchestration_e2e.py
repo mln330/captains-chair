@@ -119,9 +119,10 @@ def test_persistent_queue_replays_partial_enqueue_without_duplicate_cards(tmp_pa
     restarted = WorkflowOrchestrator(restarted_queue, worker_policy())
     replay = restarted.enqueue(repo, implementation(), "crash-replay")
 
-    assert len(restarted_queue.cards) == 8
+    expected_cards = len(replay.stage_cards) + 1
+    assert len(restarted_queue.cards) == expected_cards
     assert replay.workflow_id == "crash-replay"
-    assert len({card.id for card in restarted_queue.cards.values()}) == 8
+    assert len({card.id for card in restarted_queue.cards.values()}) == expected_cards
     assert replay.root_card_id == restarted_queue.keys["crash-replay:root"]
 
 
@@ -203,7 +204,7 @@ def test_fresh_orchestrator_reconciles_persisted_queue_state_without_duplicates(
 
     assert result.dispatch["promoted"]
     assert replay.stage_cards == workflow.stage_cards
-    assert len(restarted_queue.cards) == 8
+    assert len(restarted_queue.cards) == len(workflow.stage_cards) + 1
     ready_stages = {
         label.split(":", 1)[1]
         for card in restarted_queue.cards.values()
@@ -211,4 +212,4 @@ def test_fresh_orchestrator_reconciles_persisted_queue_state_without_duplicates(
         for label in card.labels
         if label.startswith("stage:")
     }
-    assert ready_stages == {"review", "test", "ux_review"}
+    assert ready_stages == {"review", "test"}

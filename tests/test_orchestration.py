@@ -74,7 +74,7 @@ def test_qa_notes_use_planned_changed_paths_and_portable_worker_protocol(tmp_pat
     )
 
     workflow = build_workflow(repo, decision, "qa-paths", worker_config())
-    test_card = next(card for card in workflow.stages if "stage:test" in card.labels)
+    test_card = next(card for card in workflow.stages if "stage:ux_review" in card.labels)
 
     assert "web_ui" in test_card.notes
     assert "configured orchestrator" in test_card.notes
@@ -123,7 +123,6 @@ def test_autonomous_workflow_is_role_separated_and_dependency_gated(tmp_path: Pa
     implementation = by_stage["stage:implementation"]
     review = by_stage["stage:review"]
     test = by_stage["stage:test"]
-    ux = by_stage["stage:ux_review"]
     final = by_stage["stage:final_review"]
     merge = by_stage["stage:merge"]
     verify = by_stage["stage:post_merge"]
@@ -134,11 +133,9 @@ def test_autonomous_workflow_is_role_separated_and_dependency_gated(tmp_path: Pa
     assert implementation.workspace is not None
     assert review.workspace == implementation.workspace
     assert test.workspace == implementation.workspace
-    assert ux.workspace == implementation.workspace
     assert review.parents == (implementation.key,)
     assert test.parents == (implementation.key,)
-    assert ux.parents == (implementation.key,)
-    assert set(final.parents) == {review.key, test.key, ux.key}
+    assert set(final.parents) == {review.key, test.key}
     assert merge.parents == (final.key,)
     assert verify.parents == (merge.key,)
     assert "Never merge your own work" in implementation.notes
@@ -749,7 +746,7 @@ def test_review_only_workflow_registers_only_root_level_parallel_children(tmp_pa
 
     assert set(queue.completed[0][1]) == {
         workflow.stage_cards["review-action:review"],
-        workflow.stage_cards["review-action:test"],
+        workflow.stage_cards["review-action:qa:custom-qa"],
     }
 
 

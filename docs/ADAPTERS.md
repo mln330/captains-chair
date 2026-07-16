@@ -108,6 +108,17 @@ repository operation. If a runtime preserves multiple passed proof records, the
 latest passed record must carry the policy marker and is authoritative; a newer
 passed record without that marker invalidates older reviewed SHAs.
 
+Capability QA is represented by one card per selected `QAProfile`, not by generic
+test prose on a shared card. Adapters must preserve `qaProfile`, `qaSurfaces`,
+`qaChecks`, planned/actual path evidence, and the proof object in card metadata.
+A passed QA proof has the marker `QA_PASSED:<profile-key>:<head-sha>` plus
+non-empty `model`, `provider`, and `evidence` fields. Web UI evidence separately
+covers accessibility, contrast, responsive behavior, flow, and cohesion. The
+GitHub-backed validator compares every required profile with the current PR head;
+a repair commit invalidates stale evidence and causes a fresh QA retry. If live PR
+files reveal an unplanned capability, reconciliation creates the missing role card
+before final completion can pass.
+
 OpenClaw maps worker dispatch to OpenClaw workers and may map task visibility to
 the built-in Workboard Gateway RPC. The P1 Codex adapter may use SQLite rows plus
 disposable `codex exec` sessions. A future runtime may provide either or both

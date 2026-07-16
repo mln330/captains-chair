@@ -117,6 +117,31 @@ def test_gate_filters_required_checks_and_counts_only_active_review_threads(tmp_
     assert gate.review_head_sha == "head-12"
 
 
+def test_pull_request_files_are_collected_as_typed_paths(tmp_path: Path) -> None:
+    def runner(
+        command: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        input_text: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        del command, cwd, input_text, timeout
+        return json_result(
+            {
+                "number": 12,
+                "headRefOid": "head-12",
+                "files": [{"path": "frontend/App.tsx"}, {"path": "src/cli.py"}],
+            }
+        )
+
+    provider = GhGitHubProvider(runner, cwd=tmp_path)
+
+    assert provider.pull_request_files(repo(tmp_path), 12) == (
+        "frontend/App.tsx",
+        "src/cli.py",
+    )
+
+
 @pytest.mark.parametrize(
     ("stderr", "expected"),
     (("HTTP 404: Not Found", "empty"), ("HTTP 500: server error", "error")),
