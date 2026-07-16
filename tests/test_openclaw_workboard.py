@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from captains_chair.command import CommandResult
+from captains_chair.direct_workers import WorkerExecutionError, WorkerExecutionResult
 from captains_chair.models import OpenClawWorkboardConfig, WorkerAssignments
 from captains_chair.openclaw_workboard import (
     OpenClawWorkboardAdapter,
@@ -874,3 +876,191 @@ def test_worker_health_fails_closed_when_runtime_config_is_not_object() -> None:
 
     with pytest.raises(OpenClawWorkboardError, match="did not return an object"):
         OpenClawWorkboardAdapter(config(), runner).validate_worker_models()
+
+
+def test_managed_dispatch_completes_one_ready_card(monkeypatch: pytest.MonkeyPatch) -> None:
+    cards = {
+        "card-1": _managed_card("card-1", status="ready", agent_id="tester"),
+        "card-2": _managed_card("card-2", status="ready", agent_id="reviewer"),
+    }
+    calls: list[str] = []
+    _patch_worker_executor(
+        monkeypatch,
+        WorkerExecutionResult(
+            status="completed",
+            summary="completed",
+            proof=({"status": "passed", "note": "ok"},),
+        ),
+    )
+
+    result = OpenClawWorkboardAdapter(config(), _managed_runner(cards, calls)).dispatch("board")
+
+    assert result["strategy"] == "managed_single"
+    assert result["started"] == ["card-1"]
+    assert result["completed"] == ["card-1"]
+    assert cards["card-1"]["status"] == "done"
+    assert cards["card-2"]["status"] == "ready"
+    assert "workboard.cards.dispatch" not in calls
+
+
+def test_managed_dispatch_promotes_dependency_ready_card(monkeypatch: pytest.MonkeyPatch) -> None:
+    cards = {
+        "parent": _managed_card("parent", status="done", agent_id="captain"),
+        "child": _managed_card("child", status="todo", agent_id="tester", parents=("parent",)),
+    }
+    _patch_worker_executor(
+        monkeypatch,
+        WorkerExecutionResult(
+            status="completed",
+            summary="completed child",
+            proof=({"status": "passed", "note": "child"},),
+        ),
+    )
+
+    result = OpenClawWorkboardAdapter(config(), _managed_runner(cards, [])).dispatch("board")
+
+    assert result["promoted"] == ["child"]
+    assert result["completed"] == ["child"]
+    assert cards["child"]["status"] == "done"
+
+
+def test_managed_dispatch_idles_when_dependencies_are_not_done() -> None:
+    cards = {
+        "parent": _managed_card("parent", status="blocked", agent_id="captain"),
+        "child": _managed_card("child", status="todo", agent_id="tester", parents=("parent",)),
+    }
+
+    result = OpenClawWorkboardAdapter(config(), _managed_runner(cards, [])).dispatch("board")
+
+    assert result == {
+        "status": "idle",
+        "strategy": "managed_single",
+        "promoted": [],
+        "started": [],
+        "completed": [],
+        "blocked": [],
+        "count": 0,
+    }
+
+
+def test_managed_dispatch_blocks_when_agent_model_is_missing() -> None:
+    cards = {"card-1": _managed_card("card-1", status="ready", agent_id="unknown-agent")}
+
+    result = OpenClawWorkboardAdapter(config(), _managed_runner(cards, [])).dispatch("board")
+
+    assert result["blocked"] == ["card-1"]
+    assert cards["card-1"]["status"] == "blocked"
+    assert "no OpenClaw worker model" in cards["card-1"]["metadata"]["workerProtocol"]["detail"]
+
+
+def test_managed_dispatch_blocks_when_worker_returns_blocked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cards = {"card-1": _managed_card("card-1", status="ready", agent_id="tester")}
+    _patch_worker_executor(
+        monkeypatch,
+        WorkerExecutionResult(
+            status="blocked",
+            summary="blocked",
+            reason="TECHNICAL: expected fake worker block",
+        ),
+    )
+
+    result = OpenClawWorkboardAdapter(config(), _managed_runner(cards, [])).dispatch("board")
+
+    assert result["blocked"] == ["card-1"]
+    assert cards["card-1"]["metadata"]["workerProtocol"]["detail"] == "TECHNICAL: expected fake worker block"
+
+
+def test_managed_dispatch_blocks_when_worker_execution_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cards = {"card-1": _managed_card("card-1", status="ready", agent_id="tester")}
+    _patch_worker_executor(monkeypatch, WorkerExecutionError("fake worker crash"))
+
+    result = OpenClawWorkboardAdapter(config(), _managed_runner(cards, [])).dispatch("board")
+
+    assert result["blocked"] == ["card-1"]
+    assert "fake worker crash" in cards["card-1"]["metadata"]["workerProtocol"]["detail"]
+
+
+def _managed_card(
+    card_id: str,
+    *,
+    status: str,
+    agent_id: str,
+    parents: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    return {
+        "id": card_id,
+        "title": card_id,
+        "status": status,
+        "priority": "normal",
+        "labels": [],
+        "agentId": agent_id,
+        "metadata": {
+            "automation": {"maxRuntimeSeconds": 60},
+            "links": [{"type": "parent", "targetCardId": parent} for parent in parents],
+        },
+    }
+
+
+def _managed_runner(
+    cards: dict[str, dict[str, Any]],
+    calls: list[str],
+) -> Any:
+    def runner(
+        command: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        input_text: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        del cwd, input_text, timeout
+        method = list(command)[3]
+        calls.append(method)
+        params = json.loads(list(command)[list(command).index("--params") + 1])
+        if method == "workboard.cards.list":
+            return CommandResult(0, json.dumps({"cards": list(cards.values())}), "")
+        card = cards[params["id"]]
+        if method == "workboard.cards.reclaim":
+            card["status"] = params["status"]
+        elif method == "workboard.cards.claim":
+            card["status"] = "running"
+            card["metadata"]["claim"] = {
+                "ownerId": params["ownerId"],
+                "token": params["token"],
+                "attemptId": params.get("attemptId", "attempt"),
+            }
+        elif method == "workboard.cards.complete":
+            card["status"] = "done"
+            card["metadata"]["proof"] = [params["proof"]]
+        elif method == "workboard.cards.block":
+            card["status"] = "blocked"
+            card["metadata"]["workerProtocol"] = {
+                "state": "blocked",
+                "detail": params["reason"],
+            }
+        elif method == "workboard.cards.heartbeat":
+            pass
+        else:
+            raise AssertionError(f"unexpected method: {method}")
+        return CommandResult(0, json.dumps({"card": card}), "")
+
+    return runner
+
+
+def _patch_worker_executor(
+    monkeypatch: pytest.MonkeyPatch,
+    outcome: WorkerExecutionResult | WorkerExecutionError,
+) -> None:
+    class FakeExecutor:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        def execute(self, *args: object, **kwargs: object) -> WorkerExecutionResult:
+            if isinstance(outcome, WorkerExecutionError):
+                raise outcome
+            return outcome
+
+    monkeypatch.setattr("captains_chair.openclaw_workboard.CommandWorkerExecutor", FakeExecutor)

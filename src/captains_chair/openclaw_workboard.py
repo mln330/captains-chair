@@ -3,10 +3,14 @@ from __future__ import annotations
 import json
 import re
 import time
+from contextlib import suppress
 from pathlib import Path
+from threading import Event, Thread
 from typing import Any, cast
+from uuid import uuid4
 
 from captains_chair.command import CommandRunner, run_command
+from captains_chair.direct_workers import CommandWorkerExecutor, WorkerExecutionError
 from captains_chair.json_tools import decode_first_json
 from captains_chair.model_policy import models_match
 from captains_chair.models import OpenClawWorkboardConfig
@@ -191,11 +195,162 @@ class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
         return self._card_response("workboard.cards.comment", {"id": card_id, "body": body})
 
     def dispatch(self, board_id: str) -> dict[str, Any]:
+        if self.config.dispatch_strategy == "managed_single":
+            return self._managed_single_dispatch(board_id)
         return self._rpc(
             "workboard.cards.dispatch",
             {"boardId": board_id},
             timeout=self.config.dispatch_timeout_seconds,
         )
+
+    def _managed_single_dispatch(self, board_id: str) -> dict[str, Any]:
+        """Dispatch one Workboard card without invoking OpenClaw's board dispatcher."""
+        cards = self.list_cards(board_id)
+        promoted = self._promote_dependency_ready_cards(cards)
+        cards = self.list_cards(board_id) if promoted else cards
+        ready = next(
+            (
+                card
+                for card in cards
+                if card.status == QueueStatus.READY
+                and not card.metadata.get("archivedAt")
+                and card.agent_id
+            ),
+            None,
+        )
+        if ready is None:
+            return {
+                "status": "idle",
+                "strategy": "managed_single",
+                "promoted": promoted,
+                "started": [],
+                "completed": [],
+                "blocked": [],
+                "count": len(promoted),
+            }
+        token = uuid4().hex
+        owner_id = f"captains-chair-managed:{uuid4().hex}"
+        attempt_id = f"managed:{ready.id}:{uuid4().hex}"
+        claimed = self.claim_card(ready.id, owner_id=owner_id, token=token, attempt_id=attempt_id)
+        completed = False
+        blocked = False
+        stop = Event()
+        heartbeat = Thread(
+            target=self._heartbeat_loop,
+            args=(stop, claimed.id, owner_id, token),
+            daemon=True,
+        )
+        heartbeat.start()
+        try:
+            executor = CommandWorkerExecutor("openclaw", self.config.executable, self.runner)
+            model = _worker_models(self.config).get(claimed.agent_id or "")
+            if not model:
+                self.block_claimed_card(
+                    claimed.id,
+                    owner_id=owner_id,
+                    token=token,
+                    reason=f"TECHNICAL: no OpenClaw worker model is configured for agent {claimed.agent_id or '(none)'}",
+                )
+                blocked = True
+            else:
+                workspace = (
+                    claimed.workspace.path
+                    if claimed.workspace is not None and claimed.workspace.path is not None
+                    else Path.cwd()
+                )
+                result = executor.execute(
+                    claimed,
+                    attempt_id=attempt_id,
+                    workspace=workspace,
+                    model=model,
+                    timeout_seconds=_runtime_limit(claimed, self.config.max_runtime_seconds),
+                )
+                if result.status == "completed":
+                    self.complete_claimed_card(
+                        claimed.id,
+                        owner_id=owner_id,
+                        token=token,
+                        summary=result.summary,
+                        proof=result.proof,
+                    )
+                    completed = True
+                else:
+                    self.block_claimed_card(
+                        claimed.id,
+                        owner_id=owner_id,
+                        token=token,
+                        reason=result.reason or "TECHNICAL: worker returned no blocker reason",
+                    )
+                    blocked = True
+        except (WorkerExecutionError, OSError, TimeoutError) as exc:
+            with suppress(Exception):
+                self.block_claimed_card(
+                    claimed.id,
+                    owner_id=owner_id,
+                    token=token,
+                    reason=f"TECHNICAL: managed OpenClaw worker execution failed: {str(exc)[:1500]}",
+                )
+            blocked = True
+        finally:
+            stop.set()
+            heartbeat.join(timeout=2)
+        return {
+            "status": "dispatched",
+            "strategy": "managed_single",
+            "promoted": promoted,
+            "started": [claimed.id],
+            "completed": [claimed.id] if completed else [],
+            "blocked": [claimed.id] if blocked else [],
+            "count": len(set(promoted) | {claimed.id}),
+        }
+
+    def _promote_dependency_ready_cards(self, cards: list[QueueCard]) -> list[str]:
+        by_id = {card.id: card for card in cards}
+        promoted: list[str] = []
+        for card in cards:
+            if card.status != QueueStatus.TODO or card.metadata.get("archivedAt"):
+                continue
+            parents = _parent_ids(card)
+            if parents and not all(
+                parent in by_id and by_id[parent].status == QueueStatus.DONE
+                for parent in parents
+            ):
+                continue
+            promoted_card = self.reclaim_card(
+                card.id,
+                status=QueueStatus.READY,
+                reason="TECHNICAL_managed_dispatch_promoted_dependency_ready_card",
+            )
+            promoted.append(promoted_card.id)
+        return promoted
+
+    def claim_card(
+        self,
+        card_id: str,
+        *,
+        owner_id: str,
+        token: str,
+        attempt_id: str | None = None,
+    ) -> QueueCard:
+        return self._card_response(
+            "workboard.cards.claim",
+            {
+                "id": card_id,
+                "ownerId": owner_id,
+                "token": token,
+                **({"attemptId": attempt_id} if attempt_id else {}),
+            },
+        )
+
+    def _heartbeat_loop(self, stop: Event, card_id: str, owner_id: str, token: str) -> None:
+        while not stop.wait(60):
+            with suppress(Exception):
+                self.heartbeat_card(
+                    card_id,
+                    owner_id=owner_id,
+                    token=token,
+                    note="managed OpenClaw worker process is still running",
+                )
 
     def diagnostics(self) -> dict[str, Any]:
         return self._rpc("workboard.cards.diagnostics.refresh", {})
@@ -511,6 +666,30 @@ def _claim_expired(card: QueueCard) -> bool:
         and not isinstance(expires_at, bool)
         and expires_at <= int(time.time() * 1000)
     )
+
+
+def _parent_ids(card: QueueCard) -> tuple[str, ...]:
+    links = card.metadata.get("links")
+    if not isinstance(links, list):
+        return ()
+    return tuple(
+        str(target)
+        for item in cast(list[object], links)
+        if isinstance(item, dict)
+        for link in [cast(dict[str, object], item)]
+        if link.get("type") == "parent"
+        for target in [link.get("targetCardId")]
+        if target
+    )
+
+
+def _runtime_limit(card: QueueCard, default: int) -> int:
+    automation = card.metadata.get("automation")
+    if isinstance(automation, dict):
+        value = cast(dict[str, object], automation).get("maxRuntimeSeconds")
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return value
+    return default
 
 
 def _worker_models(config: OpenClawWorkboardConfig) -> dict[str, str]:

@@ -710,6 +710,15 @@
           "minimum": 1,
           "title": "Max Concurrent Subagents",
           "type": "integer"
+        },
+        "dispatch_strategy": {
+          "default": "managed_single",
+          "enum": [
+            "managed_single",
+            "workboard"
+          ],
+          "title": "Dispatch Strategy",
+          "type": "string"
         }
       },
       "required": [

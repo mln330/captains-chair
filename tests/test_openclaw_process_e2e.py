@@ -7,7 +7,6 @@ from pathlib import Path
 from captains_chair.canary import (
     build_canary_spec,
     canary_board_id,
-    canary_proof_marker,
     evaluate_canary_card,
 )
 from captains_chair.command import CommandResult, run_command
@@ -72,6 +71,37 @@ if args[:4] == ["config", "get", "agents.defaults.subagents", "--json"]:
     emit({"maxConcurrent": 1})
     raise SystemExit(0)
 
+if args and args[0] == "agent":
+    message = args[args.index("--message") + 1]
+    marker = "CAPTAINS_CHAIR_CANARY_PROOF:"
+    suffix = "process-e2e"
+    if marker in message:
+        suffix = message.split(marker, 1)[1].split("`", 1)[0].split()[0]
+    emit(
+        {
+            "result": {
+                "payloads": [
+                    {
+                        "text": json.dumps(
+                            {
+                                "status": "completed",
+                                "summary": "fake managed OpenClaw canary completed",
+                                "proof": [
+                                    {
+                                        "status": "passed",
+                                        "label": "runtime canary",
+                                        "note": marker + suffix,
+                                    }
+                                ],
+                            }
+                        )
+                    }
+                ]
+            }
+        }
+    )
+    raise SystemExit(0)
+
 if args[:2] != ["gateway", "call"]:
     print("unsupported fake OpenClaw command", file=sys.stderr)
     raise SystemExit(2)
@@ -106,14 +136,21 @@ elif method == "workboard.cards.create":
     emit({"card": card})
 elif method == "workboard.cards.list":
     emit({"cards": list(cards.values())})
-elif method == "workboard.cards.dispatch":
-    promoted = []
-    for card in cards.values():
-        if card["status"] == "todo":
-            card["status"] = "ready"
-            promoted.append(card["id"])
+elif method == "workboard.cards.reclaim":
+    card = cards[params["id"]]
+    card["status"] = params["status"]
     save()
-    emit({"promoted": promoted, "count": len(promoted)})
+    emit({"card": card})
+elif method == "workboard.cards.claim":
+    card = cards[params["id"]]
+    card["status"] = "running"
+    card.setdefault("metadata", {})["claim"] = {
+        "ownerId": params["ownerId"],
+        "token": params["token"],
+        "attemptId": params.get("attemptId", "attempt"),
+    }
+    save()
+    emit({"card": card, "token": params["token"]})
 elif method == "workboard.cards.complete":
     card = cards[params["id"]]
     card["status"] = "done"
@@ -122,6 +159,17 @@ elif method == "workboard.cards.complete":
     card["metadata"]["automation"]["summary"] = params.get("summary", "")
     save()
     emit({"card": card})
+elif method == "workboard.cards.block":
+    card = cards[params["id"]]
+    card["status"] = "blocked"
+    card.setdefault("metadata", {})["workerProtocol"] = {
+        "state": "blocked",
+        "detail": params["reason"],
+    }
+    save()
+    emit({"card": card})
+elif method == "workboard.cards.heartbeat":
+    emit({"card": cards[params["id"]]})
 else:
     print(f"unsupported fake Workboard method: {method}", file=sys.stderr)
     raise SystemExit(2)
@@ -225,6 +273,16 @@ elif method == "workboard.cards.create":
     emit({"card": card})
 elif method == "workboard.cards.list":
     emit({"cards": list(cards.values())})
+elif method == "workboard.cards.claim":
+    card = cards[params["id"]]
+    card["status"] = "running"
+    card.setdefault("metadata", {})["claim"] = {
+        "ownerId": params["ownerId"],
+        "token": params["token"],
+        "attemptId": params.get("attemptId", "attempt"),
+    }
+    save()
+    emit({"card": card, "token": params["token"]})
 elif method == "workboard.cards.complete":
     card = cards[params["id"]]
     card["status"] = "done"
@@ -333,15 +391,10 @@ def test_openclaw_adapter_crosses_real_process_boundary_for_canary(tmp_path: Pat
         ),
     )
     assert evaluate_canary_card(card, canary_id=canary_id).status == "pending"
-    assert adapter.dispatch(board_id)["promoted"] == [card.id]
-    ready = next(item for item in adapter.list_cards(board_id) if item.id == card.id)
-    assert ready.status.value == "ready"
-
-    completed = adapter.complete_card(
-        card.id,
-        summary="Process canary completed",
-        proof=({"status": "passed", "note": canary_proof_marker(canary_id)},),
-    )
+    dispatch = adapter.dispatch(board_id)
+    assert dispatch["started"] == [card.id]
+    assert dispatch["completed"] == [card.id]
+    completed = next(item for item in adapter.list_cards(board_id) if item.id == card.id)
     assert evaluate_canary_card(completed, canary_id=canary_id).status == "passed"
 
 
@@ -353,6 +406,7 @@ def test_openclaw_adapter_crosses_real_process_boundary_for_full_conformance(
     config = OpenClawWorkboardConfig(
         executable=sys.executable,
         dispatch_timeout_seconds=10,
+        dispatch_strategy="workboard",
         require_live_completion_validation=False,
         workers=WorkerAssignments(
             captain="captain",
