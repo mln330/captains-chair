@@ -109,10 +109,16 @@ def test_sidecar_registers_and_updates_repositories_atomically(tmp_path: Path) -
 
     updated = server.request(
         "repo.update",
-        {"full_name": "example/second", "operation_mode": "supervised"},
+        {
+            "full_name": "example/second",
+            "local_path": str(tmp_path / "second-clean-worktree"),
+            "operation_mode": "supervised",
+        },
     )
     assert updated["repo"]["operation_mode"] == "supervised"
-    assert load_config(config_path).repo("example/second").operation_mode.value == "supervised"
+    persisted = load_config(config_path).repo("example/second")
+    assert persisted.operation_mode.value == "supervised"
+    assert persisted.local_path == tmp_path / "second-clean-worktree"
 
     scheduled = server.request(
         "repo.update",
