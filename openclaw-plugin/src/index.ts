@@ -129,7 +129,7 @@ export default definePluginEntry({
         if (rejectNonControlUiRequest(req, res)) return;
         res.statusCode = 200;
         res.setHeader("content-type", "text/html; charset=utf-8");
-        res.end("<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Captain's Chair</title><link rel=\"stylesheet\" href=\"/captains-chair/assets/index.css\"></head><body><div id=\"root\"></div><script src=\"/captains-chair/assets/index.js\"></script></body></html>");
+        res.end("<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Captain's Chair</title><link rel=\"stylesheet\" crossorigin=\"anonymous\" href=\"/captains-chair/assets/index.css\"></head><body><div id=\"root\"></div><script crossorigin=\"anonymous\" src=\"/captains-chair/assets/index.js\"></script></body></html>");
       },
     });
     api.registerHttpRoute?.({

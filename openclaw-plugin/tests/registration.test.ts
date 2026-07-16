@@ -103,4 +103,10 @@ describe("Captain's Chair OpenClaw registration", () => {
       text: "Captain's Chair refused that mutation: owner or operator.write scope is required.",
     });
   });
+
+  it("marks embedded UI assets as CORS-enabled for the sandboxed plugin frame", () => {
+    const source = readFileSync(resolve(process.cwd(), "src/index.ts"), "utf8");
+    expect(source).toContain('<link rel=\\"stylesheet\\" crossorigin=\\"anonymous\\"');
+    expect(source).toContain('<script crossorigin=\\"anonymous\\"');
+  });
 });
