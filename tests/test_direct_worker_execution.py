@@ -129,6 +129,8 @@ def test_direct_runtime_completes_workflow_without_workboard(
     assert runner.commands
     assert all("Attempt ID / idempotency key:" in prompt for prompt in runner.prompts)
     assert all(f"Exact working directory: {workspace.resolve()}" in prompt for prompt in runner.prompts)
+    assert all("Do not call Workboard tools or lifecycle helper commands" in prompt for prompt in runner.prompts)
+    assert all("returning the JSON object requested below" in prompt for prompt in runner.prompts)
     if runtime == "codex":
         assert all("workspace-write" in command for command in runner.commands)
         routed_models = [

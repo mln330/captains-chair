@@ -903,6 +903,55 @@ def test_managed_dispatch_completes_one_ready_card(monkeypatch: pytest.MonkeyPat
     assert "workboard.cards.dispatch" not in calls
 
 
+def test_managed_dispatch_collapses_multiple_worker_proof_records(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cards = {"card-1": _managed_card("card-1", status="ready", agent_id="tester")}
+    _patch_worker_executor(
+        monkeypatch,
+        WorkerExecutionResult(
+            status="completed",
+            summary="completed",
+            proof=(
+                {"status": "passed", "note": "primary"},
+                {"status": "passed", "note": "secondary"},
+            ),
+        ),
+    )
+
+    result = OpenClawWorkboardAdapter(config(), _managed_runner(cards, [])).dispatch("board")
+
+    assert result["completed"] == ["card-1"]
+    proof = cards["card-1"]["metadata"]["proof"]
+    assert len(proof) == 1
+    assert proof[0]["note"] == "primary"
+    assert [item["note"] for item in proof[0]["evidence"]] == ["primary", "secondary"]
+
+
+def test_managed_dispatch_canonicalizes_canary_style_proof_note(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cards = {"card-1": _managed_card("card-1", status="ready", agent_id="tester")}
+    _patch_worker_executor(
+        monkeypatch,
+        WorkerExecutionResult(
+            status="completed",
+            summary="completed",
+            proof=(
+                {"command": "pwd", "output": "ok"},
+                {"proof_note": "CAPTAINS_CHAIR_CANARY_PROOF:smoke"},
+            ),
+        ),
+    )
+
+    result = OpenClawWorkboardAdapter(config(), _managed_runner(cards, [])).dispatch("board")
+
+    assert result["completed"] == ["card-1"]
+    proof = cards["card-1"]["metadata"]["proof"][0]
+    assert proof["status"] == "passed"
+    assert proof["note"] == "CAPTAINS_CHAIR_CANARY_PROOF:smoke"
+
+
 def test_managed_dispatch_promotes_dependency_ready_card(monkeypatch: pytest.MonkeyPatch) -> None:
     cards = {
         "parent": _managed_card("parent", status="done", agent_id="captain"),

@@ -271,7 +271,7 @@ class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
                         owner_id=owner_id,
                         token=token,
                         summary=result.summary,
-                        proof=result.proof,
+                        proof=_managed_completion_proof(result.proof),
                     )
                     completed = True
                 else:
@@ -690,6 +690,37 @@ def _runtime_limit(card: QueueCard, default: int) -> int:
         if isinstance(value, int) and not isinstance(value, bool) and value > 0:
             return value
     return default
+
+
+def _managed_completion_proof(proof: tuple[dict[str, Any], ...]) -> tuple[dict[str, Any], ...]:
+    """Collapse model-supplied evidence to the single proof record OpenClaw accepts."""
+    if not proof:
+        return ()
+    primary = next(
+        (
+            item
+            for item in proof
+            if str(item.get("status") or "").lower() == "passed"
+            or any(str(item.get(field) or "").strip() for field in ("note", "label", "proof_note"))
+        ),
+        proof[0],
+    )
+    note = str(primary.get("note") or primary.get("label") or primary.get("proof_note") or "")
+    if not note:
+        note = " | ".join(
+            str(item.get(field) or "").strip()
+            for item in proof
+            for field in ("note", "label", "proof_note", "command")
+            if str(item.get(field) or "").strip()
+        )
+    return (
+        {
+            **primary,
+            "status": str(primary.get("status") or "passed"),
+            "note": note,
+            **({"evidence": list(proof)} if len(proof) > 1 else {}),
+        },
+    )
 
 
 def _worker_models(config: OpenClawWorkboardConfig) -> dict[str, str]:

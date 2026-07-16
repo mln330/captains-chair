@@ -2,6 +2,9 @@
   "id": "captains-chair",
   "name": "Captain's Chair",
   "description": "An SDLC control plane that puts the builder in command of an agent crew.",
+  "activation": {
+    "onStartup": true
+  },
   "contracts": {
     "tools": [
       "captains_chair_course_status",
