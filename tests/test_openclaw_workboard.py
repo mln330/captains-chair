@@ -187,6 +187,49 @@ def test_create_card_uses_gateway_rpc_and_preserves_worker_metadata(tmp_path: Pa
     )
 
 
+def test_create_card_bounds_labels_for_openclaw_limit(tmp_path: Path) -> None:
+    commands: list[Sequence[str]] = []
+
+    def runner(
+        command: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        input_text: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        del cwd, input_text, timeout
+        commands.append(command)
+        return CommandResult(
+            0,
+            json.dumps(
+                {
+                    "card": {
+                        "id": "card-1",
+                        "title": "Implement issue",
+                        "status": "todo",
+                        "labels": ["captains_chair"],
+                    }
+                }
+            ),
+            "",
+        )
+
+    OpenClawWorkboardAdapter(config(), runner).create_card(
+        "board",
+        QueueCardSpec(
+            key="key",
+            title="Implement issue",
+            notes="Use the isolated worktree.",
+            labels=("repo:mln330/captains-chair-e2e-smoke-20260716-0958", " stage:implementation "),
+            workspace=WorkspaceRef(kind="dir", path=tmp_path),
+        ),
+    )
+
+    params = json.loads(list(commands[0])[list(commands[0]).index("--params") + 1])
+    assert all(len(label) <= 40 for label in params["labels"])
+    assert params["labels"] == ["repo:mln330/captains-chair-e2e-smoke-...", "stage:implementation"]
+
+
 def test_card_normalizes_metadata_workspace_push_branch() -> None:
     def runner(
         command: Sequence[str],

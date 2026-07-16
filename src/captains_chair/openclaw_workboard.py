@@ -80,7 +80,7 @@ class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
             "notes": spec.notes,
             "status": spec.status.value,
             "priority": spec.priority,
-            "labels": list(spec.labels),
+            "labels": [_bounded_label(label) for label in spec.labels],
             "agentId": spec.agent_id or "",
             "boardId": board_id,
             "tenant": "captains-chair",
@@ -641,6 +641,13 @@ def _bounded_title(value: str) -> str:
     if len(value) <= 180:
         return value
     return value[:177].rstrip() + "..."
+
+
+def _bounded_label(value: str) -> str:
+    cleaned = value.strip()
+    if len(cleaned) <= 40:
+        return cleaned
+    return cleaned[:37].rstrip() + "..."
 
 
 def _session_key(card: QueueCard) -> str | None:
