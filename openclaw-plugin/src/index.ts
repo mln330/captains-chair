@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { readFile } from "node:fs/promises";
 import { SidecarSupervisor, withSidecarShutdown, type RpcResult } from "./sidecar.js";
+import { rejectNonControlUiRequest } from "./control-ui-auth.js";
 import {
   buildCronAddArgs,
   buildCronEditArgs,
@@ -123,8 +124,9 @@ export default definePluginEntry({
     const uiRoot = join(api.rootDir ?? process.cwd(), "dist", "ui");
     api.registerHttpRoute?.({
       path: "/captains-chair/",
-      auth: "gateway",
-      handler: async (_req, res) => {
+      auth: "plugin",
+      handler: async (req, res) => {
+        if (rejectNonControlUiRequest(req, res)) return;
         res.statusCode = 200;
         res.setHeader("content-type", "text/html; charset=utf-8");
         res.end("<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Captain's Chair</title><link rel=\"stylesheet\" href=\"/captains-chair/assets/index.css\"></head><body><div id=\"root\"></div><script type=\"module\" src=\"/captains-chair/assets/index.js\"></script></body></html>");
@@ -132,8 +134,9 @@ export default definePluginEntry({
     });
     api.registerHttpRoute?.({
       path: "/captains-chair/assets/index.css",
-      auth: "gateway",
-      handler: async (_req, res) => {
+      auth: "plugin",
+      handler: async (req, res) => {
+        if (rejectNonControlUiRequest(req, res)) return;
         try {
           const body = await readFile(join(uiRoot, "assets", "index.css"));
           res.statusCode = 200;
@@ -147,8 +150,9 @@ export default definePluginEntry({
     });
     api.registerHttpRoute?.({
       path: "/captains-chair/assets/index.js",
-      auth: "gateway",
-      handler: async (_req, res) => {
+      auth: "plugin",
+      handler: async (req, res) => {
+        if (rejectNonControlUiRequest(req, res)) return;
         try {
           const body = await readFile(join(uiRoot, "assets", "index.js"));
           res.statusCode = 200;
@@ -164,9 +168,9 @@ export default definePluginEntry({
     const apiRoute = (path: string, method: string) => {
       api.registerHttpRoute?.({
         path,
-        auth: "gateway",
-        gatewayRuntimeScopeSurface: "trusted-operator",
+        auth: "plugin",
         handler: async (req, res) => {
+          if (rejectNonControlUiRequest(req, res)) return;
           try {
             const params = req?.body && typeof req.body === "object" ? req.body : {};
             const result = await request(method, params);
