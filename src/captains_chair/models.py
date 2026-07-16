@@ -406,6 +406,7 @@ class OpenClawWorkboardConfig(WorkerOrchestrationConfig):
     auth_source_agent: str | None = None
     dispatch_timeout_seconds: int = Field(default=120, ge=10, le=900)
     session_limit: int = Field(default=1000, ge=1, le=10000)
+    max_concurrent_subagents: int = Field(default=1, ge=1, le=4)
 
     @model_validator(mode="after")
     def command_must_not_be_empty(self) -> OpenClawWorkboardConfig:

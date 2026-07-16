@@ -24,6 +24,17 @@ class OpenClawWorkboardError(RuntimeError):
     pass
 
 
+REQUIRED_WORKER_TOOLS = (
+    "workboard_block",
+    "workboard_comment",
+    "workboard_complete",
+    "workboard_heartbeat",
+    "workboard_proof",
+    "workboard_read",
+    "workboard_worker_log",
+)
+
+
 class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
     def __init__(
         self,
@@ -279,7 +290,7 @@ class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
         return _session_output_ended(output)
 
     def validate_worker_models(self) -> dict[str, Any]:
-        """Verify configured OpenClaw worker agents before starting new sessions."""
+        """Verify worker models, lifecycle tools, and host concurrency before dispatch."""
         result = self.runner(
             [self.config.executable, "agents", "list", "--json"],
             timeout=60,
@@ -310,11 +321,51 @@ class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
             or not isinstance(observed.get(agent_id), str)
             or not models_match(model, str(observed[agent_id]))
         ]
+        tools = self._config_object("tools")
+        allow_value = tools.get("allow")
+        allowed = (
+            {str(value) for value in cast(list[object], allow_value)}
+            if isinstance(allow_value, list)
+            else None
+        )
+        missing_tools = (
+            [tool for tool in REQUIRED_WORKER_TOOLS if tool not in allowed]
+            if allowed is not None
+            else []
+        )
+        subagents = self._config_object("agents.defaults.subagents")
+        observed_concurrency = subagents.get("maxConcurrent", 8)
+        concurrency_valid = (
+            isinstance(observed_concurrency, int)
+            and not isinstance(observed_concurrency, bool)
+            and observed_concurrency <= self.config.max_concurrent_subagents
+        )
         return {
-            "status": "degraded" if mismatches else "ok",
+            "status": "degraded" if mismatches or missing_tools or not concurrency_valid else "ok",
             "checked_agents": len(expected),
             "mismatches": mismatches,
+            "missing_worker_tools": missing_tools,
+            "max_concurrent_subagents": {
+                "expected_max": self.config.max_concurrent_subagents,
+                "observed": observed_concurrency,
+                "valid": concurrency_valid,
+            },
         }
+
+    def _config_object(self, path: str) -> dict[str, Any]:
+        result = self.runner(
+            [self.config.executable, "config", "get", path, "--json"],
+            timeout=60,
+        )
+        if result.returncode:
+            detail = (result.stderr or result.stdout).strip()[:2000]
+            raise OpenClawWorkboardError(f"OpenClaw runtime safety check failed for {path}: {detail}")
+        raw = decode_openclaw_json(result.stdout)
+        if not isinstance(raw, dict):
+            raise OpenClawWorkboardError(
+                f"OpenClaw runtime safety check for {path} did not return an object"
+            )
+        return cast(dict[str, Any], raw)
     @staticmethod
     def _completion_proof(proof: tuple[dict[str, Any], ...]) -> dict[str, Any] | None:
         if len(proof) > 1:

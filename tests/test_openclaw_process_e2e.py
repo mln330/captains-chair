@@ -64,6 +64,14 @@ if args[:3] == ["agents", "list", "--json"]:
     )
     raise SystemExit(0)
 
+if args[:4] == ["config", "get", "tools", "--json"]:
+    emit({"allow": ["workboard_block", "workboard_comment", "workboard_complete", "workboard_heartbeat", "workboard_proof", "workboard_read", "workboard_worker_log"]})
+    raise SystemExit(0)
+
+if args[:4] == ["config", "get", "agents.defaults.subagents", "--json"]:
+    emit({"maxConcurrent": 1})
+    raise SystemExit(0)
+
 if args[:2] != ["gateway", "call"]:
     print("unsupported fake OpenClaw command", file=sys.stderr)
     raise SystemExit(2)
@@ -158,6 +166,14 @@ if args[:3] == ["agents", "list", "--json"]:
             {"id": "verify", "model": "codex/gpt-5.5"},
         ]
     )
+    raise SystemExit(0)
+
+if args[:4] == ["config", "get", "tools", "--json"]:
+    emit({"allow": ["workboard_block", "workboard_comment", "workboard_complete", "workboard_heartbeat", "workboard_proof", "workboard_read", "workboard_worker_log"]})
+    raise SystemExit(0)
+
+if args[:4] == ["config", "get", "agents.defaults.subagents", "--json"]:
+    emit({"maxConcurrent": 1})
     raise SystemExit(0)
 
 if args[:2] != ["gateway", "call"]:

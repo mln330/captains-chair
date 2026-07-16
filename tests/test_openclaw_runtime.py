@@ -135,13 +135,101 @@ def test_runtime_install_updates_existing_agents_without_recreating_them(tmp_pat
     ) -> CommandResult:
         del cwd, input_text, timeout
         commands.append(command)
-        return CommandResult(0, json.dumps(existing), "")
+        if list(command)[1:4] == ["agents", "list", "--json"]:
+            return CommandResult(0, json.dumps(existing), "")
+        if list(command)[1:5] == ["config", "get", "tools", "--json"]:
+            return CommandResult(0, json.dumps({"allow": ["group:fs"]}), "")
+        return CommandResult(0, "{}", "")
 
     actions = OpenClawRuntimeInstaller(config, runner).install(tmp_path)
 
     assert all(item.action == "update_instructions" for item in actions)
     assert not any("add" in command for command in commands)
     assert (tmp_path / "github-coder" / "AGENTS.md").is_file()
+    tool_command = next(command for command in commands if "tools.allow" in command)
+    configured_tools = json.loads(list(tool_command)[4])
+    assert "group:fs" in configured_tools
+    assert "workboard_complete" in configured_tools
+    assert any("agents.defaults.subagents.maxConcurrent" in command for command in commands)
+
+
+def test_runtime_install_leaves_unrestricted_tool_policy_unrestricted(tmp_path: Path) -> None:
+    config = runtime_config()
+    existing = [
+        {"id": agent_id, "model": model}
+        for _role, agent_id, model in OpenClawRuntimeInstaller(config, noop_runner)._roles()  # pyright: ignore[reportPrivateUsage]
+    ]
+    commands: list[Sequence[str]] = []
+
+    def runner(
+        command: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        input_text: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        del cwd, input_text, timeout
+        commands.append(command)
+        if list(command)[1:4] == ["agents", "list", "--json"]:
+            return CommandResult(0, json.dumps(existing), "")
+        if list(command)[1:5] == ["config", "get", "tools", "--json"]:
+            return CommandResult(0, json.dumps({}), "")
+        return CommandResult(0, "{}", "")
+
+    OpenClawRuntimeInstaller(config, runner).install(tmp_path)
+
+    assert not any("tools.allow" in command for command in commands)
+    assert any("agents.defaults.subagents.maxConcurrent" in command for command in commands)
+
+
+def test_runtime_install_fails_closed_when_tool_policy_read_fails(tmp_path: Path) -> None:
+    config = runtime_config()
+    existing = [
+        {"id": agent_id, "model": model}
+        for _role, agent_id, model in OpenClawRuntimeInstaller(config, noop_runner)._roles()  # pyright: ignore[reportPrivateUsage]
+    ]
+
+    def runner(
+        command: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        input_text: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        del cwd, input_text, timeout
+        if list(command)[1:4] == ["agents", "list", "--json"]:
+            return CommandResult(0, json.dumps(existing), "")
+        if list(command)[1:5] == ["config", "get", "tools", "--json"]:
+            return CommandResult(1, "", "config unavailable")
+        return CommandResult(0, "{}", "")
+
+    with pytest.raises(OpenClawWorkboardError, match="tool policy"):
+        OpenClawRuntimeInstaller(config, runner).install(tmp_path)
+
+
+def test_runtime_install_fails_closed_when_tool_policy_is_not_object(tmp_path: Path) -> None:
+    config = runtime_config()
+    existing = [
+        {"id": agent_id, "model": model}
+        for _role, agent_id, model in OpenClawRuntimeInstaller(config, noop_runner)._roles()  # pyright: ignore[reportPrivateUsage]
+    ]
+
+    def runner(
+        command: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        input_text: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        del cwd, input_text, timeout
+        if list(command)[1:4] == ["agents", "list", "--json"]:
+            return CommandResult(0, json.dumps(existing), "")
+        if list(command)[1:5] == ["config", "get", "tools", "--json"]:
+            return CommandResult(0, "[]", "")
+        return CommandResult(0, "{}", "")
+
+    with pytest.raises(OpenClawWorkboardError, match="tool policy"):
+        OpenClawRuntimeInstaller(config, runner).install(tmp_path)
 
 
 def test_runtime_install_reports_agent_creation_failure(tmp_path: Path) -> None:
@@ -222,8 +310,12 @@ def test_runtime_install_syncs_auth_profiles_from_existing_source_agent(tmp_path
         input_text: str | None = None,
         timeout: int = 60,
     ) -> CommandResult:
-        del command, cwd, input_text, timeout
-        return CommandResult(0, json.dumps(existing), "")
+        del cwd, input_text, timeout
+        if list(command)[1:4] == ["agents", "list", "--json"]:
+            return CommandResult(0, json.dumps(existing), "")
+        if list(command)[1:5] == ["config", "get", "tools", "--json"]:
+            return CommandResult(0, json.dumps({"allow": ["group:fs"]}), "")
+        return CommandResult(0, "{}", "")
 
     actions = OpenClawRuntimeInstaller(config, runner).install(tmp_path)
     assert len(actions) == 8
