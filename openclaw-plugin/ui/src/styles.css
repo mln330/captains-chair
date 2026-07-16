@@ -151,11 +151,12 @@ legend { color: #7fc7c0; font-size: 12px; padding: 0 5px; }
   .topbar, .repo-meta, .settings, .course-detail, .detail-section,
   .route-preview, .course-builder, .activity-section, .register-panel,
   .courses, .schedule-section, .model-policy-panel { border-color: #ded8d0; }
-  .eyebrow, .route-preview h3, .detail-section h3, legend, .event-row strong { color: #c6442f; }
+  .eyebrow, .route-preview h3, .detail-section h3, legend, .event-row strong { color: #a83324; }
   .subtitle, .repo-meta, .repo-heading p, .route-preview span, .route-preview small,
   .register-form label, .settings-grid label, fieldset label, .course-actions label,
   .requirement div span, .checkpoint div span, .package-list span, .event-row small,
   .token-row span, .schedule-row div > span, .muted, .planning-brief p { color: #6f6a63; }
+  .course-heading div span { color: #655f59; }
   .icon-button, .secondary { background: #fff; border-color: #cfc8bf; color: #292724; }
   .primary { background: #c6442f; color: #fff; }
   .status-pill { background: #f5ddd7; color: #8d2f22; }
@@ -164,10 +165,10 @@ legend { color: #7fc7c0; font-size: 12px; padding: 0 5px; }
   .mode.supervised, .health.paused, .readiness.waiting { background: #fff0c9; color: #7b5b12; }
   .mode.advisory { background: #e1eef7; color: #265a7c; }
   .mode.disabled, .health.missing, .health.drifted, .health.duplicate { background: #f7dfdf; color: #8d2f36; }
-  .flow-stage { color: #8b857d; }
+  .flow-stage { color: #655f59; }
   .flow-stage.active { color: #3d3935; }
   .flow-dot { background: #e2ddd6; border-color: #aaa198; }
-  .flow-stage.active .flow-dot { background: #c6442f; border-color: #e17868; box-shadow: 0 0 0 4px #f5ddd7; }
+  .flow-stage.active .flow-dot { background: #a83324; border-color: #d56b5b; box-shadow: 0 0 0 4px #f5ddd7; }
   .flow-line { background: #d2cbc2; }
   .flow-stage.active .flow-line { background: #d77a6d; }
   .empty { border-color: #cfc8bf; color: #6f6a63; }
@@ -176,16 +177,18 @@ legend { color: #7fc7c0; font-size: 12px; padding: 0 5px; }
   .settings summary { color: #292724; }
   .alert { background: #f7dfdf; border-color: #d48c8c; color: #8d2f36; }
   input, select, textarea { background: #fff; border-color: #cfc8bf; color: #292724; }
-  input:focus, select:focus, textarea:focus, button:focus-visible { outline-color: #c6442f; }
+  input:focus, select:focus, textarea:focus, button:focus-visible { outline-color: #a83324; }
   fieldset, .requirement, .checkpoint, .schedule-grid, .course-list, .activity-panel { border-color: #ded8d0; }
   .package-list div, .event-row, .token-row { border-color: #ded8d0; }
+  .package-list em { color: #32602b; }
   .warning, .status-text, .readiness.waiting { color: #7b5b12; }
   .route-preview div { border-color: #ded8d0; }
   .health { color: #3d3935; }
   .health.healthy, .readiness.ready { background: #e1eedb; color: #32602b; }
   .inline-status { color: #32602b; }
   .danger { border-color: #d48c8c; color: #8d2f36; }
-  .plan-diff { border-color: #c6442f; }
+  .plan-diff { border-color: #a83324; }
+  .plan-diff dt { color: #a83324; }
   .event-row a { color: #a83324; }
   .token-row strong { color: #292724; }
 }
