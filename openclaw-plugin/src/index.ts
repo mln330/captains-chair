@@ -6,6 +6,7 @@ import { SidecarSupervisor, withSidecarShutdown, type RpcResult } from "./sideca
 import {
   buildCronAddArgs,
   buildCronEditArgs,
+  cronListArgs,
   cronIdentifier,
   inspectCronJob,
   parseCronJobs,
@@ -347,7 +348,7 @@ export default definePluginEntry({
       return result ?? {};
     };
     const liveCronJobs = async () => {
-      const listed = await invokeCron(["cron", "list", "--json"]);
+      const listed = await invokeCron(cronListArgs());
       return parseCronJobs(String(listed.stdout ?? ""));
     };
     const scheduleStatus = async (): Promise<{ status: string; jobs: unknown[] }> => {

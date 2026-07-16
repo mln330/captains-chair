@@ -34,6 +34,10 @@ export async function runOpenClawCommand(
   return runner([executable, ...args], { timeoutMs });
 }
 
+export function cronListArgs(): string[] {
+  return ["cron", "list", "--all", "--json"];
+}
+
 export function parseCronJobs(stdout: string): CronJob[] {
   let parsed: unknown;
   try {
