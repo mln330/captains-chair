@@ -6,6 +6,7 @@ import {
   findExistingCronJob,
   inspectCronJob,
   parseCronJobs,
+  runOpenClawCommand,
   type ScheduleDefinition,
 } from "../src/schedules.js";
 
@@ -27,6 +28,20 @@ const expectedArgv = [
 ];
 
 describe("OpenClaw schedule reconciliation", () => {
+  it("uses the OpenClaw 2026 command-runner contract", async () => {
+    const calls: unknown[][] = [];
+    const result = await runOpenClawCommand(async (argv, options) => {
+      calls.push([argv, options]);
+      return { code: 0, stdout: "ok" };
+    }, "/opt/openclaw/bin/openclaw", ["cron", "list", "--json"]);
+
+    expect(calls).toEqual([[
+      ["/opt/openclaw/bin/openclaw", "cron", "list", "--json"],
+      { timeoutMs: 120_000 },
+    ]]);
+    expect(result.stdout).toBe("ok");
+  });
+
   it("accepts both object and array cron-list payloads", () => {
     const job = { id: "job-1", name: definition.name };
     expect(parseCronJobs(JSON.stringify({ jobs: [job] }))).toEqual([job]);

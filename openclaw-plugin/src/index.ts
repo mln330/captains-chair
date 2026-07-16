@@ -9,6 +9,8 @@ import {
   cronIdentifier,
   inspectCronJob,
   parseCronJobs,
+  runOpenClawCommand,
+  type OpenClawCommandRunner,
   type ScheduleDefinition,
 } from "./schedules.js";
 
@@ -47,7 +49,7 @@ type Api = {
   }) => void;
   session?: { controls?: { registerControlUiDescriptor?: (descriptor: Record<string, unknown>) => void } };
   runtime?: {
-    system?: { runCommandWithTimeout?: (command: string, args: string[], options?: Record<string, unknown>) => Promise<any> };
+    system?: { runCommandWithTimeout?: OpenClawCommandRunner };
   };
 };
 
@@ -338,7 +340,7 @@ export default definePluginEntry({
     const runCommand = api.runtime?.system?.runCommandWithTimeout;
     const invokeCron = async (args: string[]): Promise<CommandResult> => {
       if (!runCommand) throw new Error("OpenClaw command runtime is unavailable");
-      const result = (await runCommand(executable, args, { timeoutMs: 120_000 })) as CommandResult;
+      const result = (await runOpenClawCommand(runCommand, executable, args)) as CommandResult;
       if (typeof result?.code === "number" && result.code !== 0) {
         throw new Error(String(result.stderr ?? `openclaw exited with code ${result.code}`));
       }
