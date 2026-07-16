@@ -35,6 +35,8 @@ def test_canary_spec_is_dedicated_and_forbids_repository_work(tmp_path: Path) ->
     assert spec.key == "captains_chair:canary:example/project:smoke-1"
     assert spec.agent_id == "github-tester"
     assert "Do not inspect, edit, commit, push, or merge" in spec.notes
+    assert "portable worker-protocol helper is the lifecycle interface" in spec.notes
+    assert "Do not search OpenClaw internals or call native Workboard tools" in spec.notes
     assert canary_proof_marker("smoke-1") in spec.notes
 
 
