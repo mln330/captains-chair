@@ -108,6 +108,8 @@ class SidecarServer:
             return self._course_readiness(payload)
         if method == "course.planning_session":
             return self._planning_session(payload)
+        if method == "course.readiness_review":
+            return self._review_course_readiness(payload)
         if method == "course.models":
             return self._update_course_models(payload)
         if method == "course.requirement":
@@ -475,6 +477,43 @@ class SidecarServer:
     def _planning_session(self, payload: dict[str, Any]) -> dict[str, Any]:
         repo, _store, course = self._course_context(payload)
         return {"repository": repo.full_name, **self.interaction.planning_session(course)}
+
+    def _review_course_readiness(self, payload: dict[str, Any]) -> dict[str, Any]:
+        repo, _store, course = self._course_context(payload)
+        harness = str(payload.get("harness") or "").strip()
+        if not harness:
+            raise SidecarError("course.readiness_review requires a harness")
+        command = [
+            sys.executable,
+            "-m",
+            "captains_chair.cli",
+            "--config",
+            str(self.config_path),
+            "readiness-review",
+            "--repo",
+            repo.full_name,
+            "--course-key",
+            course.key,
+            "--harness",
+            harness,
+        ]
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=14400,
+        )
+        if completed.returncode != 0:
+            detail = (completed.stderr or completed.stdout).strip()[-2000:]
+            raise SidecarError(f"readiness review failed: {detail}")
+        try:
+            value = json.loads(completed.stdout)
+        except json.JSONDecodeError as exc:
+            raise SidecarError("readiness review returned invalid JSON") from exc
+        if not isinstance(value, dict):
+            raise SidecarError("readiness review returned an invalid response")
+        return cast(dict[str, Any], value)
 
     def _update_course_models(self, payload: dict[str, Any]) -> dict[str, Any]:
         repo, store, course = self._course_context(payload)

@@ -24,7 +24,7 @@ from captains_chair.canary import (
 from captains_chair.command import run_command
 from captains_chair.completion_gate import GitHubCompletionValidator
 from captains_chair.config import load_config, write_json_schema
-from captains_chair.courses import CourseStore, planning_session
+from captains_chair.courses import CourseStore, planning_session, readiness_report
 from captains_chair.engine import ControlPlaneEngine, ModelCallSuppressedError
 from captains_chair.github import GhGitHubProvider
 from captains_chair.harness import build_harness
@@ -175,6 +175,14 @@ def _parser() -> argparse.ArgumentParser:
     planning = sub.add_parser("planning-session", help="print the host-agent planning conversation handoff")
     planning.add_argument("--repo", required=True)
     planning.add_argument("--course-key", required=True)
+
+    readiness_review = sub.add_parser(
+        "readiness-review",
+        help="run and persist an independent model review of one course",
+    )
+    readiness_review.add_argument("--repo", required=True)
+    readiness_review.add_argument("--course-key", required=True)
+    readiness_review.add_argument("--harness", required=True)
 
     usage = sub.add_parser("usage", help="report or import model usage without transcripts")
     usage_action = usage.add_subparsers(dest="usage_action", required=True)
@@ -1244,6 +1252,23 @@ def main(argv: list[str] | None = None) -> int:
             course = CourseStore(repo.local_path).load(args.course_key)
             print(json.dumps(planning_session(course), indent=2, default=str))
             return 0
+        if args.command == "readiness-review":
+            repo = config.repo(args.repo)
+            engine, _collector = _runtime(config, args.repo, args.harness)
+            course = engine.review_course_readiness(repo, args.course_key, str(uuid.uuid4()))
+            print(
+                json.dumps(
+                    {
+                        "status": course.status.value,
+                        "repository": repo.full_name,
+                        "course": course.model_dump(mode="json"),
+                        "readiness": readiness_report(course).model_dump(mode="json"),
+                    },
+                    indent=2,
+                    default=str,
+                )
+            )
+            return 0
         if args.command == "usage":
             state = StateStore(config.state_dir / "state.db")
             if args.usage_action == "report":
@@ -1983,3 +2008,7 @@ def main(argv: list[str] | None = None) -> int:
 
 def _cli_lease_owner(operation: str) -> str:
     return f"cli:{operation}:{os.getpid()}:{uuid.uuid4().hex}"
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
