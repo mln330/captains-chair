@@ -238,13 +238,15 @@ def _parser() -> argparse.ArgumentParser:
     worker_protocol = sub.add_parser(
         "worker-protocol", help="perform a portable claimed-worker lifecycle operation"
     )
-    worker_protocol.add_argument("action", choices=("claim", "heartbeat", "complete", "block"))
+    worker_protocol.add_argument(
+        "action", choices=("claim", "heartbeat", "complete", "block", "cancel")
+    )
     worker_protocol.add_argument("--repo", required=True)
     worker_protocol.add_argument("--orchestrator")
     worker_protocol.add_argument("--card")
     worker_protocol.add_argument("--agent-id")
     worker_protocol.add_argument("--owner-id", required=True)
-    worker_protocol.add_argument("--token", required=True)
+    worker_protocol.add_argument("--token")
     worker_protocol.add_argument("--note", default="working")
     worker_protocol.add_argument("--summary")
     worker_protocol.add_argument("--proof-note")
@@ -1623,6 +1625,9 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
             if args.action != "claim" and not args.card:
                 raise ValueError(f"{args.action} requires --card")
+            if args.action != "cancel" and not args.token:
+                raise ValueError(f"{args.action} requires --token")
+            token = str(args.token or "")
             proof: dict[str, str] | None = None
             if args.action == "complete":
                 if not args.summary or not args.proof_note:
@@ -1634,8 +1639,8 @@ def main(argv: list[str] | None = None) -> int:
                 }
                 if args.proof_url:
                     proof["url"] = args.proof_url
-            elif args.action == "block" and not args.reason:
-                raise ValueError("block requires --reason")
+            elif args.action in {"block", "cancel"} and not args.reason:
+                raise ValueError(f"{args.action} requires --reason")
             configured = config.orchestrators.get(repo.orchestrator) if repo.orchestrator else None
             adapter = (
                 OpenClawWorkboardAdapter(configured)
@@ -1650,7 +1655,7 @@ def main(argv: list[str] | None = None) -> int:
                 if args.card and callable(claim_card):
                     card = cast(
                         QueueCard,
-                        claim_card(args.card, owner_id=args.owner_id, token=args.token),
+                        claim_card(args.card, owner_id=args.owner_id, token=token),
                     )
                 elif callable(claim_next):
                     claimed = cast(
@@ -1658,7 +1663,7 @@ def main(argv: list[str] | None = None) -> int:
                         claim_next(
                             _board_id(config, repo.full_name),
                             owner_id=args.owner_id,
-                            token=args.token,
+                            token=token,
                             agent_id=args.agent_id,
                         ),
                     )
@@ -1674,7 +1679,7 @@ def main(argv: list[str] | None = None) -> int:
                 card = lifecycle.heartbeat_card(
                     cast(str, args.card),
                     owner_id=args.owner_id,
-                    token=args.token,
+                    token=token,
                     note=args.note,
                 )
             elif args.action == "complete":
@@ -1682,16 +1687,30 @@ def main(argv: list[str] | None = None) -> int:
                 card = lifecycle.complete_claimed_card(
                     cast(str, args.card),
                     owner_id=args.owner_id,
-                    token=args.token,
+                    token=token,
                     summary=args.summary,
                     proof=(proof,),
                 )
-            else:
+            elif args.action == "block":
                 card = lifecycle.block_claimed_card(
                     cast(str, args.card),
                     owner_id=args.owner_id,
-                    token=args.token,
+                    token=token,
                     reason=args.reason,
+                )
+            else:
+                cancel = getattr(adapter, "cancel_claimed_card", None)
+                if not callable(cancel):
+                    raise ValueError(
+                        f"orchestrator {repo.orchestrator or 'direct'} does not expose cancellation"
+                    )
+                card = cast(
+                    QueueCard,
+                    cancel(
+                        cast(str, args.card),
+                        requested_by=args.owner_id,
+                        reason=args.reason,
+                    ),
                 )
             print(json.dumps(card.model_dump(mode="json"), indent=2, default=str))
             return 0

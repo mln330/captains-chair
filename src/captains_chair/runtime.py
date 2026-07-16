@@ -4,6 +4,7 @@ from collections.abc import Callable
 
 from captains_chair.command import CommandRunner, run_command
 from captains_chair.direct_orchestrator import DirectOrchestrator
+from captains_chair.direct_workers import CommandWorkerExecutor
 from captains_chair.models import DirectOrchestratorConfig, OpenClawWorkboardConfig, OrchestratorConfig
 from captains_chair.openclaw_workboard import OpenClawWorkboardAdapter
 from captains_chair.orchestration import (
@@ -114,10 +115,32 @@ def _build_openclaw_queue(config: OrchestratorConfig, runner: CommandRunner) -> 
 def _build_direct_orchestrator(
     config: OrchestratorConfig, runner: CommandRunner
 ) -> WorkerOrchestratorAdapter:
-    del runner
     if not isinstance(config, DirectOrchestratorConfig):
         raise TypeError("direct adapter requires DirectOrchestratorConfig")
-    return DirectOrchestrator(config.database_path)
+    executor = (
+        None
+        if config.worker_runtime == "external"
+        else CommandWorkerExecutor(config.worker_runtime, config.executable or "", runner)
+    )
+    workers = config.workers
+    models = config.worker_models
+    worker_models = {
+        workers.captain: models.captain,
+        workers.coder: models.coder,
+        workers.reviewer: models.reviewer,
+        workers.tester: models.tester,
+        workers.ux_reviewer: models.ux_reviewer,
+        workers.final_reviewer: models.final_reviewer,
+        workers.merger: models.merger,
+        workers.verifier: models.verifier,
+    }
+    return DirectOrchestrator(
+        config.database_path,
+        executor=executor,
+        lease_seconds=config.lease_seconds,
+        max_dispatch_workers=config.max_dispatch_workers,
+        worker_models=worker_models,
+    )
 
 
 DEFAULT_RUNTIME_ADAPTERS = RuntimeAdapterRegistry()

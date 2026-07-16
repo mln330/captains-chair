@@ -78,6 +78,22 @@ and explicit blockers. The queue adapter may acquire that claim during dispatch
 or delegate it to a worker-session service; the deterministic workflow engine
 does not need to know which mechanism was used.
 
+Board-free runtimes implement the extended `ClaimingWorkerLifecycleAdapter` and
+use `WorkerExecutorAdapter` to launch a fresh host worker. `DirectOrchestrator`
+atomically claims one dependency-ready card, records an attempt id and expiring
+lease, maintains heartbeats while the host process runs, and commits completion or
+block evidence only while the original owner/token is still active. Cancellation
+and expiry remove the live token before changing state, so a late process cannot
+overwrite the newer decision. Expired leases retry only within the card's bounded
+budget; restart reconciliation recovers the same durable SQLite state.
+
+The built-in command executor supports both OpenClaw and Codex. OpenClaw receives
+an isolated session key, assigned agent and exact workspace; Codex receives a fresh
+`codex exec` invocation with `workspace-write`, an output schema and the same
+idempotency key. Both must return the portable `WorkerExecutionResult` contract.
+An `external` direct runtime leaves cards ready for a third-party worker to claim
+through the same lifecycle API.
+
 Final-review cards must include a passed marker anchored to the reviewed head:
 `READY_FOR_OWNER:<head-sha>`, `CONTROL_PLANE_COMPLETE:<head-sha>`, or
 `AUTO_MERGE_ALLOWED:<head-sha>` according to repository policy. Generic
