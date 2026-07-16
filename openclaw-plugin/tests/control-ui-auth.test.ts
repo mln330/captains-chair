@@ -10,6 +10,7 @@ describe("Captain's Chair Control UI route guard", () => {
     expect(isCaptainUiRequest({ headers: { referer: "https://openclaw.example/plugin?plugin=captains-chair&id=captains-chair" } })).toBe(true);
     expect(isCaptainUiRequest({ headers: { referer: "https://openclaw.example/captains-chair/" } })).toBe(true);
     expect(isCaptainUiRequest({ headers: { origin: "null" } })).toBe(true);
+    expect(isCaptainUiRequest({ headers: { "sec-fetch-dest": "iframe", "sec-fetch-mode": "navigate" } })).toBe(true);
   });
 
   it("rejects direct and cross-site requests", () => {

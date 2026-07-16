@@ -18,6 +18,9 @@ function header(request: RequestLike, name: string): string | undefined {
 export function isCaptainUiRequest(request: RequestLike): boolean {
   const site = header(request, "sec-fetch-site")?.toLowerCase();
   if (site === "same-origin") return true;
+  const destination = header(request, "sec-fetch-dest")?.toLowerCase();
+  const mode = header(request, "sec-fetch-mode")?.toLowerCase();
+  if (destination === "iframe" && (mode === "navigate" || mode === "nested-navigate")) return true;
   if (header(request, "origin")?.toLowerCase() === "null") return true;
 
   const referer = header(request, "referer") ?? header(request, "referrer");
