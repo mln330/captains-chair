@@ -275,6 +275,7 @@ class SidecarServer:
             key: value
             for key, value in payload.items()
             if key in {
+                "local_path",
                 "default_branch",
                 "planning_doc",
                 "operation_mode",
