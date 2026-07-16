@@ -94,6 +94,31 @@ class FakeGateway:
                 ),
                 "",
             )
+        if values[1:5] == ["config", "get", "tools", "--json"]:
+            return CommandResult(
+                0,
+                json.dumps(
+                    {
+                        "allow": [
+                            "workboard_block",
+                            "workboard_comment",
+                            "workboard_complete",
+                            "workboard_heartbeat",
+                            "workboard_proof",
+                            "workboard_read",
+                            "workboard_worker_log",
+                        ]
+                    }
+                ),
+                "",
+            )
+        if values[1:5] == [
+            "config",
+            "get",
+            "agents.defaults.subagents",
+            "--json",
+        ]:
+            return CommandResult(0, json.dumps({"maxConcurrent": 1}), "")
         method = values[3]
         params = json.loads(values[values.index("--params") + 1])
         handler = getattr(self, f"_{method.replace('.', '_')}", None)

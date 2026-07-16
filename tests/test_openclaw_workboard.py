@@ -638,13 +638,239 @@ def test_worker_model_health_accepts_codex_route_reported_by_openai_provider() -
         timeout: int = 60,
     ) -> CommandResult:
         del cwd, input_text, timeout
-        assert list(command)[1:4] == ["agents", "list", "--json"]
+        if list(command)[1:4] == ["agents", "list", "--json"]:
+            return CommandResult(
+                0,
+                json.dumps(
+                    [{"id": agent_id, "model": model} for agent_id, model in observed.items()]
+                ),
+                "",
+            )
+        if list(command)[3] == "tools":
+            return CommandResult(
+                0,
+                json.dumps(
+                    {
+                        "allow": [
+                            "workboard_block",
+                            "workboard_comment",
+                            "workboard_complete",
+                            "workboard_heartbeat",
+                            "workboard_proof",
+                            "workboard_read",
+                            "workboard_worker_log",
+                        ]
+                    }
+                ),
+                "",
+            )
         return CommandResult(
             0,
-            json.dumps([{"id": agent_id, "model": model} for agent_id, model in observed.items()]),
+            json.dumps({"maxConcurrent": 1}),
             "",
         )
 
     result = OpenClawWorkboardAdapter(config(), runner).validate_worker_models()
 
-    assert result == {"status": "ok", "checked_agents": 8, "mismatches": []}
+    assert result["status"] == "ok"
+    assert result["checked_agents"] == 8
+    assert result["mismatches"] == []
+    assert result["missing_worker_tools"] == []
+    assert result["max_concurrent_subagents"]["valid"] is True
+
+
+def test_worker_health_fails_closed_on_missing_tools_and_unsafe_concurrency() -> None:
+    expected = config().worker_models
+    workers = config().workers
+    observed = {
+        workers.captain: expected.captain,
+        workers.coder: expected.coder,
+        workers.reviewer: expected.reviewer,
+        workers.tester: expected.tester,
+        workers.ux_reviewer: expected.ux_reviewer,
+        workers.final_reviewer: expected.final_reviewer,
+        workers.merger: expected.merger,
+        workers.verifier: expected.verifier,
+    }
+
+    def runner(
+        command: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        input_text: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        del cwd, input_text, timeout
+        if list(command)[1:4] == ["agents", "list", "--json"]:
+            return CommandResult(
+                0,
+                json.dumps(
+                    [{"id": agent_id, "model": model} for agent_id, model in observed.items()]
+                ),
+                "",
+            )
+        if list(command)[3] == "tools":
+            return CommandResult(0, json.dumps({"allow": ["group:fs"]}), "")
+        return CommandResult(0, json.dumps({"maxConcurrent": 8}), "")
+
+    result = OpenClawWorkboardAdapter(config(), runner).validate_worker_models()
+
+    assert result["status"] == "degraded"
+    assert "workboard_complete" in result["missing_worker_tools"]
+    assert result["max_concurrent_subagents"] == {
+        "expected_max": 1,
+        "observed": 8,
+        "valid": False,
+    }
+
+
+def test_worker_health_accepts_unrestricted_tool_policy() -> None:
+    expected = config().worker_models
+    workers = config().workers
+    observed = {
+        workers.captain: expected.captain,
+        workers.coder: expected.coder,
+        workers.reviewer: expected.reviewer,
+        workers.tester: expected.tester,
+        workers.ux_reviewer: expected.ux_reviewer,
+        workers.final_reviewer: expected.final_reviewer,
+        workers.merger: expected.merger,
+        workers.verifier: expected.verifier,
+    }
+
+    def runner(
+        command: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        input_text: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        del cwd, input_text, timeout
+        if list(command)[1:4] == ["agents", "list", "--json"]:
+            return CommandResult(
+                0,
+                json.dumps(
+                    [{"id": agent_id, "model": model} for agent_id, model in observed.items()]
+                ),
+                "",
+            )
+        if list(command)[3] == "tools":
+            return CommandResult(0, json.dumps({}), "")
+        return CommandResult(0, json.dumps({"maxConcurrent": 1}), "")
+
+    result = OpenClawWorkboardAdapter(config(), runner).validate_worker_models()
+
+    assert result["status"] == "ok"
+    assert result["missing_worker_tools"] == []
+
+
+def test_worker_health_rejects_bool_concurrency() -> None:
+    expected = config().worker_models
+    workers = config().workers
+    observed = {
+        workers.captain: expected.captain,
+        workers.coder: expected.coder,
+        workers.reviewer: expected.reviewer,
+        workers.tester: expected.tester,
+        workers.ux_reviewer: expected.ux_reviewer,
+        workers.final_reviewer: expected.final_reviewer,
+        workers.merger: expected.merger,
+        workers.verifier: expected.verifier,
+    }
+
+    def runner(
+        command: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        input_text: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        del cwd, input_text, timeout
+        if list(command)[1:4] == ["agents", "list", "--json"]:
+            return CommandResult(
+                0,
+                json.dumps(
+                    [{"id": agent_id, "model": model} for agent_id, model in observed.items()]
+                ),
+                "",
+            )
+        if list(command)[3] == "tools":
+            return CommandResult(0, json.dumps({}), "")
+        return CommandResult(0, json.dumps({"maxConcurrent": True}), "")
+
+    result = OpenClawWorkboardAdapter(config(), runner).validate_worker_models()
+
+    assert result["status"] == "degraded"
+    assert result["max_concurrent_subagents"]["valid"] is False
+
+
+def test_worker_health_fails_closed_when_runtime_config_read_fails() -> None:
+    expected = config().worker_models
+    workers = config().workers
+    observed = {
+        workers.captain: expected.captain,
+        workers.coder: expected.coder,
+        workers.reviewer: expected.reviewer,
+        workers.tester: expected.tester,
+        workers.ux_reviewer: expected.ux_reviewer,
+        workers.final_reviewer: expected.final_reviewer,
+        workers.merger: expected.merger,
+        workers.verifier: expected.verifier,
+    }
+
+    def runner(
+        command: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        input_text: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        del cwd, input_text, timeout
+        if list(command)[1:4] == ["agents", "list", "--json"]:
+            return CommandResult(
+                0,
+                json.dumps(
+                    [{"id": agent_id, "model": model} for agent_id, model in observed.items()]
+                ),
+                "",
+            )
+        return CommandResult(1, "", "config unavailable")
+
+    with pytest.raises(OpenClawWorkboardError, match="runtime safety check failed"):
+        OpenClawWorkboardAdapter(config(), runner).validate_worker_models()
+
+
+def test_worker_health_fails_closed_when_runtime_config_is_not_object() -> None:
+    expected = config().worker_models
+    workers = config().workers
+    observed = {
+        workers.captain: expected.captain,
+        workers.coder: expected.coder,
+        workers.reviewer: expected.reviewer,
+        workers.tester: expected.tester,
+        workers.ux_reviewer: expected.ux_reviewer,
+        workers.final_reviewer: expected.final_reviewer,
+        workers.merger: expected.merger,
+        workers.verifier: expected.verifier,
+    }
+
+    def runner(
+        command: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        input_text: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        del cwd, input_text, timeout
+        if list(command)[1:4] == ["agents", "list", "--json"]:
+            return CommandResult(
+                0,
+                json.dumps(
+                    [{"id": agent_id, "model": model} for agent_id, model in observed.items()]
+                ),
+                "",
+            )
+        return CommandResult(0, "[]", "")
+
+    with pytest.raises(OpenClawWorkboardError, match="did not return an object"):
+        OpenClawWorkboardAdapter(config(), runner).validate_worker_models()

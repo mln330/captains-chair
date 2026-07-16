@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shlex
 import sqlite3
@@ -10,7 +11,11 @@ from typing import Any, cast
 from captains_chair.command import CommandRunner, run_command
 from captains_chair.model_policy import models_match
 from captains_chair.models import OpenClawWorkboardConfig
-from captains_chair.openclaw_workboard import OpenClawWorkboardError, decode_openclaw_json
+from captains_chair.openclaw_workboard import (
+    REQUIRED_WORKER_TOOLS,
+    OpenClawWorkboardError,
+    decode_openclaw_json,
+)
 
 COMMON_PROTOCOL = """# CAPTAINS_CHAIR OpenClaw Worker
 
@@ -125,6 +130,7 @@ class OpenClawRuntimeInstaller:
                 + ROLE_PROTOCOLS[item.role].replace("{captains_chair_command}", command)
             )
             (workspace / "AGENTS.md").write_text(instructions, encoding="utf-8")
+        self._install_safety_policy()
         if self.config.auth_source_agent:
             current = self._agents()
             source = existing.get(self.config.auth_source_agent) or current.get(
@@ -146,6 +152,49 @@ class OpenClawRuntimeInstaller:
                     Path(str(target["agentDir"])) / "openclaw-agent.sqlite",
                 )
         return actions
+
+    def _install_safety_policy(self) -> None:
+        tools_result = self.runner(
+            [self.config.executable, "config", "get", "tools", "--json"],
+            timeout=60,
+        )
+        if tools_result.returncode:
+            raise OpenClawWorkboardError(
+                "failed to read OpenClaw tool policy: "
+                f"{(tools_result.stderr or tools_result.stdout).strip()[:2000]}"
+            )
+        raw_tools = decode_openclaw_json(tools_result.stdout)
+        if not isinstance(raw_tools, dict):
+            raise OpenClawWorkboardError("OpenClaw tool policy did not return an object")
+        allow_value = cast(dict[str, Any], raw_tools).get("allow")
+        if isinstance(allow_value, list):
+            allow = [str(value) for value in cast(list[object], allow_value)]
+            for tool in REQUIRED_WORKER_TOOLS:
+                if tool not in allow:
+                    allow.append(tool)
+            self._set_config("tools.allow", allow)
+        self._set_config(
+            "agents.defaults.subagents.maxConcurrent",
+            self.config.max_concurrent_subagents,
+        )
+
+    def _set_config(self, path: str, value: object) -> None:
+        result = self.runner(
+            [
+                self.config.executable,
+                "config",
+                "set",
+                path,
+                json.dumps(value, separators=(",", ":")),
+                "--strict-json",
+            ],
+            timeout=60,
+        )
+        if result.returncode:
+            raise OpenClawWorkboardError(
+                f"failed to configure OpenClaw runtime safety at {path}: "
+                f"{(result.stderr or result.stdout).strip()[:2000]}"
+            )
 
     def _agents(self) -> dict[str, dict[str, Any]]:
         result = self.runner(
