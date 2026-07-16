@@ -1257,6 +1257,37 @@ def test_supervised_approval_executes_stored_decision_without_replanning(tmp_pat
     assert stored["status"] == "executed"
 
 
+def test_supervised_approval_survives_workflow_history_change(tmp_path: Path) -> None:
+    (tmp_path / "ISSUES_EXECUTION_PLAN.md").write_text("# Plan\n", encoding="utf-8")
+    artifact = tmp_path / "baseline.json"
+    artifact.write_text('{"analysis":{"summary":"known gap"}}', encoding="utf-8")
+    repo = repo_config(tmp_path, mode=OperationMode.SUPERVISED)
+    config = app_config(tmp_path, repo)
+    state = StateStore(config.state_dir / "state.db")
+    state.save_baseline(repo.full_name, "fingerprint", artifact, analyzed=True)
+    state.transition(repo.full_name, RunState.BASELINE_REVIEW)
+    state.transition(repo.full_name, RunState.READY)
+    harness = CapturingHarness(HarnessConfig(kind="codex", executable="codex"))
+    engine = ControlPlaneEngine(
+        config,
+        state,
+        cast(GhGitHubProvider, ChangingSnapshotGitHub()),
+        harness,
+        cast(Notifier, NullNotifier()),
+        model_policy(),
+    )
+
+    proposed = engine.cycle(repo, shadow=True, execute=False)
+    action_id = str(proposed.event.evidence["action_id"])
+    state.approve(repo.full_name, action_id, "owner")
+    executed = engine.cycle(repo, shadow=False, execute=True)
+
+    assert executed.event.event_type == "STATUS_REPORTED"
+    assert harness.calls == 1
+    stored = state.proposal(repo.full_name, action_id)
+    assert stored is not None and stored["status"] == "executed"
+
+
 def test_supervised_approved_implementation_uses_workboard_workers(
     tmp_path: Path,
 ) -> None:
