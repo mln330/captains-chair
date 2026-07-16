@@ -46,7 +46,9 @@ def build_canary_spec(
             f"Repository: {repo.full_name}\n"
             f"Canary ID: {normalized_id}\n\n"
             "This is a runtime-only canary. Do not inspect, edit, commit, push, or merge repository code. "
-            "Claim the card, send at least one heartbeat, then complete it with passed proof. "
+            "Follow the lifecycle helper commands in your AGENTS.md exactly: send at least one heartbeat, "
+            "then complete the already-claimed card with passed proof. Do not search OpenClaw internals or "
+            "call native Workboard tools; the portable worker-protocol helper is the lifecycle interface. "
             f"The proof note must contain exactly `{marker}`. If the runtime cannot complete the card, "
             "block it with a TECHNICAL: reason."
         ),
