@@ -477,6 +477,21 @@ class WorkflowOrchestrator:
         unblocked: list[str] = []
         user_blockers: list[str] = []
 
+        # A passed nested retry supersedes any newer retry card for the same
+        # stage. Cancel those duplicates before dispatch so a recovered proof
+        # cannot trigger another expensive reviewer session.
+        for card in cards:
+            if (
+                card.status in {QueueStatus.READY, QueueStatus.TODO}
+                and _retry_for(card) is not None
+                and self._has_valid_retry_ancestor(repo, card, cards)
+            ):
+                self.adapter.reclaim_card(
+                    card.id,
+                    status=QueueStatus.BLOCKED,
+                    reason="CANCELLED: superseded by a passed retry for this stage",
+                )
+
         for card in cards:
             if card.metadata.get("archivedAt"):
                 continue
@@ -498,7 +513,7 @@ class WorkflowOrchestrator:
                     retry = next(
                         item
                         for item in cards
-                        if _is_retry_for(item, card.id) and self._has_valid_completion(repo, item, cards)
+                        if _is_retry_descendant(item, card.id, cards) and self._has_valid_completion(repo, item, cards)
                     )
                     self.adapter.complete_card(
                         card.id,
@@ -526,7 +541,23 @@ class WorkflowOrchestrator:
                 and not self._has_valid_completion(repo, card, cards)
             ):
                 proof_retries.append(card.id)
-                if not retry_with_proof:
+                if retry_with_proof:
+                    # A worker may have completed the stage while the durable
+                    # proof handoff was interrupted. Promote the freshest
+                    # passed descendant onto the original stage card so
+                    # downstream gates can use the stable card identity.
+                    retry = next(
+                        item
+                        for item in cards
+                        if _is_retry_descendant(item, card.id, cards)
+                        and self._has_valid_completion(repo, item, cards)
+                    )
+                    self.adapter.complete_card(
+                        card.id,
+                        summary=_completion_summary(retry),
+                        proof=_passed_proof(retry),
+                    )
+                else:
                     retry = _active_retry(cards, card.id)
                     if retry is not None:
                         if _protocol_retry_exhausted(retry, cards, self.config.max_retries):
@@ -570,7 +601,7 @@ class WorkflowOrchestrator:
                         retry = next(
                             item
                             for item in cards
-                            if _is_retry_for(item, card.id) and self._has_valid_completion(repo, item, cards)
+                            if _is_retry_descendant(item, card.id, cards) and self._has_valid_completion(repo, item, cards)
                         )
                         self.adapter.complete_card(
                             card.id,
@@ -850,9 +881,32 @@ class WorkflowOrchestrator:
         card_id: str,
     ) -> bool:
         return any(
-            _is_retry_for(item, card_id) and self._has_valid_completion(repo, item, cards)
+            _is_retry_descendant(item, card_id, cards) and self._has_valid_completion(repo, item, cards)
             for item in cards
         )
+
+    def _has_valid_retry_ancestor(
+        self,
+        repo: RepoConfig,
+        card: QueueCard,
+        cards: list[QueueCard],
+    ) -> bool:
+        current = card
+        seen: set[str] = set()
+        while True:
+            parent_id = _retry_for(current)
+            if parent_id is None or current.id in seen:
+                return False
+            seen.add(current.id)
+            parent = next(
+                (item for item in cards if item.id == parent_id or item.id.startswith(parent_id)),
+                None,
+            )
+            if parent is None:
+                return False
+            if self._has_valid_completion(repo, parent, cards):
+                return True
+            current = parent
 
     def _workflow_has_passed_completion(
         self,
@@ -1684,6 +1738,25 @@ def _is_repair_for(card: QueueCard, parent_id: str) -> bool:
 def _is_retry_for(card: QueueCard, parent_id: str) -> bool:
     token = _retry_for(card)
     return token == parent_id or (token is not None and parent_id.startswith(token))
+
+
+def _is_retry_descendant(card: QueueCard, ancestor_id: str, cards: list[QueueCard]) -> bool:
+    """Match a retry at any depth, including retries created after a lost handoff."""
+    current = card
+    seen: set[str] = set()
+    while True:
+        parent_id = _retry_for(current)
+        if parent_id is None or current.id in seen:
+            return False
+        if parent_id == ancestor_id or ancestor_id.startswith(parent_id):
+            return True
+        seen.add(current.id)
+        current = next(
+            (item for item in cards if item.id == parent_id or item.id.startswith(parent_id)),
+            None,
+        )
+        if current is None:
+            return False
 
 
 def _parent_ids(card: QueueCard) -> tuple[str, ...]:

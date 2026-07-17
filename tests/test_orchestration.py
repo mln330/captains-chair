@@ -39,6 +39,7 @@ _has_valid_proof = orchestration._has_valid_proof  # pyright: ignore[reportPriva
 _passed_proof = orchestration._passed_proof  # pyright: ignore[reportPrivateUsage]
 _retry_depth = orchestration._retry_depth  # pyright: ignore[reportPrivateUsage]
 _retry_limit = orchestration._retry_limit  # pyright: ignore[reportPrivateUsage]
+_is_retry_descendant = orchestration._is_retry_descendant  # pyright: ignore[reportPrivateUsage]
 
 
 def worker_config() -> OpenClawWorkboardConfig:
@@ -1071,6 +1072,40 @@ def test_fresh_retry_proof_completes_original_stage_card(tmp_path: Path) -> None
     orchestrator = WorkflowOrchestrator(queue, worker_config())
 
     result = orchestrator.reconcile(repo)
+
+    assert result.protocol_retries == ()
+    assert queue.completed == [("review-1", ())]
+
+
+def test_nested_retry_proof_completes_original_without_another_retry(tmp_path: Path) -> None:
+    repo = repo_config(tmp_path)
+    queue = MemoryQueue()
+    queue.cards["original"] = QueueCard(
+        id="review-1",
+        title="Implementation",
+        status=QueueStatus.DONE,
+        labels=("captains_chair", "stage:review"),
+        agent_id="github-reviewer",
+        metadata={"proof": []},
+    )
+    queue.cards["first-retry"] = QueueCard(
+        id="retry-1",
+        title="Retry review",
+        status=QueueStatus.READY,
+        labels=("captains_chair", "stage:review", "retry-for:review-1"),
+        agent_id="github-reviewer",
+    )
+    queue.cards["nested-retry"] = QueueCard(
+        id="retry-2",
+        title="Nested retry review",
+        status=QueueStatus.DONE,
+        labels=("captains_chair", "stage:review", "retry-for:retry-1"),
+        agent_id="github-reviewer",
+        metadata={"proof": [{"status": "passed", "note": "reviewed abcdef1"}]},
+    )
+
+    assert _is_retry_descendant(queue.cards["nested-retry"], "review-1", list(queue.cards.values()))
+    result = WorkflowOrchestrator(queue, worker_config()).reconcile(repo)
 
     assert result.protocol_retries == ()
     assert queue.completed == [("review-1", ())]
