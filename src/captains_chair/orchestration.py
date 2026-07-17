@@ -646,7 +646,11 @@ class WorkflowOrchestrator:
                     and self._has_valid_predecessors(repo, card, cards)
                 ):
                     for repair in repairs:
-                        if repair.status in {QueueStatus.READY, QueueStatus.TODO}:
+                        if repair.status in {
+                            QueueStatus.READY,
+                            QueueStatus.TODO,
+                            QueueStatus.BLOCKED,
+                        }:
                             self.adapter.reclaim_card(
                                 repair.id,
                                 status=QueueStatus.BLOCKED,
