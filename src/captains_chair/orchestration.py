@@ -506,11 +506,24 @@ class WorkflowOrchestrator:
                     status=QueueStatus.BLOCKED,
                     reason="CANCELLED: recovery target already has durable completion evidence",
                 )
+        for card in cards:
+            if (
+                card.status in {QueueStatus.READY, QueueStatus.TODO}
+                and _card_stage(card) == WorkStage.REPAIR
+                and self._repair_is_obsolete(repo, card, cards)
+            ):
+                self.adapter.reclaim_card(
+                    card.id,
+                    status=QueueStatus.BLOCKED,
+                    reason="CANCELLED: repair target already recovered or was superseded",
+                )
 
         for card in cards:
             if card.metadata.get("archivedAt"):
                 continue
             stage = _card_stage(card)
+            if stage == WorkStage.REPAIR and self._repair_is_obsolete(repo, card, cards):
+                continue
             if (
                 card.status in {QueueStatus.READY, QueueStatus.TODO}
                 and _failure_count(card) > _retry_limit(card, self.config.max_retries)
@@ -608,6 +621,8 @@ class WorkflowOrchestrator:
             reason = _block_reason(card)
             if classify_blocker(reason) != BlockerKind.TECHNICAL:
                 user_blockers.append(card.id)
+                continue
+            if _is_cancelled_card(card):
                 continue
             stage = _card_stage(card)
             if stage == WorkStage.MERGE and self._has_valid_merge_predecessor(repo, card, cards):
@@ -985,6 +1000,43 @@ class WorkflowOrchestrator:
             return False
         if _card_stage(target) == WorkStage.MERGE:
             return self._has_valid_merge_predecessor(repo, target, cards)
+        if target.status == QueueStatus.DONE:
+            return _has_valid_proof(repo, target) or self._retry_with_passed_completion(
+                repo, cards, target.id
+            )
+        if target.status != QueueStatus.BLOCKED:
+            return False
+        comments = target.metadata.get("comments")
+        return isinstance(comments, list) and any(
+            isinstance(item, dict)
+            and str(cast(dict[str, object], item).get("body") or "")
+            .upper()
+            .startswith("CANCELLED:")
+            for item in cast(list[object], comments)
+        )
+
+    def _repair_is_obsolete(
+        self,
+        repo: RepoConfig,
+        repair_card: QueueCard,
+        cards: list[QueueCard],
+    ) -> bool:
+        token = next(
+            (
+                label.split(":", 1)[1]
+                for label in repair_card.labels
+                if label.startswith("repair:") or label.startswith("repair-for:")
+            ),
+            None,
+        )
+        if not token:
+            return False
+        target = next(
+            (item for item in cards if item.id == token or item.id.startswith(token)),
+            None,
+        )
+        if target is None:
+            return False
         if target.status == QueueStatus.DONE:
             return _has_valid_proof(repo, target) or self._retry_with_passed_completion(
                 repo, cards, target.id
@@ -1628,6 +1680,17 @@ def _block_reason(card: QueueCard) -> str:
                 if attempt_row.get("error"):
                     return str(attempt_row["error"])
     return "TECHNICAL: worker blocked without structured failure evidence"
+
+
+def _is_cancelled_card(card: QueueCard) -> bool:
+    comments = card.metadata.get("comments")
+    return isinstance(comments, list) and any(
+        isinstance(item, dict)
+        and str(cast(dict[str, object], item).get("body") or "")
+        .upper()
+        .startswith("CANCELLED:")
+        for item in cast(list[object], comments)
+    )
 
 
 def _failure_count(card: QueueCard) -> int:

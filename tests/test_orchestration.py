@@ -1171,6 +1171,28 @@ def test_exhausted_merge_ready_card_resets_before_dispatch(tmp_path: Path) -> No
     assert queue.reassigned == [("merge-1", "github-merge")]
 
 
+def test_repair_for_cancelled_target_is_not_dispatched(tmp_path: Path) -> None:
+    repo = repo_config(tmp_path)
+    queue = MemoryQueue()
+    queue.cards["target"] = QueueCard(
+        id="target-1",
+        title="Final review",
+        status=QueueStatus.BLOCKED,
+        labels=("captains_chair", "stage:final_review"),
+        metadata={"comments": [{"body": "CANCELLED: superseded"}]},
+    )
+    queue.cards["repair"] = QueueCard(
+        id="repair-1",
+        title="Repair",
+        status=QueueStatus.READY,
+        labels=("captains_chair", "stage:repair", "repair:target-1"),
+    )
+
+    WorkflowOrchestrator(queue, worker_config()).reconcile(repo)
+
+    assert queue.reclaimed == ["repair-1"]
+
+
 def test_nested_retry_proof_completes_original_without_another_retry(tmp_path: Path) -> None:
     repo = repo_config(
         tmp_path,
