@@ -340,6 +340,15 @@ class GhGitHubProvider:
             detail = (result.stderr or result.stdout).strip()
             if "404" in detail or "not found" in detail.lower():
                 return set()
+            if (
+                "upgrade to github pro" in detail.lower()
+                and "enable this feature" in detail.lower()
+            ):
+                # GitHub Free private repositories return this product-limit
+                # response for a branch-protection endpoint even when the
+                # caller can read and administer the repository. No required
+                # checks can be configured in that state.
+                return set()
             raise GitHubProviderError(f"required check query failed: {detail[:3000]}")
         try:
             payload = cast(object, json.loads(result.stdout))

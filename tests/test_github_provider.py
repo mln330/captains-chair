@@ -197,7 +197,14 @@ def test_pull_request_files_are_collected_as_typed_paths(tmp_path: Path) -> None
 
 @pytest.mark.parametrize(
     ("stderr", "expected"),
-    (("HTTP 404: Not Found", "empty"), ("HTTP 500: server error", "error")),
+    (
+        ("HTTP 404: Not Found", "empty"),
+        (
+            "Upgrade to GitHub Pro or make this repository public to enable this feature.",
+            "empty",
+        ),
+        ("HTTP 500: server error", "error"),
+    ),
 )
 def test_required_check_lookup_distinguishes_unprotected_branch_from_provider_failure(
     tmp_path: Path, stderr: str, expected: str
