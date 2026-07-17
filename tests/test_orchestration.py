@@ -1077,6 +1077,40 @@ def test_fresh_retry_proof_completes_original_stage_card(tmp_path: Path) -> None
     assert queue.completed == [("review-1", ())]
 
 
+def test_valid_final_retry_reopens_blocked_merge_card(tmp_path: Path) -> None:
+    repo = repo_config(
+        tmp_path,
+        mode=OperationMode.AUTONOMOUS,
+        completion=CompletionPolicy.AUTO_MERGE,
+    )
+    queue = MemoryQueue()
+    queue.cards["final"] = QueueCard(
+        id="final-1",
+        title="Final review",
+        status=QueueStatus.DONE,
+        labels=("captains_chair", "workflow:flow-1", "stage:final_review"),
+        metadata={
+            "proof": [{"status": "passed", "note": "AUTO_MERGE_ALLOWED:abcdef1"}]
+        },
+    )
+    queue.cards["merge"] = QueueCard(
+        id="merge-1",
+        title="Merge",
+        status=QueueStatus.BLOCKED,
+        labels=("captains_chair", "workflow:flow-1", "stage:merge"),
+        metadata={
+            "links": [{"type": "parent", "targetCardId": "final-1"}],
+            "workerProtocol": {"detail": "TECHNICAL: stale final review handoff"},
+            "failureCount": 9,
+        },
+    )
+
+    result = WorkflowOrchestrator(queue, worker_config()).reconcile(repo)
+
+    assert result.unblocked == ("merge-1",)
+    assert queue.reclaimed == ["merge-1"]
+
+
 def test_nested_retry_proof_completes_original_without_another_retry(tmp_path: Path) -> None:
     repo = repo_config(
         tmp_path,

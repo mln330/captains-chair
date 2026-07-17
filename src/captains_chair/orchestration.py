@@ -579,6 +579,14 @@ class WorkflowOrchestrator:
                 user_blockers.append(card.id)
                 continue
             stage = _card_stage(card)
+            if stage == WorkStage.MERGE and self._has_valid_merge_predecessor(repo, card, cards):
+                self.adapter.reclaim_card(
+                    card.id,
+                    status=QueueStatus.READY,
+                    reason="Recovered merge gate from a passed current-head final review.",
+                )
+                unblocked.append(card.id)
+                continue
             if stage in {
                 WorkStage.REVIEW,
                 WorkStage.TEST,
@@ -921,6 +929,34 @@ class WorkflowOrchestrator:
             card.status == QueueStatus.DONE
             and self._has_valid_completion(repo, card, cards)
             for card in cards
+        )
+
+    def _has_valid_merge_predecessor(
+        self,
+        repo: RepoConfig,
+        merge_card: QueueCard,
+        cards: list[QueueCard],
+    ) -> bool:
+        """Find a passed final-review card, including any retry descendant."""
+        workflow = _card_workflow_label(merge_card)
+        parents = _parent_ids(merge_card)
+        candidates = [
+            card
+            for card in cards
+            if _card_stage(card) == WorkStage.FINAL_REVIEW
+            and (workflow is None or _card_workflow_label(card) == workflow)
+            and _has_valid_proof(repo, card)
+        ]
+        if not candidates:
+            return False
+        if not parents:
+            return True
+        return any(
+            candidate.id == parent_id
+            or candidate.id.startswith(parent_id)
+            or _is_retry_descendant(candidate, parent_id, cards)
+            for candidate in candidates
+            for parent_id in parents
         )
 
     def _create_fresh_retry(
