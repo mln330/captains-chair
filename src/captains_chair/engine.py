@@ -285,6 +285,8 @@ class ControlPlaneEngine:
             output_model=ReadinessReviewDecision,
             cwd=repo.local_path,
             writable=False,
+            course_key=course.key,
+            stage="readiness_review",
         )
         decision = ReadinessReviewDecision.model_validate(result.output)
         updated = apply_readiness_review(
