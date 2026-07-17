@@ -324,10 +324,16 @@ def test_public_example_uses_documented_balanced_model_routes() -> None:
     assert configured.harness_model_overrides["codex"].ux_reviewer.primary.model == "gpt-5.6-terra"
 
     worker_models = configured.orchestrators["openclaw-workers"].worker_models
-    assert worker_models.coder == "codex/gpt-5.6-terra"
-    assert worker_models.tester == "codex/gpt-5.6-luna"
-    assert worker_models.reviewer == "codex/gpt-5.6-terra"
-    assert worker_models.final_reviewer == "codex/gpt-5.6-sol"
+    assert worker_models.model_dump() == {
+        "captain": "codex/gpt-5.6-sol",
+        "coder": "codex/gpt-5.6-terra",
+        "reviewer": "codex/gpt-5.6-terra",
+        "tester": "codex/gpt-5.6-luna",
+        "ux_reviewer": "codex/gpt-5.6-terra",
+        "final_reviewer": "codex/gpt-5.6-sol",
+        "merger": "codex/gpt-5.6-terra",
+        "verifier": "codex/gpt-5.6-terra",
+    }
 
 
 def test_model_route_rejects_unsupported_effort_and_execution_mode() -> None:
