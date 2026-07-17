@@ -180,7 +180,12 @@ def build_readiness_prompt(course: Course, evidence: dict[str, object] | None = 
         "claim. Treat a named collection error as unavailable evidence, but do not treat successfully "
         "collected facts as locally unverifiable. Never infer secret values; secret names and configured "
         "protection rules are sufficient when the course does not require a live deployment. Ask concise "
-        "owner questions only for information that cannot be discovered from either source.\n\n"
+        "owner questions only for information that cannot be discovered from either source. For a "
+        "greenfield course, the remote repository may intentionally not exist before explicit course "
+        "approval. When repository_lifecycle.provisioning_enabled and github_auth.authenticated are true, "
+        "treat repository creation permissions and GitHub external access as verified capability evidence; "
+        "do not block readiness merely because pre-provisioning snapshot, branch, CI, or deployment evidence "
+        "does not exist. Those facts must be checked after provisioning.\n\n"
         f"Required categories:\n{categories}\n\nCourse context:\n{context}\n\n"
         f"Live evidence envelope (SHA-256 {readiness_evidence_sha(evidence or {})}):\n{live_context}"
     )

@@ -72,6 +72,8 @@ def test_readiness_evidence_collects_live_proof_without_issue_or_pr_bodies(tmp_p
     ) -> CommandResult:
         del cwd, input_text, timeout
         values = list(command)
+        if values[1:3] == ["auth", "status"]:
+            return CommandResult(0, "github.com\n", "")
         if values[1:3] == ["repo", "view"]:
             return json_result({"nameWithOwner": "example/project", "defaultBranchRef": {"name": "main"}})
         if values[1:3] == ["issue", "list"]:
@@ -103,6 +105,8 @@ def test_readiness_evidence_collects_live_proof_without_issue_or_pr_bodies(tmp_p
     evidence = GhGitHubProvider(runner, cwd=tmp_path).readiness_evidence(repo(tmp_path))
 
     assert evidence["default_branch_sha"] == "main-sha"
+    assert evidence["github_auth"] == {"authenticated": True}
+    assert evidence["repository_lifecycle"]["snapshot_expected_before_approval"] is True
     assert evidence["required_checks"] == ["build"]
     assert evidence["pull_requests"][0]["review_threads"]["unresolved_blocking"] == 0
     serialized = json.dumps(evidence)

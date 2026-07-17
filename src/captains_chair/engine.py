@@ -250,6 +250,18 @@ class ControlPlaneEngine:
                 "daily_token_limit": self.config.usage.daily_token_limit,
                 "model_daily_token_limits": self.config.usage.model_daily_token_limits,
                 "block_on_unknown_usage": self.config.usage.block_on_unknown,
+                "model_routes": {
+                    role: self._models_for(repo, role, course=course).model_dump(mode="json")
+                    for role in (
+                        "baseline",
+                        "planner",
+                        "coder",
+                        "reviewer",
+                        "tester",
+                        "ux_reviewer",
+                        "final_reviewer",
+                    )
+                },
             },
         }
         prompt = build_readiness_prompt(course, source_evidence)

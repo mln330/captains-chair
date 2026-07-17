@@ -169,11 +169,27 @@ class GhGitHubProvider:
             "collection_errors": {},
         }
 
+        # A greenfield course is reviewed before its approval-gated repository
+        # exists. Capture the capability to provision it separately from the
+        # snapshot that is only available after approval.
+        evidence["repository_lifecycle"] = {
+            "provisioning_enabled": repo.provisioning.enabled,
+            "visibility": repo.provisioning.visibility,
+            "remote_creation_is_approval_gated": repo.provisioning.enabled,
+            "snapshot_expected_before_approval": not repo.provisioning.enabled,
+        }
+
         def collect(key: str, operation: Any) -> None:
             try:
                 evidence[key] = operation()
             except (GitHubProviderError, KeyError, TypeError, ValueError) as exc:
                 cast(dict[str, str], evidence["collection_errors"])[key] = str(exc)[:1000]
+
+        def collect_authentication() -> dict[str, Any]:
+            result = self.runner(["gh", "auth", "status"], cwd=self.cwd, timeout=30)
+            if result.returncode:
+                raise GitHubProviderError((result.stderr or result.stdout).strip()[:1000])
+            return {"authenticated": True}
 
         snapshot_holder: dict[str, RepositorySnapshot] = {}
 
@@ -200,6 +216,7 @@ class GhGitHubProvider:
                 "recent_workflow_runs": snapshot.workflow_runs[:20],
             }
 
+        collect("github_auth", collect_authentication)
         collect("snapshot", collect_snapshot)
         collect("default_branch_sha", lambda: self.default_branch_sha(repo))
         collect("required_checks", lambda: sorted(self.required_check_names(repo)))
