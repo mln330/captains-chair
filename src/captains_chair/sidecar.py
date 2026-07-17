@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -161,6 +162,7 @@ def _summarize_workboard(
     board_id: str,
     *,
     usage_sync: dict[str, Any] | None = None,
+    repo_full_name: str | None = None,
 ) -> dict[str, Any]:
     """Project Workboard cards into a read-only dashboard status.
 
@@ -264,12 +266,29 @@ def _summarize_workboard(
         ),
         timeline[-1]["stage"] if timeline else None,
     )
+    pr_numbers: set[int] = set()
+    explicit_pr_numbers: set[int] = set()
+    pr_urls_set: set[str] = set()
+    for card in latest_cards:
+        source_url = str(card.source_url or "")
+        source_match = re.search(r"https?://[^\s]+/pull/(\d+)", source_url)
+        if source_match:
+            pr_urls_set.add(source_url)
+            number = int(source_match.group(1))
+            pr_numbers.add(number)
+            explicit_pr_numbers.add(number)
+        text = f"{card.title} {_card_summary(card)}"
+        pr_numbers.update(int(value) for value in re.findall(r"\bPR\s*#?\s*(\d+)\b", text, re.IGNORECASE))
     pr_urls = sorted(
-        {
-            str(card.source_url)
-            for card in latest_cards
-            if "/pull/" in str(card.source_url or "")
-        }
+        pr_urls_set
+        | (
+            {
+                f"https://github.com/{repo_full_name}/pull/{number}"
+                for number in pr_numbers - explicit_pr_numbers
+            }
+            if repo_full_name
+            else set()
+        )
     )
     summary: dict[str, Any] = {
         "status": status,
@@ -283,6 +302,8 @@ def _summarize_workboard(
         "stages": stage_rows,
         "timeline": timeline,
         "loop_count": loop_count,
+        "pr_count": max(len(pr_numbers), len(pr_urls)),
+        "pr_numbers": sorted(pr_numbers),
         "pr_urls": pr_urls,
     }
     if usage_sync is not None:
@@ -334,6 +355,7 @@ class SidecarServer:
                 cards,
                 repo.orchestration_board,
                 usage_sync=usage_sync,
+                repo_full_name=repo.full_name,
             )
         except Exception as exc:
             return {

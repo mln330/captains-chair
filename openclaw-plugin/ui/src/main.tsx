@@ -39,6 +39,8 @@ type WorkboardStatus = {
   stages?: Array<{ stage?: string; total?: number; done?: number; active?: number; blocked?: number; loops?: number }>;
   timeline?: WorkflowTimelineItem[];
   loop_count?: number;
+  pr_count?: number;
+  pr_numbers?: number[];
   pr_urls?: string[];
   usage_sync?: { status?: string; sessions_seen?: number; sessions_imported?: number; sessions_with_usage?: number; error?: string };
   message?: string;
@@ -347,7 +349,7 @@ function RepoPanel({ repo, onSave }: { repo: Repo; onSave: (name: string, payloa
   const usagePending = recordedTokens === 0 && usageSync?.status !== "ok" && (usageSync?.sessions_with_usage ?? 0) === 0;
   const usageLabel = usagePending ? "Usage not correlated" : `${recordedTokens.toLocaleString()} tokens recorded`;
   const github = repo.github_status;
-  const trackedPrs = repo.workboard_status?.pr_urls?.length ?? 0;
+  const trackedPrs = repo.workboard_status?.pr_count ?? repo.workboard_status?.pr_urls?.length ?? 0;
   return <article className="repo-panel">
     <div className="repo-heading"><div><h3>{repo.full_name}</h3><p>{repo.local_path}</p></div><span className={`mode ${repo.operation_mode}`}>{repo.operation_mode}</span></div>
     <Flow state={repo.state} />

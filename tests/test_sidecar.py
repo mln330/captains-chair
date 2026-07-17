@@ -246,6 +246,8 @@ def test_sidecar_correlates_workboard_sessions_and_reports_execution_facts(
     assert result["tokens"]["accounted_tokens"] == 27
     assert result["workboard_status"]["usage_sync"]["status"] == "ok"
     assert result["workboard_status"]["loop_count"] == 0
+    assert result["workboard_status"]["pr_count"] == 1
+    assert result["workboard_status"]["pr_numbers"] == [42]
     assert result["workboard_status"]["pr_urls"] == [
         "https://github.com/mln330/captains-chair/pull/42"
     ]
