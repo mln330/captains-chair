@@ -525,14 +525,18 @@ class WorkflowOrchestrator:
             if stage == WorkStage.REPAIR and self._repair_is_obsolete(repo, card, cards):
                 continue
             if (
+                stage == WorkStage.MERGE
+                and _retry_for(card) is None
+                and self._has_valid_merge_predecessor(repo, card, cards)
+            ):
+                retry = self._create_fresh_retry(repo, card, cards)
+                protocol_retries.append(retry.id)
+                continue
+            if (
                 card.status in {QueueStatus.READY, QueueStatus.TODO}
                 and _failure_count(card) > _retry_limit(card, self.config.max_retries)
             ):
-                if stage == WorkStage.MERGE and self._has_valid_merge_predecessor(repo, card, cards):
-                    retry = self._create_fresh_retry(repo, card, cards)
-                    protocol_retries.append(retry.id)
-                else:
-                    self._recover_card(card, retried, control_plane_recoveries)
+                self._recover_card(card, retried, control_plane_recoveries)
                 continue
             retry_with_proof = self._retry_with_passed_completion(repo, cards, card.id)
             if (
@@ -620,16 +624,8 @@ class WorkflowOrchestrator:
                 continue
             stage = _card_stage(card)
             if stage == WorkStage.MERGE and self._has_valid_merge_predecessor(repo, card, cards):
-                if _failure_count(card) > _retry_limit(card, self.config.max_retries):
-                    retry = self._create_fresh_retry(repo, card, cards)
-                    protocol_retries.append(retry.id)
-                else:
-                    self.adapter.reclaim_card(
-                        card.id,
-                        status=QueueStatus.READY,
-                        reason="Recovered merge gate from a passed current-head final review.",
-                    )
-                    unblocked.append(card.id)
+                retry = self._create_fresh_retry(repo, card, cards)
+                protocol_retries.append(retry.id)
                 continue
             if stage in {
                 WorkStage.REVIEW,

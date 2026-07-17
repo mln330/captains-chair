@@ -1123,8 +1123,9 @@ def test_valid_final_retry_reopens_blocked_merge_card(tmp_path: Path) -> None:
 
     result = WorkflowOrchestrator(queue, worker_config()).reconcile(repo)
 
-    assert result.unblocked == ("merge-1",)
-    assert queue.reclaimed == ["merge-1"]
+    assert result.protocol_retries == ("card-3",)
+    assert queue.reclaimed == []
+    assert "final-1" in queue.specs[-1].notes
 
 
 def test_recovered_control_plane_card_is_cancelled_without_dispatch(tmp_path: Path) -> None:
