@@ -529,14 +529,8 @@ class WorkflowOrchestrator:
                 and _failure_count(card) > _retry_limit(card, self.config.max_retries)
             ):
                 if stage == WorkStage.MERGE and self._has_valid_merge_predecessor(repo, card, cards):
-                    self.adapter.reassign_card(
-                        card.id,
-                        agent_id=self.config.workers.merger,
-                        status=QueueStatus.READY,
-                        reset_failures=True,
-                        reason="Reset stale merge attempts after current-head final review recovery.",
-                    )
-                    retried.append(card.id)
+                    retry = self._create_fresh_retry(repo, card, cards)
+                    protocol_retries.append(retry.id)
                 else:
                     self._recover_card(card, retried, control_plane_recoveries)
                 continue
@@ -626,12 +620,16 @@ class WorkflowOrchestrator:
                 continue
             stage = _card_stage(card)
             if stage == WorkStage.MERGE and self._has_valid_merge_predecessor(repo, card, cards):
-                self.adapter.reclaim_card(
-                    card.id,
-                    status=QueueStatus.READY,
-                    reason="Recovered merge gate from a passed current-head final review.",
-                )
-                unblocked.append(card.id)
+                if _failure_count(card) > _retry_limit(card, self.config.max_retries):
+                    retry = self._create_fresh_retry(repo, card, cards)
+                    protocol_retries.append(retry.id)
+                else:
+                    self.adapter.reclaim_card(
+                        card.id,
+                        status=QueueStatus.READY,
+                        reason="Recovered merge gate from a passed current-head final review.",
+                    )
+                    unblocked.append(card.id)
                 continue
             if stage in {
                 WorkStage.REVIEW,
@@ -1070,6 +1068,14 @@ class WorkflowOrchestrator:
         cards: list[QueueCard],
     ) -> bool:
         """Find a passed final-review card, including any retry descendant."""
+        return bool(self._valid_merge_final_review_ids(repo, merge_card, cards))
+
+    def _valid_merge_final_review_ids(
+        self,
+        repo: RepoConfig,
+        merge_card: QueueCard,
+        cards: list[QueueCard],
+    ) -> tuple[str, ...]:
         workflow = _card_workflow_label(merge_card)
         parents = _parent_ids(merge_card)
         candidates = [
@@ -1080,15 +1086,18 @@ class WorkflowOrchestrator:
             and _has_valid_proof(repo, card)
         ]
         if not candidates:
-            return False
+            return ()
         if not parents:
-            return True
-        return any(
-            candidate.id == parent_id
-            or candidate.id.startswith(parent_id)
-            or _is_retry_descendant(candidate, parent_id, cards)
+            return tuple(candidate.id for candidate in candidates)
+        return tuple(
+            candidate.id
             for candidate in candidates
-            for parent_id in parents
+            if any(
+                candidate.id == parent_id
+                or candidate.id.startswith(parent_id)
+                or _is_retry_descendant(candidate, parent_id, cards)
+                for parent_id in parents
+            )
         )
 
     def _create_fresh_retry(
@@ -1122,6 +1131,14 @@ class WorkflowOrchestrator:
             if validation_reason is not None and not validation_reason.allowed
             else ""
         )
+        final_review_note = ""
+        if stage == WorkStage.MERGE:
+            final_review_ids = self._valid_merge_final_review_ids(repo, card, cards)
+            if final_review_ids:
+                final_review_note = (
+                    "\nExact final-review Workboard card ID(s) for merge-gate evaluation: "
+                    f"{', '.join(final_review_ids)}\n"
+                )
         retry = self.adapter.create_card(
             repo.orchestration_board
             or f"{self.config.board_prefix}-{repo.full_name.replace('/', '-').lower()}",
@@ -1132,7 +1149,7 @@ class WorkflowOrchestrator:
                     f"Repository: {repo.full_name}\n"
                     f"Original Workboard card: {card.id}\n"
                     f"Original notes:\n{card.notes or '(none)'}\n\n"
-                    f"{validation_note}"
+                    f"{validation_note}{final_review_note}"
                     "This is a fresh-context retry. Use this card's own runtime session and do not rely on a prior chat. "
                     "Complete only through the CAPTAINS_CHAIR worker lifecycle helper with current-head evidence."
                 ),

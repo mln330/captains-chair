@@ -1117,7 +1117,7 @@ def test_valid_final_retry_reopens_blocked_merge_card(tmp_path: Path) -> None:
         metadata={
             "links": [{"type": "parent", "targetCardId": "final-1"}],
             "workerProtocol": {"detail": "TECHNICAL: stale final review handoff"},
-            "failureCount": 9,
+            "failureCount": 1,
         },
     )
 
@@ -1183,8 +1183,9 @@ def test_exhausted_merge_ready_card_resets_before_dispatch(tmp_path: Path) -> No
 
     result = WorkflowOrchestrator(queue, worker_config()).reconcile(repo)
 
-    assert result.retried == ("merge-1",)
-    assert queue.reassigned == [("merge-1", "github-merge")]
+    assert result.protocol_retries == ("card-3",)
+    assert queue.reassigned == []
+    assert "final-1" in queue.specs[-1].notes
 
 
 def test_repair_for_cancelled_target_is_not_dispatched(tmp_path: Path) -> None:
