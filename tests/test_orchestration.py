@@ -1078,13 +1078,17 @@ def test_fresh_retry_proof_completes_original_stage_card(tmp_path: Path) -> None
 
 
 def test_nested_retry_proof_completes_original_without_another_retry(tmp_path: Path) -> None:
-    repo = repo_config(tmp_path)
+    repo = repo_config(
+        tmp_path,
+        mode=OperationMode.AUTONOMOUS,
+        completion=CompletionPolicy.AUTO_MERGE,
+    )
     queue = MemoryQueue()
     queue.cards["original"] = QueueCard(
         id="review-1",
         title="Implementation",
         status=QueueStatus.DONE,
-        labels=("captains_chair", "stage:review"),
+        labels=("captains_chair", "stage:final_review"),
         agent_id="github-reviewer",
         metadata={"proof": []},
     )
@@ -1092,16 +1096,30 @@ def test_nested_retry_proof_completes_original_without_another_retry(tmp_path: P
         id="retry-1",
         title="Retry review",
         status=QueueStatus.READY,
-        labels=("captains_chair", "stage:review", "retry-for:review-1"),
+        labels=("captains_chair", "stage:final_review", "retry-for:review-1"),
         agent_id="github-reviewer",
     )
     queue.cards["nested-retry"] = QueueCard(
         id="retry-2",
         title="Nested retry review",
         status=QueueStatus.DONE,
-        labels=("captains_chair", "stage:review", "retry-for:retry-1"),
+        labels=("captains_chair", "stage:final_review", "retry-for:retry-1"),
         agent_id="github-reviewer",
-        metadata={"proof": [{"status": "passed", "note": "reviewed abcdef1"}]},
+        metadata={
+            "proof": [
+                {
+                    "status": "passed",
+                    "note": "reviewed abcdef1 AUTO_MERGE_ALLOWED:abcdef1",
+                }
+            ]
+        },
+    )
+    queue.cards["newer-retry"] = QueueCard(
+        id="retry-3",
+        title="Newer nested retry review",
+        status=QueueStatus.READY,
+        labels=("captains_chair", "stage:final_review", "retry-for:retry-2"),
+        agent_id="github-reviewer",
     )
 
     assert _is_retry_descendant(queue.cards["nested-retry"], "review-1", list(queue.cards.values()))
@@ -1109,6 +1127,7 @@ def test_nested_retry_proof_completes_original_without_another_retry(tmp_path: P
 
     assert result.protocol_retries == ()
     assert queue.completed == [("review-1", ())]
+    assert "retry-3" in queue.reclaimed
 
 
 def test_fresh_retry_uses_workboard_safe_compact_label_for_uuid_card(tmp_path: Path) -> None:

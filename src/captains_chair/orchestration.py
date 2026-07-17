@@ -904,7 +904,11 @@ class WorkflowOrchestrator:
             )
             if parent is None:
                 return False
-            if self._has_valid_completion(repo, parent, cards):
+            # Retry deduplication must be deterministic. A passed durable
+            # proof already contains the policy marker required for this
+            # stage; invoking a live validator here can consume a model call
+            # and reject a proof for unrelated stale context.
+            if _has_valid_proof(repo, parent):
                 return True
             current = parent
 
