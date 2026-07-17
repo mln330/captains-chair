@@ -1077,7 +1077,8 @@ class WorkflowOrchestrator:
         candidates = [
             card
             for card in cards
-            if _card_stage(card) == WorkStage.FINAL_REVIEW
+            if card.status == QueueStatus.DONE
+            and _card_stage(card) == WorkStage.FINAL_REVIEW
             and (workflow is None or _card_workflow_label(card) == workflow)
             and _has_valid_proof(repo, card)
         ]
