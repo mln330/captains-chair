@@ -170,6 +170,41 @@ def test_gate_filters_required_checks_and_counts_only_active_review_threads(tmp_
     assert gate.review_head_sha == "head-12"
 
 
+def test_gate_allows_empty_rollup_when_no_checks_are_required(tmp_path: Path) -> None:
+    def runner(
+        command: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        input_text: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        del cwd, input_text, timeout
+        values = list(command)
+        if values[1:3] == ["pr", "view"]:
+            return json_result(
+                {
+                    "number": 13,
+                    "headRefOid": "head-13",
+                    "mergeable": "MERGEABLE",
+                    "mergeStateStatus": "CLEAN",
+                    "isDraft": False,
+                    "statusCheckRollup": [],
+                }
+            )
+        if values[1:3] == ["api", "repos/example/project/branches/main/protection/required_status_checks"]:
+            return json_result({"contexts": []})
+        if values[1:3] == ["api", "graphql"]:
+            return json_result(
+                {"data": {"repository": {"pullRequest": {"reviewThreads": {"nodes": []}}}}}
+            )
+        raise AssertionError(f"unexpected command: {values}")
+
+    gate = GhGitHubProvider(runner, cwd=tmp_path).gate(repo(tmp_path), 13, "head-13")
+
+    assert gate.checks_green
+    assert gate.required_checks == ()
+
+
 def test_pull_request_files_are_collected_as_typed_paths(tmp_path: Path) -> None:
     def runner(
         command: Sequence[str],

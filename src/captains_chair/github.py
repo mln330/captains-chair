@@ -388,10 +388,16 @@ class GhGitHubProvider:
                     url=cast(Any, item.get("detailsUrl") or item.get("url")),
                 )
             )
-        checks_green = bool(check_rows) and all(
-            check.status == "COMPLETED"
-            and (check.conclusion or "").upper() in {"SUCCESS", "NEUTRAL", "SKIPPED"}
-            for check in check_rows
+        # An empty rollup is acceptable when the branch has no required
+        # checks. If checks are present, every observed check must still be
+        # complete and successful; pending or failed checks remain fail-closed.
+        checks_green = (not required_names and not check_rows) or (
+            bool(check_rows)
+            and all(
+                check.status == "COMPLETED"
+                and (check.conclusion or "").upper() in {"SUCCESS", "NEUTRAL", "SKIPPED"}
+                for check in check_rows
+            )
         )
         active_threads = [
             thread
