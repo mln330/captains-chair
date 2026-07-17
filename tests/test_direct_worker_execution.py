@@ -11,7 +11,7 @@ import pytest
 
 from captains_chair.command import CommandResult
 from captains_chair.direct_orchestrator import DirectOrchestrator
-from captains_chair.direct_workers import CommandWorkerExecutor, WorkerExecutionResult
+from captains_chair.direct_workers import CommandWorkerExecutor, WorkerExecutionResult, _worker_prompt
 from captains_chair.models import (
     ActionKind,
     CompletionPolicy,
@@ -23,6 +23,7 @@ from captains_chair.models import (
 )
 from captains_chair.orchestration import (
     BlockerKind,
+    QueueCard,
     QueueCardSpec,
     QueueStatus,
     WorkspaceRef,
@@ -189,6 +190,22 @@ def test_direct_process_routes_documented_models_by_stage(tmp_path: Path) -> Non
         "test": "gpt-5.6-luna",
         "final_review": "gpt-5.6-sol",
     }
+
+
+def test_merge_worker_prompt_allows_only_explicit_merge_stage_action(tmp_path: Path) -> None:
+    card = QueueCard(
+        id="merge-1",
+        title="Merge the reviewed change",
+        status=QueueStatus.READY,
+        labels=("captains_chair", "stage:merge"),
+        notes="Run the merge gate and merge the PR when allowed.",
+    )
+
+    prompt = _worker_prompt(card, attempt_id="attempt-1", workspace=tmp_path)
+
+    assert "explicitly assigned merge-stage card" in prompt
+    assert "Do not release, deploy, expose secrets, force-push, or delete branches." in prompt
+    assert "Do not merge, release, deploy, expose secrets" not in prompt
 
 
 def test_direct_claims_are_atomic_under_overlapping_workers(tmp_path: Path) -> None:

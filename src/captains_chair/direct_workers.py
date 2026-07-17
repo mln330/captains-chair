@@ -192,6 +192,13 @@ class CommandWorkerExecutor:
 
 def _worker_prompt(card: QueueCard, *, attempt_id: str, workspace: Path) -> str:
     schema = json.dumps(strict_output_schema(WorkerExecutionResult), separators=(",", ":"))
+    merge_rule = (
+        "This is an explicitly assigned merge-stage card: you may merge only after the configured merge gate "
+        "passes and its completion policy allows it. Do not release, deploy, expose secrets, force-push, or "
+        "delete branches."
+        if "stage:merge" in card.labels
+        else "Do not merge, release, deploy, expose secrets, force-push, or delete branches."
+    )
     return (
         "You are a Captain's Chair worker in a fresh context. Execute only the assigned card.\n"
         f"Card ID: {card.id}\n"
@@ -202,7 +209,7 @@ def _worker_prompt(card: QueueCard, *, attempt_id: str, workspace: Path) -> str:
         "Workboard tools or lifecycle helper commands, even if the assignment text mentions them. "
         "Report the outcome only by returning the JSON object requested below.\n\n"
         "Inspect current repository state before mutating it. Keep changes inside the exact working directory. "
-        "Do not merge, release, deploy, expose secrets, force-push, or delete branches. Run the checks relevant "
+        f"{merge_rule} Run the checks relevant "
         "to this card. Return blocked with a TECHNICAL:, USER_SECRET:, GOAL_DIVERGENCE:, EXTERNAL_ACCESS:, or "
         "HIGH_RISK_DECISION: reason when completion is not justified. Never invent proof.\n\n"
         "Return exactly one JSON object matching this schema, with no markdown or commentary:\n"
