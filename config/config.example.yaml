@@ -6,7 +6,8 @@ harnesses:
   openclaw:
     kind: openclaw
     executable: /home/example/.npm-global/bin/openclaw
-    default_agent: codex-harness
+    # Direct role routes select the dedicated OpenClaw crew agents below.
+    default_agent: github-captain
     timeout_seconds: 3600
   codex:
     kind: codex
