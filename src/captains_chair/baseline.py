@@ -263,13 +263,14 @@ class DeepBaselineCollector:
         role: str,
         root: Path,
     ) -> Any:
+        baseline_models = self.models.for_role("baseline")
         if self.model_invoker is not None:
             return self.model_invoker(
                 repo,
                 fingerprint[:16],
                 role,
                 prompt,
-                models=self.models.baseline,
+                models=baseline_models,
                 output_model=BaselineAnalysis,
                 cwd=root,
                 writable=False,
@@ -279,7 +280,7 @@ class DeepBaselineCollector:
         try:
             result = harness.run(
                 prompt=prompt,
-                models=self.models.baseline,
+                models=baseline_models,
                 role=role,
                 output_model=BaselineAnalysis,
                 cwd=root,

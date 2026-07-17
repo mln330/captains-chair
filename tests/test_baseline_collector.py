@@ -12,7 +12,14 @@ from captains_chair.command import CommandResult, CommandRunner
 from captains_chair.engine import ControlPlaneEngine
 from captains_chair.github import GitHubProvider, RepositorySnapshot
 from captains_chair.harness import HarnessAdapter
-from captains_chair.models import BaselineAnalysis, EventRecord, HarnessConfig, ModelTarget, RepoConfig
+from captains_chair.models import (
+    BaselineAnalysis,
+    EventRecord,
+    HarnessConfig,
+    ModelProfile,
+    ModelTarget,
+    RepoConfig,
+)
 from captains_chair.state import StateStore
 from tests.helpers import app_config, model_policy, repo_config
 
@@ -35,6 +42,7 @@ class BaselineHarness(HarnessAdapter):
         super().__init__(config)
         self.fail = fail
         self.prompts: list[str] = []
+        self.models: list[str] = []
 
     def invoke(
         self,
@@ -47,6 +55,7 @@ class BaselineHarness(HarnessAdapter):
         writable: bool,
         session_id: str,
     ) -> dict[str, Any]:
+        self.models.append(model.model)
         del model, role, output_model, cwd, writable, session_id
         self.prompts.append(prompt)
         if self.fail:
@@ -197,6 +206,32 @@ def test_analyzed_baseline_runs_checks_batches_models_and_records_artifact(tmp_p
     assert baseline is not None
     assert baseline["analyzed"] == 1
     assert state.usage_summary(repo.full_name)["direct_calls"]["calls"] == 2
+
+
+def test_baseline_uses_named_profile_override(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    config = app_config(tmp_path, repo)
+    state = StateStore(config.state_dir / "state.db")
+    harness = BaselineHarness(HarnessConfig(kind="codex", executable="codex"))
+    models = model_policy().model_copy(
+        update={
+            "profiles": {
+                "baseline": ModelProfile(
+                    primary=ModelTarget(model="runtime-baseline", thinking="medium")
+                )
+            }
+        }
+    )
+    collector = DeepBaselineCollector(
+        config,
+        state,
+        cast(GitHubProvider, SnapshotGitHub()),
+        models,
+    )
+
+    collector.collect(repo, harness=harness, analyze=True, run_checks=False)
+
+    assert harness.models == ["runtime-baseline", "runtime-baseline"]
 
 
 def test_identical_baseline_reuses_validated_analysis_without_model_calls(tmp_path: Path) -> None:
