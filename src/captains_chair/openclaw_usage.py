@@ -58,7 +58,11 @@ def sync_openclaw_sessions(
         if not external_id:
             continue
         card_id = _worker_card_id(external_id)
-        context = (session_context or {}).get(card_id, {}) if card_id else {}
+        context: Mapping[str, str] = (
+            session_context.get(card_id, {})
+            if session_context is not None and card_id
+            else {}
+        )
         haystack = external_id.lower()
         if (session_filter and session_filter.lower() not in haystack) or (
             not session_filter
@@ -80,7 +84,7 @@ def sync_openclaw_sessions(
             and bool(observed_model)
             and not models_match(str(expected_model), str(observed_model))
         )
-        record = {
+        record: dict[str, Any] = {
             "source": "openclaw-session",
             "external_id": external_id,
             "repo": repo,

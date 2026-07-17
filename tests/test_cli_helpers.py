@@ -276,8 +276,16 @@ def test_openclaw_portfolio_usage_sync_reports_single_and_multi_repo_degradation
     state = StateStore(config.state_dir / "state.db")
     calls: list[str] = []
 
-    def sync(state: Any, *, repo: str, executable: str, expected_models: dict[str, str], session_limit: int) -> dict[str, Any]:
-        del state, executable, expected_models, session_limit
+    def sync(
+        state: Any,
+        *,
+        repo: str,
+        executable: str,
+        expected_models: dict[str, str],
+        session_context: dict[str, dict[str, str]],
+        session_limit: int,
+    ) -> dict[str, Any]:
+        del state, executable, expected_models, session_context, session_limit
         calls.append(repo)
         return {"sessions_seen": 2, "sessions_imported": 1, "sessions_with_usage": 1, "session_limit_reached": True}
 

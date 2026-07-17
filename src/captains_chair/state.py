@@ -95,7 +95,7 @@ def _direct_attempt_groups(rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
             continue
         if not isinstance(attempts, list):
             continue
-        for attempt_index, raw_attempt in enumerate(attempts):
+        for attempt_index, raw_attempt in enumerate(cast(list[Any], attempts)):
             if not isinstance(raw_attempt, dict):
                 continue
             attempt = cast(dict[str, Any], raw_attempt)
@@ -468,16 +468,19 @@ class StateStore:
                 continue
             if not isinstance(payload, dict):
                 continue
-            labels = payload.get("labels")
-            labels = labels if isinstance(labels, list) else []
+            payload = cast(dict[str, Any], payload)
+            raw_labels = payload.get("labels")
+            labels: list[Any] = cast(list[Any], raw_labels) if isinstance(raw_labels, list) else []
             values = [str(label) for label in labels if isinstance(label, str)]
             values_by_prefix = {
                 value.split(":", 1)[0]: value.split(":", 1)[1]
                 for value in values
                 if ":" in value
             }
-            metadata = payload.get("metadata")
-            metadata = metadata if isinstance(metadata, dict) else {}
+            raw_metadata = payload.get("metadata")
+            metadata: dict[str, Any] = (
+                cast(dict[str, Any], raw_metadata) if isinstance(raw_metadata, dict) else {}
+            )
             context_value: dict[str, str] = {}
             for key in ("course_key", "work_package_key"):
                 value = payload.get(key) or metadata.get(key)

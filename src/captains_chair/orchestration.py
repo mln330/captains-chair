@@ -526,6 +526,7 @@ class WorkflowOrchestrator:
                 continue
             if (
                 stage == WorkStage.MERGE
+                and _has_failure_evidence(card)
                 and _retry_for(card) is None
                 and self._has_valid_merge_predecessor(repo, card, cards)
             ):
@@ -1818,6 +1819,21 @@ def _passed_proof(card: QueueCard) -> tuple[dict[str, Any], ...]:
         None,
     )
     return (latest,) if latest is not None else ()
+
+
+def _has_failure_evidence(card: QueueCard) -> bool:
+    """Distinguish a fresh card from one carrying a failed merge attempt."""
+    if card.status == QueueStatus.BLOCKED:
+        return True
+    value = card.metadata.get("failureCount")
+    if isinstance(value, int) and value > 0:
+        return True
+    attempts = card.metadata.get("attempts")
+    return isinstance(attempts, list) and any(
+        isinstance(item, dict)
+        and cast(dict[str, object], item).get("status") in {"failed", "blocked", "stopped"}
+        for item in cast(list[object], attempts)
+    )
 
 
 def _completion_summary(card: QueueCard) -> str:
