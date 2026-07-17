@@ -323,16 +323,21 @@ def test_public_example_uses_documented_balanced_model_routes() -> None:
     assert configured.harness_model_overrides["codex"].ux_reviewer is not None
     assert configured.harness_model_overrides["codex"].ux_reviewer.primary.model == "gpt-5.6-terra"
     openclaw = configured.harness_model_overrides["openclaw"]
-    assert openclaw.baseline.primary.model == "gpt-5.6-terra"
-    assert openclaw.coder.primary.model == "gpt-5.6-terra"
+    assert openclaw.baseline.primary.model == "codex/gpt-5.6-terra"
+    assert openclaw.baseline.primary.agent == "github-captain"
+    assert openclaw.coder.primary.model == "codex/gpt-5.6-terra"
+    assert openclaw.coder.primary.agent == "github-coder"
     assert openclaw.tester is not None
-    assert openclaw.tester.primary.model == "gpt-5.6-luna"
-    assert openclaw.final_reviewer.primary.model == "gpt-5.6-sol"
+    assert openclaw.tester.primary.model == "codex/gpt-5.6-luna"
+    assert openclaw.tester.primary.agent == "github-tester"
+    assert openclaw.final_reviewer.primary.model == "codex/gpt-5.6-sol"
+    assert openclaw.final_reviewer.primary.agent == "github-final"
     assert openclaw.final_reviewer.allow_fallback is False
-    assert openclaw.profiles["strategist"].primary.model == "gpt-5.6-sol"
-    assert openclaw.profiles["fast_coder"].primary.model == "gpt-5.6-terra"
-    assert openclaw.profiles["qa_assistant"].primary.model == "gpt-5.6-luna"
-    assert configured.model_policy("openclaw").profiles["readiness_reviewer"].primary.model == "gpt-5.6-terra"
+    assert openclaw.profiles["strategist"].primary.model == "codex/gpt-5.6-sol"
+    assert openclaw.profiles["strategist"].primary.agent == "github-final"
+    assert openclaw.profiles["fast_coder"].primary.model == "codex/gpt-5.6-terra"
+    assert openclaw.profiles["qa_assistant"].primary.model == "codex/gpt-5.6-luna"
+    assert configured.model_policy("openclaw").profiles["readiness_reviewer"].primary.model == "codex/gpt-5.6-terra"
     documented_profiles = {
         "strategist": ("codex/gpt-5.6-sol", "high"),
         "course_verifier": ("codex/gpt-5.6-sol", "high"),

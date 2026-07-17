@@ -188,63 +188,66 @@ harness_model_overrides:
         primary: {model: gpt-5.6-terra, thinking: high}
       summarizer:
         primary: {model: gpt-5.6-luna, thinking: low}
-  # Direct OpenClaw adapter routes use the model names accepted by
-  # `openclaw agent`. On a ChatGPT-account gateway these resolve to the
-  # Codex provider; they are not OpenAI API-key requests. The gateway rejects
-  # Spark for direct agent calls, so bounded OpenClaw coding uses Terra.
+  # Direct OpenClaw adapter routes use an explicit Codex provider prefix so
+  # they cannot silently resolve through the gateway's default Ollama route.
+  # This is ChatGPT-account Codex execution, not an OpenAI API-key request.
+  # The gateway rejects Spark for direct agent calls, so bounded OpenClaw
+  # coding uses Terra while direct Codex retains Spark below. Each route names
+  # the OpenClaw agent whose configured default matches that model; OpenClaw
+  # validates model overrides against the selected agent.
   openclaw:
     baseline:
-      primary: {model: gpt-5.6-terra, thinking: high}
+      primary: {model: codex/gpt-5.6-terra, agent: github-captain, thinking: high}
     planner:
-      primary: {model: gpt-5.6-terra, thinking: medium}
+      primary: {model: codex/gpt-5.6-terra, agent: github-captain, thinking: medium}
     coder:
-      primary: {model: gpt-5.6-terra, thinking: medium}
+      primary: {model: codex/gpt-5.6-terra, agent: github-coder, thinking: medium}
     tester:
-      primary: {model: gpt-5.6-luna, thinking: medium}
+      primary: {model: codex/gpt-5.6-luna, agent: github-tester, thinking: medium}
     reviewer:
-      primary: {model: gpt-5.6-terra, thinking: high}
+      primary: {model: codex/gpt-5.6-terra, agent: github-reviewer, thinking: high}
     ux_reviewer:
-      primary: {model: gpt-5.6-terra, thinking: medium}
+      primary: {model: codex/gpt-5.6-terra, agent: github-ux, thinking: medium}
     comment_adjudicator:
-      primary: {model: gpt-5.6-terra, thinking: high}
+      primary: {model: codex/gpt-5.6-terra, agent: github-reviewer, thinking: high}
     final_reviewer:
-      primary: {model: gpt-5.6-sol, thinking: high}
+      primary: {model: codex/gpt-5.6-sol, agent: github-final, thinking: high}
       allow_fallback: false
     profiles:
       strategist:
-        primary: {model: gpt-5.6-sol, thinking: high}
+        primary: {model: codex/gpt-5.6-sol, agent: github-final, thinking: high}
       course_verifier:
-        primary: {model: gpt-5.6-sol, thinking: high}
+        primary: {model: codex/gpt-5.6-sol, agent: github-final, thinking: high}
       baseline_analyst:
-        primary: {model: gpt-5.6-terra, thinking: high}
+        primary: {model: codex/gpt-5.6-terra, agent: github-captain, thinking: high}
       subsystem_analyst:
-        primary: {model: gpt-5.6-luna, thinking: medium}
+        primary: {model: codex/gpt-5.6-luna, agent: github-tester, thinking: medium}
       readiness_reviewer:
-        primary: {model: gpt-5.6-terra, thinking: high}
+        primary: {model: codex/gpt-5.6-terra, agent: github-captain, thinking: high}
       decomposer:
-        primary: {model: gpt-5.6-terra, thinking: medium}
+        primary: {model: codex/gpt-5.6-terra, agent: github-captain, thinking: medium}
       package_planner:
-        primary: {model: gpt-5.6-terra, thinking: medium}
+        primary: {model: codex/gpt-5.6-terra, agent: github-captain, thinking: medium}
       fast_coder:
-        primary: {model: gpt-5.6-terra, thinking: medium}
+        primary: {model: codex/gpt-5.6-terra, agent: github-coder, thinking: medium}
       complex_coder:
-        primary: {model: gpt-5.6-sol, thinking: high}
+        primary: {model: codex/gpt-5.6-sol, agent: github-final, thinking: high}
       focused_coder:
-        primary: {model: gpt-5.6-terra, thinking: medium}
+        primary: {model: codex/gpt-5.6-terra, agent: github-coder, thinking: medium}
       local_coder:
         primary: {model: ollama/qualified-local, thinking: medium}
       code_reviewer:
-        primary: {model: gpt-5.6-terra, thinking: high}
+        primary: {model: codex/gpt-5.6-terra, agent: github-reviewer, thinking: high}
       security_reviewer:
-        primary: {model: gpt-5.6-terra, thinking: high}
+        primary: {model: codex/gpt-5.6-terra, agent: github-reviewer, thinking: high}
       qa_assistant:
-        primary: {model: gpt-5.6-luna, thinking: medium}
+        primary: {model: codex/gpt-5.6-luna, agent: github-tester, thinking: medium}
       ui_qa_reviewer:
-        primary: {model: gpt-5.6-terra, thinking: medium}
+        primary: {model: codex/gpt-5.6-terra, agent: github-ux, thinking: medium}
       recovery_planner:
-        primary: {model: gpt-5.6-terra, thinking: high}
+        primary: {model: codex/gpt-5.6-terra, agent: github-captain, thinking: high}
       summarizer:
-        primary: {model: gpt-5.6-luna, thinking: low}
+        primary: {model: codex/gpt-5.6-luna, agent: github-tester, thinking: low}
 
 usage:
   # Optional account-wide same-day safeguards using provider-reported tokens only.
