@@ -208,6 +208,7 @@ def test_failed_openclaw_session_without_model_usage_is_not_counted_as_unknown(
     summary = state.usage_summary(repo="repo/project")
     assert summary["external_sessions"]["unknown_sessions"] == 0
     assert summary["external_sessions"]["failed_sessions"] == 1
+    assert build_usage_report(summary, UsageConfig())["telemetry"]["status"] == "complete"
 
 
 def test_openclaw_session_import_uses_a_bounded_limit(tmp_path: Path) -> None:
