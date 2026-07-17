@@ -324,7 +324,7 @@ def test_public_example_uses_documented_balanced_model_routes() -> None:
     assert configured.harness_model_overrides["codex"].ux_reviewer.primary.model == "gpt-5.6-terra"
 
     worker_models = configured.orchestrators["openclaw-workers"].worker_models
-    assert worker_models.coder == "codex/gpt-5.3-codex-spark"
+    assert worker_models.coder == "codex/gpt-5.6-terra"
     assert worker_models.tester == "codex/gpt-5.6-luna"
     assert worker_models.reviewer == "codex/gpt-5.6-terra"
     assert worker_models.final_reviewer == "codex/gpt-5.6-sol"

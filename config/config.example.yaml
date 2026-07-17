@@ -48,8 +48,10 @@ orchestrators:
       verifier: github-verify
     worker_models:
       captain: codex/gpt-5.6-sol
-      # Validate routes against the selected runtime with `captains-chair model-check`.
-      coder: codex/gpt-5.3-codex-spark
+      # OpenClaw P0 worker route: this ChatGPT-account gateway rejects
+      # gpt-5.3-codex-spark when passed through `openclaw agent`.
+      # The direct Codex adapter below keeps Spark as the low-cost P1 coder.
+      coder: codex/gpt-5.6-terra
       tester: codex/gpt-5.6-luna
       reviewer: codex/gpt-5.6-terra
       ux_reviewer: codex/gpt-5.6-terra
