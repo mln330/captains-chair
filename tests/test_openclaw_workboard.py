@@ -13,6 +13,7 @@ from captains_chair.models import OpenClawWorkboardConfig, WorkerAssignments
 from captains_chair.openclaw_workboard import (
     OpenClawWorkboardAdapter,
     OpenClawWorkboardError,
+    _managed_completion_proof,
     decode_openclaw_json,
 )
 from captains_chair.orchestration import QueueCard, QueueCardSpec, QueueStatus, WorkspaceRef
@@ -37,6 +38,17 @@ def config() -> OpenClawWorkboardConfig:
 def test_noisy_openclaw_output_decodes_first_json_value() -> None:
     value = decode_openclaw_json('migration warning\n{"cards":[]}\ntrailing note')
     assert value == {"cards": []}
+
+
+def test_managed_completion_proof_preserves_policy_marker_from_summary() -> None:
+    proof = _managed_completion_proof(
+        ({"status": "passed", "note": "python -m pytest -q"},),
+        "Final review passed. AUTO_MERGE_ALLOWED:749a3a45de43fc2d6eeaf1cb2d2a91b549fd04b3",
+    )
+
+    assert proof[0]["note"].endswith(
+        "AUTO_MERGE_ALLOWED:749a3a45de43fc2d6eeaf1cb2d2a91b549fd04b3"
+    )
 
 
 @pytest.mark.parametrize(

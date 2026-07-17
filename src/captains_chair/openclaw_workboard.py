@@ -271,7 +271,7 @@ class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
                         owner_id=owner_id,
                         token=token,
                         summary=result.summary,
-                        proof=_managed_completion_proof(result.proof),
+                        proof=_managed_completion_proof(result.proof, result.summary),
                     )
                     completed = True
                 else:
@@ -699,7 +699,9 @@ def _runtime_limit(card: QueueCard, default: int) -> int:
     return default
 
 
-def _managed_completion_proof(proof: tuple[dict[str, Any], ...]) -> tuple[dict[str, Any], ...]:
+def _managed_completion_proof(
+    proof: tuple[dict[str, Any], ...], summary: str = ""
+) -> tuple[dict[str, Any], ...]:
     """Collapse model-supplied evidence to the single proof record OpenClaw accepts."""
     if not proof:
         return ()
@@ -720,6 +722,12 @@ def _managed_completion_proof(proof: tuple[dict[str, Any], ...]) -> tuple[dict[s
             for field in ("note", "label", "proof_note", "command")
             if str(item.get(field) or "").strip()
         )
+    marker = re.search(
+        r"\b(?:READY_FOR_OWNER|CONTROL_PLANE_COMPLETE|AUTO_MERGE_ALLOWED):[0-9a-fA-F]{7,64}\b",
+        summary,
+    )
+    if marker and marker.group(0) not in note:
+        note = f"{note} {marker.group(0)}".strip()
     return (
         {
             **primary,
