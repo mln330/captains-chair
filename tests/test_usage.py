@@ -136,6 +136,54 @@ def test_openclaw_usage_accepts_codex_openai_route_alias(tmp_path: Path) -> None
     ] == 0
 
 
+def test_openclaw_worker_usage_uses_card_context_for_stage_and_model_dimensions(
+    tmp_path: Path,
+) -> None:
+    output = (
+        '{"sessions":[{"key":"agent:github-coder:captains-chair:worker:card-123:attempt-1",'
+        '"agentId":"github-coder","model":"gpt-5.6-terra","modelProvider":"codex",'
+        '"inputTokens":100,"cachedInputTokens":20,"outputTokens":30,"totalTokens":150}]}'
+    )
+
+    def runner(command: Sequence[str], *, timeout: int = 60, **_: object) -> CommandResult:
+        del command, timeout
+        return CommandResult(0, output, "")
+
+    state = StateStore(tmp_path / "state.db")
+    result = sync_openclaw_sessions(
+        state,
+        repo="mln330/captains-chair-e2e-canary-20260717",
+        runner=runner,
+        expected_models={"coder": "codex/gpt-5.6-terra"},
+        session_context={
+            "card-123": {
+                "course_key": "hello-cli",
+                "work_package_key": "hello-implementation",
+                "stage": "implementation",
+            }
+        },
+    )
+
+    assert result["sessions_imported"] == 1
+    group = state.usage_summary(repo="mln330/captains-chair-e2e-canary-20260717")[
+        "external_groups"
+    ][0]
+    assert group["course_key"] == "hello-cli"
+    assert group["work_package_key"] == "hello-implementation"
+    assert group["stage"] == "implementation"
+    assert state.usage_dimensions("mln330/captains-chair-e2e-canary-20260717") == [
+        {
+            "date": group["date"],
+            "course_key": "hello-cli",
+            "work_package_key": "hello-implementation",
+            "stage": "implementation",
+            "model": "codex/gpt-5.6-terra",
+            "calls": 1,
+            "tokens": 150,
+        }
+    ]
+
+
 def test_openclaw_session_import_uses_a_bounded_limit(tmp_path: Path) -> None:
     commands: list[Sequence[str]] = []
 

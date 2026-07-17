@@ -26,6 +26,7 @@ def sync_openclaw_sessions(
     runner: CommandRunner = run_command,
     session_filter: str | None = None,
     expected_models: Mapping[str, str] | None = None,
+    session_context: Mapping[str, Mapping[str, str]] | None = None,
     session_limit: int = DEFAULT_SESSION_LIMIT,
 ) -> dict[str, Any]:
     """Import OpenClaw's metadata-only session usage into portable CAPTAINS_CHAIR state."""
@@ -56,11 +57,14 @@ def sync_openclaw_sessions(
         external_id = str(row.get("key") or row.get("sessionKey") or "").strip()
         if not external_id:
             continue
+        card_id = _worker_card_id(external_id)
+        context = (session_context or {}).get(card_id, {}) if card_id else {}
         haystack = external_id.lower()
         if (session_filter and session_filter.lower() not in haystack) or (
             not session_filter
             and repo_token not in haystack
             and external_id.rsplit(":", 1)[-1] not in direct_session_ids
+            and not context
         ):
             continue
         agent = str(row.get("agentId") or "unknown")
@@ -81,6 +85,10 @@ def sync_openclaw_sessions(
             "external_id": external_id,
             "repo": repo,
             "role": role,
+            "course_key": context.get("course_key"),
+            "work_package_key": context.get("work_package_key"),
+            "stage": context.get("stage") or role,
+            "card_id": card_id,
             "provider": row.get("modelProvider"),
             "model": observed_model,
             "expected_model": expected_model,
@@ -133,6 +141,16 @@ def _integer(value: Any) -> int | None:
 
 def _boolean(value: Any) -> bool | None:
     return value if isinstance(value, bool) else None
+
+
+def _worker_card_id(external_id: str) -> str | None:
+    """Extract the Workboard card ID from a managed OpenClaw session key."""
+    parts = external_id.split(":")
+    try:
+        index = parts.index("worker")
+    except ValueError:
+        return None
+    return parts[index + 1] if index + 1 < len(parts) else None
 
 
 def _parse_json(text: str) -> Any:

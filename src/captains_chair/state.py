@@ -316,6 +316,9 @@ class StateStore:
                     external_id TEXT NOT NULL,
                     repo TEXT NOT NULL,
                     role TEXT NOT NULL,
+                    course_key TEXT,
+                    work_package_key TEXT,
+                    stage TEXT,
                     provider TEXT,
                     model TEXT,
                     input_tokens INTEGER,
@@ -406,6 +409,9 @@ class StateStore:
                     conn.execute(f"ALTER TABLE model_calls ADD COLUMN {name} {definition}")
             external_columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(external_usage)")}
             external_migrations = {
+                "course_key": "TEXT",
+                "work_package_key": "TEXT",
+                "stage": "TEXT",
                 "reasoning_tokens": "INTEGER",
                 "context_tokens": "INTEGER",
                 "total_tokens_fresh": "INTEGER",
@@ -440,6 +446,47 @@ class StateStore:
                     (repo, card_id, status, json.dumps(card, sort_keys=True, default=str), now),
                 )
         return transitions
+
+    def openclaw_session_context(self, repo: str) -> dict[str, dict[str, str]]:
+        """Return stage context keyed by managed Workboard card ID.
+
+        Managed OpenClaw session keys contain the card ID, not the repository
+        name. Persisted card labels are the durable source for the worker stage.
+        """
+        context: dict[str, dict[str, str]] = {}
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT card_id, payload_json FROM orchestration_cards WHERE repo=?",
+                (repo,),
+            ).fetchall()
+        for row in rows:
+            try:
+                payload = json.loads(str(row["payload_json"]))
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            labels = payload.get("labels")
+            labels = labels if isinstance(labels, list) else []
+            values = [str(label) for label in labels if isinstance(label, str)]
+            values_by_prefix = {
+                value.split(":", 1)[0]: value.split(":", 1)[1]
+                for value in values
+                if ":" in value
+            }
+            metadata = payload.get("metadata")
+            metadata = metadata if isinstance(metadata, dict) else {}
+            context_value: dict[str, str] = {}
+            for key in ("course_key", "work_package_key"):
+                value = payload.get(key) or metadata.get(key)
+                if isinstance(value, str) and value.strip():
+                    context_value[key] = value.strip()
+            if values_by_prefix.get("stage"):
+                context_value["stage"] = values_by_prefix["stage"]
+            if values_by_prefix.get("workflow") and "work_package_key" not in context_value:
+                context_value["work_package_key"] = values_by_prefix["workflow"]
+            context[str(row["card_id"])] = context_value
+        return context
 
     def approve(self, repo: str, action_id: str, approved_by: str) -> None:
         with self._connect() as conn:
@@ -848,43 +895,48 @@ class StateStore:
             )
 
     def usage_dimensions(self, repo: str) -> list[dict[str, Any]]:
-        """Group direct provider telemetry by the operator-facing workflow dimensions."""
-        attempt_groups = self.usage_summary(repo=repo).get("direct_attempt_groups", [])
-        if attempt_groups:
-            dimensions: list[dict[str, Any]] = []
-            for group in cast(list[dict[str, Any]], attempt_groups):
-                model = str(group.get("model") or "unknown")
-                if "/" not in model and str(group.get("runtime") or "").lower() == "codex":
-                    model = f"codex/{model}"
-                dimensions.append(
-                    {
-                        "date": group.get("date"),
-                        "course_key": group.get("course_key"),
-                        "work_package_key": group.get("work_package_key"),
-                        "stage": group.get("stage"),
-                        "model": model,
-                        "calls": group.get("calls", 0),
-                        "tokens": group.get("total_tokens")
-                        or sum(
-                            int(group.get(field) or 0)
-                            for field in ("input_tokens", "cached_input_tokens", "output_tokens")
-                        ),
-                    }
-                )
-            return sorted(dimensions, key=lambda item: (str(item["date"]), int(item["tokens"])), reverse=True)
-        with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT substr(created_at,1,10) AS date, course_key, work_package_key, "
-                "COALESCE(stage, role) AS stage, "
-                "CASE WHEN instr(resolved_model, '/') > 0 THEN resolved_model "
-                "WHEN runtime='codex' THEN 'codex/' || resolved_model ELSE resolved_model END AS model, "
-                "COUNT(*) AS calls, "
-                "SUM(COALESCE(total_tokens, COALESCE(input_tokens,0) + COALESCE(cached_input_tokens,0) + COALESCE(output_tokens,0))) AS tokens "
-                "FROM model_calls WHERE repo=? GROUP BY date,course_key,work_package_key,stage,resolved_model "
-                "ORDER BY date DESC,tokens DESC",
-                (repo,),
-            ).fetchall()
-        return [dict(row) for row in rows]
+        """Group direct and OpenClaw worker telemetry by stage and model."""
+        summary = self.usage_summary(repo=repo)
+        dimensions: list[dict[str, Any]] = []
+        for group in cast(list[dict[str, Any]], summary.get("direct_attempt_groups", [])):
+            model = str(group.get("model") or "unknown")
+            if "/" not in model and str(group.get("runtime") or "").lower() == "codex":
+                model = f"codex/{model}"
+            dimensions.append(
+                {
+                    "date": group.get("date"),
+                    "course_key": group.get("course_key"),
+                    "work_package_key": group.get("work_package_key"),
+                    "stage": group.get("stage"),
+                    "model": model,
+                    "calls": group.get("calls", 0),
+                    "tokens": group.get("total_tokens")
+                    or sum(
+                        int(group.get(field) or 0)
+                        for field in ("input_tokens", "cached_input_tokens", "output_tokens")
+                    ),
+                }
+            )
+        for group in cast(list[dict[str, Any]], summary.get("external_groups", [])):
+            provider = str(group.get("provider") or "unknown")
+            model_name = str(group.get("model") or "unknown")
+            model = model_name if "/" in model_name else f"{provider}/{model_name}"
+            dimensions.append(
+                {
+                    "date": group.get("date"),
+                    "course_key": group.get("course_key"),
+                    "work_package_key": group.get("work_package_key"),
+                    "stage": group.get("stage") or group.get("role"),
+                    "model": model,
+                    "calls": group.get("calls", 0),
+                    "tokens": group.get("total_tokens")
+                    or sum(
+                        int(group.get(field) or 0)
+                        for field in ("input_tokens", "cached_input_tokens", "output_tokens")
+                    ),
+                }
+            )
+        return sorted(dimensions, key=lambda item: (str(item["date"]), int(item["tokens"])), reverse=True)
 
     def direct_session_ids(self, repo: str) -> set[str]:
         """Return opaque direct-harness IDs that may be correlated with OpenClaw sessions."""
@@ -1001,11 +1053,12 @@ class StateStore:
         activity_at = _external_activity_timestamp(record)
         with self._connect() as conn:
             conn.execute(
-                "INSERT INTO external_usage(source,external_id,repo,role,provider,model,input_tokens,"
+                "INSERT INTO external_usage(source,external_id,repo,role,course_key,work_package_key,stage,provider,model,input_tokens,"
                 "cached_input_tokens,reasoning_tokens,output_tokens,total_tokens,total_tokens_fresh,context_tokens,"
                 "model_mismatch_count,prompt_bytes,response_bytes,duration_ms,updated_at,payload_json) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(source,external_id) DO UPDATE SET repo=excluded.repo,role=excluded.role,"
+                "course_key=excluded.course_key,work_package_key=excluded.work_package_key,stage=excluded.stage,"
                 "provider=excluded.provider,model=excluded.model,input_tokens=excluded.input_tokens,"
                 "cached_input_tokens=excluded.cached_input_tokens,reasoning_tokens=excluded.reasoning_tokens,"
                 "output_tokens=excluded.output_tokens,"
@@ -1019,6 +1072,9 @@ class StateStore:
                     str(record["external_id"]),
                     str(record["repo"]),
                     str(record["role"]),
+                    record.get("course_key"),
+                    record.get("work_package_key"),
+                    record.get("stage") or record.get("role"),
                     record.get("provider"),
                     record.get("model"),
                     record.get("input_tokens"),
@@ -1118,7 +1174,7 @@ class StateStore:
                 external_params,
             ).fetchone()
             external_groups = conn.execute(
-                "SELECT repo, role, provider, model, COUNT(*) AS calls, SUM(input_tokens) AS input_tokens, "
+                "SELECT repo, substr(updated_at,1,10) AS date, role, course_key, work_package_key, stage, provider, model, COUNT(*) AS calls, SUM(input_tokens) AS input_tokens, "
                 "SUM(cached_input_tokens) AS cached_input_tokens, SUM(reasoning_tokens) AS reasoning_tokens, "
                 "SUM(output_tokens) AS output_tokens, "
                 "SUM(total_tokens) AS total_tokens, SUM(model_mismatch_count) AS model_mismatch_attempts, "
@@ -1133,7 +1189,7 @@ class StateStore:
                 "SUM(CASE WHEN input_tokens IS NULL AND cached_input_tokens IS NULL "
                 "AND output_tokens IS NULL AND total_tokens IS NULL THEN 1 ELSE 0 END) AS unknown_sessions "
                 "FROM external_usage" + external_where
-                + " GROUP BY repo, role, provider, model ORDER BY total_tokens DESC NULLS LAST, calls DESC",
+                + " GROUP BY repo, date, role, course_key, work_package_key, stage, provider, model ORDER BY total_tokens DESC NULLS LAST, calls DESC",
                 external_params,
             ).fetchall()
             repeated_prompts = conn.execute(
