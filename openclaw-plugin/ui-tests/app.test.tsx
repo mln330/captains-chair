@@ -105,7 +105,7 @@ describe("shared dashboard components", () => {
     fireEvent.click(screen.getByText("Repository controls"));
     fireEvent.change(screen.getByLabelText("Autonomy"), { target: { value: "autonomous" } });
     fireEvent.change(screen.getByLabelText("Discord route"), { target: { value: "project-room" } });
-    const modelInputs = screen.getAllByDisplayValue("codex/gpt-5.5");
+    const modelInputs = screen.getAllByDisplayValue("codex/gpt-5.6-sol");
     fireEvent.change(modelInputs[0], { target: { value: "codex/gpt-5.3-codex-spark" } });
     fireEvent.click(screen.getByRole("button", { name: "Add QA profile" }));
     fireEvent.change(screen.getByLabelText("Profile key"), { target: { value: "ui-qa" } });

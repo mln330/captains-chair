@@ -5,6 +5,11 @@ def test_models_match_accepts_unqualified_provider_model() -> None:
     assert models_match("codex/gpt-5.3-codex-spark", "gpt-5.3-codex-spark")
 
 
+def test_models_match_accepts_gpt56_alias_and_canonical_model() -> None:
+    assert models_match("codex/gpt-5.6", "gpt-5.6-sol")
+    assert models_match("codex/gpt-5.6", "codex/gpt-5.6-sol")
+
+
 def test_models_match_accepts_codex_openai_route_alias() -> None:
     assert models_match("codex/gpt-5.5", "openai/gpt-5.5")
     assert models_match("openai/gpt-5.5", "codex/gpt-5.5")

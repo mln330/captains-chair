@@ -51,14 +51,14 @@ args = sys.argv[1:]
 if args[:3] == ["agents", "list", "--json"]:
     emit(
         [
-            {"id": "captain", "model": "openai/gpt-5.5"},
-            {"id": "coder", "model": "openai/gpt-5.3-codex-spark"},
-            {"id": "reviewer", "model": "openai/gpt-5.5"},
-            {"id": "tester", "model": "openai/gpt-5.3-codex-spark"},
-            {"id": "ux", "model": "openai/gpt-5.3-codex-spark"},
-            {"id": "final", "model": "openai/gpt-5.5"},
-            {"id": "merge", "model": "openai/gpt-5.5"},
-            {"id": "verify", "model": "openai/gpt-5.5"},
+            {"id": "captain", "model": "openai/gpt-5.6-sol"},
+            {"id": "coder", "model": "openai/gpt-5.6-sol"},
+            {"id": "reviewer", "model": "openai/gpt-5.6-sol"},
+            {"id": "tester", "model": "openai/gpt-5.6-sol"},
+            {"id": "ux", "model": "openai/gpt-5.6-sol"},
+            {"id": "final", "model": "openai/gpt-5.6-sol"},
+            {"id": "merge", "model": "openai/gpt-5.6-sol"},
+            {"id": "verify", "model": "openai/gpt-5.6-sol"},
         ]
     )
     raise SystemExit(0)
@@ -204,14 +204,14 @@ args = sys.argv[1:]
 if args[:3] == ["agents", "list", "--json"]:
     emit(
         [
-            {"id": "captain", "model": "codex/gpt-5.5"},
-            {"id": "coder", "model": "codex/gpt-5.3-codex-spark"},
-            {"id": "reviewer", "model": "codex/gpt-5.5"},
-            {"id": "tester", "model": "codex/gpt-5.3-codex-spark"},
-            {"id": "ux", "model": "codex/gpt-5.3-codex-spark"},
-            {"id": "final", "model": "codex/gpt-5.5"},
-            {"id": "merge", "model": "codex/gpt-5.5"},
-            {"id": "verify", "model": "codex/gpt-5.5"},
+            {"id": "captain", "model": "codex/gpt-5.6-sol"},
+            {"id": "coder", "model": "codex/gpt-5.6-sol"},
+            {"id": "reviewer", "model": "codex/gpt-5.6-sol"},
+            {"id": "tester", "model": "codex/gpt-5.6-sol"},
+            {"id": "ux", "model": "codex/gpt-5.6-sol"},
+            {"id": "final", "model": "codex/gpt-5.6-sol"},
+            {"id": "merge", "model": "codex/gpt-5.6-sol"},
+            {"id": "verify", "model": "codex/gpt-5.6-sol"},
         ]
     )
     raise SystemExit(0)

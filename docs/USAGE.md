@@ -53,7 +53,7 @@ Optional safeguards are configured with authoritative token counts:
 usage:
   daily_token_limit: 2000000
   model_daily_token_limits:
-    gpt-5.6-sol: 250000
+    codex/gpt-5.6-sol: 250000
   block_on_unknown: true
   allow_incomplete_telemetry: false
   retention_days: 90

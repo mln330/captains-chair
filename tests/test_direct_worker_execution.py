@@ -140,7 +140,7 @@ def test_direct_runtime_completes_workflow_without_workboard(
             not model.startswith("codex/")
             for model in routed_models
         )
-        assert "gpt-5.3-codex-spark" in routed_models
+        assert "gpt-5.6-sol" in routed_models
     else:
         assert all(command[1:3] == ["agent", "--agent"] for command in runner.commands)
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any, cast
 
+from captains_chair.model_policy import models_match
 from captains_chair.models import UsageConfig
 
 TOKEN_FIELDS = (
@@ -535,13 +536,7 @@ def _group_identity(group: dict[str, Any], metric: str) -> dict[str, Any]:
 
 
 def _model_matches(actual: str, configured: str) -> bool:
-    actual_names = {actual, actual.removeprefix("codex/"), actual.removeprefix("openai/")}
-    configured_names = {
-        configured,
-        configured.removeprefix("codex/"),
-        configured.removeprefix("openai/"),
-    }
-    return bool(actual_names & configured_names)
+    return models_match(actual, configured)
 
 
 def _number(value: Any) -> int:

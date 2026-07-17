@@ -97,33 +97,33 @@ type UpdatePayload = Record<string, unknown>;
 type ModelPreset = "economy" | "balanced" | "maximum_quality" | "local_first";
 
 const ROUTE_DEFAULTS = [
-  { role: "strategist", label: "Course strategist", model: "codex/gpt-5.5", effort: "high" },
-  { role: "course_verifier", label: "Course verifier", model: "codex/gpt-5.5", effort: "high" },
-  { role: "baseline", label: "Baseline analyst", model: "codex/gpt-5.5", effort: "high" },
-  { role: "baseline_analyst", label: "Baseline gap analyst", model: "codex/gpt-5.5", effort: "high" },
-  { role: "planner", label: "Planning", model: "codex/gpt-5.5", effort: "high" },
-  { role: "readiness_reviewer", label: "Readiness review", model: "codex/gpt-5.5", effort: "high" },
-  { role: "decomposer", label: "Work decomposition", model: "codex/gpt-5.5", effort: "medium" },
-  { role: "package_planner", label: "Package planning", model: "codex/gpt-5.5", effort: "medium" },
-  { role: "subsystem_analyst", label: "Subsystem analysis", model: "codex/gpt-5.5", effort: "medium" },
-  { role: "coder", label: "Coding", model: "codex/gpt-5.3-codex-spark", effort: "medium" },
-  { role: "fast_coder", label: "Fast coding", model: "codex/gpt-5.3-codex-spark", effort: "medium" },
-  { role: "focused_coder", label: "Focused coding", model: "codex/gpt-5.3-codex-spark", effort: "medium" },
-  { role: "complex_coder", label: "Complex coding", model: "codex/gpt-5.5", effort: "high" },
+  { role: "strategist", label: "Course strategist", model: "codex/gpt-5.6-sol", effort: "high" },
+  { role: "course_verifier", label: "Course verifier", model: "codex/gpt-5.6-sol", effort: "high" },
+  { role: "baseline", label: "Baseline analyst", model: "codex/gpt-5.6-sol", effort: "high" },
+  { role: "baseline_analyst", label: "Baseline gap analyst", model: "codex/gpt-5.6-sol", effort: "high" },
+  { role: "planner", label: "Planning", model: "codex/gpt-5.6-sol", effort: "high" },
+  { role: "readiness_reviewer", label: "Readiness review", model: "codex/gpt-5.6-sol", effort: "high" },
+  { role: "decomposer", label: "Work decomposition", model: "codex/gpt-5.6-sol", effort: "medium" },
+  { role: "package_planner", label: "Package planning", model: "codex/gpt-5.6-sol", effort: "medium" },
+  { role: "subsystem_analyst", label: "Subsystem analysis", model: "codex/gpt-5.6-sol", effort: "medium" },
+  { role: "coder", label: "Coding", model: "codex/gpt-5.6-sol", effort: "high" },
+  { role: "fast_coder", label: "Fast coding", model: "codex/gpt-5.6-sol", effort: "high" },
+  { role: "focused_coder", label: "Focused coding", model: "codex/gpt-5.6-sol", effort: "high" },
+  { role: "complex_coder", label: "Complex coding", model: "codex/gpt-5.6-sol", effort: "high" },
   { role: "local_coder", label: "Local coding", model: "ollama/qualified-local", effort: "medium" },
-  { role: "tester", label: "Testing", model: "codex/gpt-5.3-codex-spark", effort: "medium" },
-  { role: "qa_assistant", label: "QA assistant", model: "codex/gpt-5.3-codex-spark", effort: "medium" },
-  { role: "reviewer", label: "Independent review", model: "codex/gpt-5.5", effort: "high" },
-  { role: "code_reviewer", label: "Code review", model: "codex/gpt-5.5", effort: "high" },
-  { role: "comment_adjudicator", label: "Comment adjudication", model: "codex/gpt-5.5", effort: "high" },
-  { role: "security_reviewer", label: "Security review", model: "codex/gpt-5.5", effort: "high" },
-  { role: "ux_reviewer", label: "UX review", model: "codex/gpt-5.3-codex-spark", effort: "medium" },
-  { role: "ui_qa_reviewer", label: "UI QA", model: "codex/gpt-5.5", effort: "medium" },
-  { role: "final_reviewer", label: "Final review", model: "codex/gpt-5.5", effort: "high" },
-  { role: "merger", label: "Merge gate", model: "codex/gpt-5.5", effort: "high" },
-  { role: "recovery_planner", label: "Recovery planning", model: "codex/gpt-5.5", effort: "high" },
-  { role: "summarizer", label: "Summaries", model: "codex/gpt-5.3-codex-spark", effort: "low" },
-  { role: "verifier", label: "Post-merge verification", model: "codex/gpt-5.5", effort: "high" },
+  { role: "tester", label: "Testing", model: "codex/gpt-5.6-sol", effort: "high" },
+  { role: "qa_assistant", label: "QA assistant", model: "codex/gpt-5.6-sol", effort: "high" },
+  { role: "reviewer", label: "Independent review", model: "codex/gpt-5.6-sol", effort: "high" },
+  { role: "code_reviewer", label: "Code review", model: "codex/gpt-5.6-sol", effort: "high" },
+  { role: "comment_adjudicator", label: "Comment adjudication", model: "codex/gpt-5.6-sol", effort: "high" },
+  { role: "security_reviewer", label: "Security review", model: "codex/gpt-5.6-sol", effort: "high" },
+  { role: "ux_reviewer", label: "UX review", model: "codex/gpt-5.6-sol", effort: "high" },
+  { role: "ui_qa_reviewer", label: "UI QA", model: "codex/gpt-5.6-sol", effort: "medium" },
+  { role: "final_reviewer", label: "Final review", model: "codex/gpt-5.6-sol", effort: "high" },
+  { role: "merger", label: "Merge gate", model: "codex/gpt-5.6-sol", effort: "high" },
+  { role: "recovery_planner", label: "Recovery planning", model: "codex/gpt-5.6-sol", effort: "high" },
+  { role: "summarizer", label: "Summaries", model: "codex/gpt-5.6-sol", effort: "high" },
+  { role: "verifier", label: "Post-merge verification", model: "codex/gpt-5.6-sol", effort: "high" },
 ] as const;
 type EditableRoute = { model: string; effort: string };
 
@@ -166,7 +166,7 @@ function initialRoutesFromProfiles(profiles?: Record<string, ModelRoute>): Recor
 }
 
 function initialStageRoute(profile?: ModelRoute): EditableRoute {
-  return { model: profile?.primary?.model ?? "codex/gpt-5.3-codex-spark", effort: profile?.primary?.thinking ?? "medium" };
+  return { model: profile?.primary?.model ?? "codex/gpt-5.6-sol", effort: profile?.primary?.thinking ?? "high" };
 }
 
 function effectiveRoute(repo: Repo | undefined, course: Course, workPackage: WorkPackage | undefined, role: string, fallbackModel: string, fallbackEffort: string, stageName = "implementation") {
@@ -216,9 +216,9 @@ function presetRoutes(preset: ModelPreset): Record<string, EditableRoute> {
   const localRoles = new Set(["coder", "fast_coder", "focused_coder", "local_coder", "tester", "qa_assistant", "ux_reviewer", "summarizer"]);
   return Object.fromEntries(ROUTE_DEFAULTS.map(({ role, model, effort }) => {
     if (preset === "balanced") return [role, { model, effort }];
-    if (preset === "maximum_quality") return [role, { model: "codex/gpt-5.5", effort: "high" }];
+    if (preset === "maximum_quality") return [role, { model: "codex/gpt-5.6-sol", effort: "high" }];
     if (preset === "local_first") return [role, { model: localRoles.has(role) ? "ollama/qualified-local" : model, effort: localRoles.has(role) ? "medium" : effort }];
-    return [role, { model: expensiveRoles.has(role) ? "codex/gpt-5.5" : "codex/gpt-5.3-codex-spark", effort: expensiveRoles.has(role) ? "medium" : "low" }];
+    return [role, { model: expensiveRoles.has(role) ? "codex/gpt-5.6-sol" : "codex/gpt-5.3-codex-spark", effort: expensiveRoles.has(role) ? "medium" : "low" }];
   }));
 }
 

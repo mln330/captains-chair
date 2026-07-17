@@ -303,22 +303,22 @@ def test_external_runtime_config_accepts_plugin_owned_kind_and_settings(tmp_path
     assert selected.settings == {"workspace_mode": "disposable"}
 
 
-def test_public_example_routes_bounded_implementation_roles_to_codex_spark() -> None:
+def test_public_example_routes_all_worker_roles_to_codex_gpt56() -> None:
     example = Path(__file__).parents[1] / "config" / "config.example.yaml"
 
     configured = load_config(example)
 
-    assert configured.models.coder.primary.model == "codex/gpt-5.3-codex-spark"
-    assert configured.models.coder.primary.thinking == "medium"
+    assert configured.models.coder.primary.model == "codex/gpt-5.6-sol"
+    assert configured.models.coder.primary.thinking == "high"
     assert configured.models.tester is not None
-    assert configured.models.tester.primary.model == "codex/gpt-5.3-codex-spark"
+    assert configured.models.tester.primary.model == "codex/gpt-5.6-sol"
     assert configured.models.ux_reviewer is not None
-    assert configured.models.ux_reviewer.primary.model == "codex/gpt-5.3-codex-spark"
-    assert configured.harness_model_overrides["codex"].coder.primary.model == "gpt-5.3-codex-spark"
+    assert configured.models.ux_reviewer.primary.model == "codex/gpt-5.6-sol"
+    assert configured.harness_model_overrides["codex"].coder.primary.model == "gpt-5.6-sol"
     assert configured.harness_model_overrides["codex"].tester is not None
-    assert configured.harness_model_overrides["codex"].tester.primary.model == "gpt-5.3-codex-spark"
+    assert configured.harness_model_overrides["codex"].tester.primary.model == "gpt-5.6-sol"
     assert configured.harness_model_overrides["codex"].ux_reviewer is not None
-    assert configured.harness_model_overrides["codex"].ux_reviewer.primary.model == "gpt-5.3-codex-spark"
+    assert configured.harness_model_overrides["codex"].ux_reviewer.primary.model == "gpt-5.6-sol"
 
 
 def test_model_route_rejects_unsupported_effort_and_execution_mode() -> None:

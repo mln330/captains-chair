@@ -58,7 +58,7 @@ class FakeGateway:
         self.idempotency: dict[str, str] = {}
         self.ended_sessions: set[str] = set()
         self.session_inspection_error: str | None = None
-        self.coder_model = "codex/gpt-5.3-codex-spark"
+        self.coder_model = "codex/gpt-5.6-sol"
         self.next_id = 1
 
     def runner(
@@ -82,14 +82,14 @@ class FakeGateway:
                 0,
                 json.dumps(
                     [
-                        {"id": "captains-chair", "model": "codex/gpt-5.5"},
+                        {"id": "captains-chair", "model": "codex/gpt-5.6-sol"},
                         {"id": "github-coder", "model": self.coder_model},
-                        {"id": "github-reviewer", "model": "codex/gpt-5.5"},
-                        {"id": "github-tester", "model": "codex/gpt-5.3-codex-spark"},
-                        {"id": "github-ux", "model": "codex/gpt-5.3-codex-spark"},
-                        {"id": "github-final", "model": "codex/gpt-5.5"},
-                        {"id": "github-merge", "model": "codex/gpt-5.5"},
-                        {"id": "github-verify", "model": "codex/gpt-5.5"},
+                        {"id": "github-reviewer", "model": "codex/gpt-5.6-sol"},
+                        {"id": "github-tester", "model": "codex/gpt-5.6-sol"},
+                        {"id": "github-ux", "model": "codex/gpt-5.6-sol"},
+                        {"id": "github-final", "model": "codex/gpt-5.6-sol"},
+                        {"id": "github-merge", "model": "codex/gpt-5.6-sol"},
+                        {"id": "github-verify", "model": "codex/gpt-5.6-sol"},
                     ]
                 ),
                 "",

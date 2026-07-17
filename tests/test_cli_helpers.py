@@ -257,7 +257,7 @@ def test_openclaw_worker_model_and_runtime_helpers_resolve_configured_and_defaul
     config, repo = _openclaw_config(tmp_path)
     expected = cli._expected_worker_models(config, repo.full_name)  # pyright: ignore[reportPrivateUsage]
 
-    assert expected["coder"] == "codex/gpt-5.3-codex-spark"
+    assert expected["coder"] == "codex/gpt-5.6-sol"
     assert expected["coder-agent"] == expected["coder"]
     assert cli._openclaw_session_limit(config, repo.full_name) == 17  # pyright: ignore[reportPrivateUsage]
     assert cli._openclaw_executable_for_repo(config, repo) == "openclaw-test"  # pyright: ignore[reportPrivateUsage]
