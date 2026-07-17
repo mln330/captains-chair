@@ -1137,6 +1137,40 @@ def test_recovered_control_plane_card_is_cancelled_without_dispatch(tmp_path: Pa
     assert queue.reclaimed == ["recovery-1"]
 
 
+def test_exhausted_merge_ready_card_resets_before_dispatch(tmp_path: Path) -> None:
+    repo = repo_config(
+        tmp_path,
+        mode=OperationMode.AUTONOMOUS,
+        completion=CompletionPolicy.AUTO_MERGE,
+    )
+    queue = MemoryQueue()
+    queue.cards["final"] = QueueCard(
+        id="final-1",
+        title="Final review",
+        status=QueueStatus.DONE,
+        labels=("captains_chair", "workflow:flow-1", "stage:final_review"),
+        metadata={
+            "proof": [{"status": "passed", "note": "AUTO_MERGE_ALLOWED:abcdef1"}]
+        },
+    )
+    queue.cards["merge"] = QueueCard(
+        id="merge-1",
+        title="Merge",
+        status=QueueStatus.READY,
+        labels=("captains_chair", "workflow:flow-1", "stage:merge"),
+        metadata={
+            "links": [{"type": "parent", "targetCardId": "final-1"}],
+            "failureCount": 3,
+            "automation": {"maxRetries": 2},
+        },
+    )
+
+    result = WorkflowOrchestrator(queue, worker_config()).reconcile(repo)
+
+    assert result.retried == ("merge-1",)
+    assert queue.reassigned == [("merge-1", "github-merge")]
+
+
 def test_nested_retry_proof_completes_original_without_another_retry(tmp_path: Path) -> None:
     repo = repo_config(
         tmp_path,

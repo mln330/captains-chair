@@ -511,6 +511,22 @@ class WorkflowOrchestrator:
             if card.metadata.get("archivedAt"):
                 continue
             stage = _card_stage(card)
+            if (
+                card.status in {QueueStatus.READY, QueueStatus.TODO}
+                and _failure_count(card) > _retry_limit(card, self.config.max_retries)
+            ):
+                if stage == WorkStage.MERGE and self._has_valid_merge_predecessor(repo, card, cards):
+                    self.adapter.reassign_card(
+                        card.id,
+                        agent_id=self.config.workers.merger,
+                        status=QueueStatus.READY,
+                        reset_failures=True,
+                        reason="Reset stale merge attempts after current-head final review recovery.",
+                    )
+                    retried.append(card.id)
+                else:
+                    self._recover_card(card, retried, control_plane_recoveries)
+                continue
             retry_with_proof = self._retry_with_passed_completion(repo, cards, card.id)
             if (
                 card.status == QueueStatus.REVIEW
