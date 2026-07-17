@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-
 _MODEL_ALIASES = {
     "gpt-5.6": "gpt-5.6-sol",
 }
