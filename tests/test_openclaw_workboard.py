@@ -622,6 +622,41 @@ def test_recover_ended_worker_reclaims_running_card_for_fresh_retry() -> None:
     assert any("workboard.cards.reclaim" in command for command in commands)
 
 
+def test_recovery_reconstructs_managed_session_from_claim_owner() -> None:
+    commands: list[Sequence[str]] = []
+
+    def runner(
+        command: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        input_text: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        del cwd, input_text, timeout
+        commands.append(command)
+        if "sessions" in command:
+            return CommandResult(0, "05:00 model.completed\n05:00 session.ended success\n", "")
+        if "workboard.cards.reclaim" in command:
+            return CommandResult(
+                0,
+                json.dumps({"card": {"id": "card-1", "title": "Test", "status": "review"}}),
+                "",
+            )
+        raise AssertionError(f"unexpected command: {command}")
+
+    card = QueueCard(
+        id="card-1",
+        title="Test",
+        status=QueueStatus.RUNNING,
+        agent_id="github-coder",
+        metadata={"claim": {"ownerId": "captains-chair-managed:managed:card-1:attempt-1"}},
+    )
+
+    assert OpenClawWorkboardAdapter(config(), runner).recover_ended_workers("board", [card]) == ("card-1",)
+    session_command = next(command for command in commands if "sessions" in command)
+    assert "agent:github-coder:captains-chair:worker:card-1:managed:card-1:attempt-1" in session_command
+
+
 def test_recover_expired_claim_without_session_lookup() -> None:
     commands: list[Sequence[str]] = []
 

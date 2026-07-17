@@ -229,8 +229,10 @@ class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
                 "count": len(promoted),
             }
         token = uuid4().hex
-        owner_id = f"captains-chair-managed:{uuid4().hex}"
         attempt_id = f"managed:{ready.id}:{uuid4().hex}"
+        # Keep the attempt in the durable claim owner so a later reconcile can
+        # reconstruct and inspect the exact OpenClaw session after a crash.
+        owner_id = f"captains-chair-managed:{attempt_id}"
         claimed = self.claim_card(ready.id, owner_id=owner_id, token=token, attempt_id=attempt_id)
         completed = False
         blocked = False
@@ -652,13 +654,20 @@ def _bounded_label(value: str) -> str:
 
 def _session_key(card: QueueCard) -> str | None:
     attempts = card.metadata.get("attempts")
-    if not isinstance(attempts, list):
-        return None
-    for item in reversed(cast(list[object], attempts)):
-        if isinstance(item, dict):
-            value = cast(dict[str, object], item).get("sessionKey")
-            if value:
-                return str(value)
+    if isinstance(attempts, list):
+        for item in reversed(cast(list[object], attempts)):
+            if isinstance(item, dict):
+                value = cast(dict[str, object], item).get("sessionKey")
+                if value:
+                    return str(value)
+    claim_value = card.metadata.get("claim")
+    if isinstance(claim_value, dict) and card.agent_id:
+        owner_id = cast(dict[str, object], claim_value).get("ownerId")
+        prefix = "captains-chair-managed:"
+        if isinstance(owner_id, str) and owner_id.startswith(prefix):
+            attempt_id = owner_id.removeprefix(prefix).strip()
+            if attempt_id:
+                return f"agent:{card.agent_id}:captains-chair:worker:{card.id}:{attempt_id}"
     return None
 
 
