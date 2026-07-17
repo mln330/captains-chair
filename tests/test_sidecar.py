@@ -18,6 +18,7 @@ from captains_chair.models import (
     RepositoryProvisioningConfig,
     WorkerAssignments,
 )
+from captains_chair.orchestration import QueueCard, QueueStatus
 from captains_chair.sidecar import SidecarError, SidecarServer
 from tests.helpers import app_config, repo_config
 from tests.test_courses import ready_course, rebind_readiness_review
@@ -34,6 +35,111 @@ class GreenfieldProvider:
             "nameWithOwner": repo.full_name,
             "url": f"https://github.test/{repo.full_name}",
         }
+
+
+def _workboard_card(stage: str, status: QueueStatus, timestamp: int) -> QueueCard:
+    return QueueCard(
+        id=f"{stage}-{status.value}",
+        title=f"{stage} card",
+        status=status,
+        labels=("workflow:test-workflow", f"stage:{stage}"),
+        metadata={"comments": [{"createdAt": timestamp}]},
+    )
+
+
+def test_sidecar_projects_terminal_workboard_proof_into_completed_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = repo_config(tmp_path).model_copy(
+        update={"orchestrator": "openclaw", "orchestration_board": "test-board"}
+    )
+    workers = WorkerAssignments(
+        captain="captain",
+        coder="coder",
+        reviewer="reviewer",
+        tester="tester",
+        ux_reviewer="ux",
+        final_reviewer="final",
+        merger="merger",
+        verifier="verifier",
+    )
+    orchestrator = OpenClawWorkboardConfig(
+        workers=workers,
+        require_live_completion_validation=False,
+    )
+    config = app_config(tmp_path, repo_config(tmp_path)).model_copy(
+        update={"repos": (repo,), "orchestrators": {"openclaw": orchestrator}}
+    )
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+
+    cards = [
+        _workboard_card("review", QueueStatus.DONE, 1),
+        _workboard_card("merge", QueueStatus.DONE, 2),
+        _workboard_card("post_merge", QueueStatus.DONE, 3),
+        _workboard_card("repair", QueueStatus.BLOCKED, 4),
+    ]
+
+    class Adapter:
+        def list_cards(self, board_id: str) -> list[QueueCard]:
+            assert board_id == "test-board"
+            return cards
+
+    monkeypatch.setattr(sidecar_module, "build_work_queue_adapter", lambda _config: Adapter())
+    server = SidecarServer(config_path)
+
+    result = server.request("portfolio.status")["repos"][0]
+
+    assert result["state"] == "merged"
+    assert result["state_source"] == "workboard"
+    assert result["workboard_status"]["status"] == "completed"
+    assert result["workboard_status"]["active_cards"] == 0
+
+
+def test_sidecar_does_not_mark_workboard_with_active_cards_completed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = repo_config(tmp_path).model_copy(
+        update={"orchestrator": "openclaw", "orchestration_board": "test-board"}
+    )
+    workers = WorkerAssignments(
+        captain="captain",
+        coder="coder",
+        reviewer="reviewer",
+        tester="tester",
+        ux_reviewer="ux",
+        final_reviewer="final",
+        merger="merger",
+        verifier="verifier",
+    )
+    orchestrator = OpenClawWorkboardConfig(
+        workers=workers,
+        require_live_completion_validation=False,
+    )
+    config = app_config(tmp_path, repo_config(tmp_path)).model_copy(
+        update={"repos": (repo,), "orchestrators": {"openclaw": orchestrator}}
+    )
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+
+    cards = [
+        _workboard_card("merge", QueueStatus.RUNNING, 2),
+        _workboard_card("post_merge", QueueStatus.TODO, 3),
+    ]
+
+    class Adapter:
+        def list_cards(self, board_id: str) -> list[QueueCard]:
+            assert board_id == "test-board"
+            return cards
+
+    monkeypatch.setattr(sidecar_module, "build_work_queue_adapter", lambda _config: Adapter())
+    server = SidecarServer(config_path)
+
+    result = server.request("portfolio.status")["repos"][0]
+
+    assert result["state"] == "unbaselined"
+    assert result["workboard_status"]["status"] == "in_progress"
+    assert result["workboard_status"]["active_cards"] == 2
 
 
 def test_sidecar_reports_health_portfolio_and_schedule_contract(tmp_path: Path) -> None:

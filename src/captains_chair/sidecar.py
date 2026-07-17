@@ -41,6 +41,7 @@ from captains_chair.models import (
     ModelPolicy,
     ModelProfile,
     NotificationConfig,
+    OpenClawWorkboardConfig,
     OperationMode,
     ProjectManifest,
     RepoConfig,
@@ -49,12 +50,112 @@ from captains_chair.models import (
     ScheduleConfig,
     UsageConfig,
 )
+from captains_chair.orchestration import QueueCard, QueueStatus
+from captains_chair.runtime import build_work_queue_adapter
 from captains_chair.state import StateStore
 from captains_chair.usage import build_usage_report
 
 
 class SidecarError(RuntimeError):
     """A request failed with an operator-actionable error."""
+
+
+_WORKBOARD_ACTIVE_STATUSES = frozenset(
+    {
+        QueueStatus.TODO,
+        QueueStatus.READY,
+        QueueStatus.RUNNING,
+        QueueStatus.REVIEW,
+    }
+)
+
+
+def _workflow_label(card: QueueCard) -> str | None:
+    return next((label for label in card.labels if label.startswith("workflow:")), None)
+
+
+def _workflow_stage(card: QueueCard) -> str | None:
+    return next((label.split(":", 1)[1] for label in card.labels if label.startswith("stage:")), None)
+
+
+def _card_activity_timestamp(card: QueueCard) -> int:
+    """Return the newest Workboard timestamp available in normalized metadata."""
+    timestamps: list[int] = []
+    metadata = card.metadata
+    automation = metadata.get("automation")
+    if isinstance(automation, dict):
+        automation = cast(dict[str, Any], automation)
+        for key in ("createdAt", "lastDispatchAt"):
+            value = automation.get(key)
+            if isinstance(value, (int, float)):
+                timestamps.append(int(value))
+    for key in ("attempts", "comments", "notifications", "proof", "workerLogs"):
+        values = metadata.get(key)
+        if not isinstance(values, list):
+            continue
+        for raw_item in cast(list[object], values):
+            if not isinstance(raw_item, dict):
+                continue
+            item = cast(dict[str, Any], raw_item)
+            for timestamp_key in ("createdAt", "startedAt", "endedAt"):
+                value = item.get(timestamp_key)
+                if isinstance(value, (int, float)):
+                    timestamps.append(int(value))
+    return max(timestamps, default=0)
+
+
+def _summarize_workboard(cards: list[QueueCard], board_id: str) -> dict[str, Any]:
+    """Project Workboard cards into a read-only dashboard status.
+
+    Blocked retry artifacts are deliberately ignored for terminal detection. A
+    workflow is complete only when its merge and post-merge stages are done and
+    no active stage card remains.
+    """
+    workflows: dict[str, list[QueueCard]] = {}
+    for card in cards:
+        if card.metadata.get("archivedAt"):
+            continue
+        label = _workflow_label(card)
+        if label is not None:
+            workflows.setdefault(label, []).append(card)
+
+    if not workflows:
+        return {
+            "status": "unknown",
+            "board": board_id,
+            "cards": 0,
+            "counts": {},
+        }
+
+    latest_label, latest_cards = max(
+        workflows.items(),
+        key=lambda item: max((_card_activity_timestamp(card) for card in item[1]), default=0),
+    )
+    del latest_label
+    counts: dict[str, int] = {}
+    for card in latest_cards:
+        counts[card.status.value] = counts.get(card.status.value, 0) + 1
+    active_cards = [card for card in latest_cards if card.status in _WORKBOARD_ACTIVE_STATUSES]
+    done_stages = {
+        stage
+        for card in latest_cards
+        if card.status == QueueStatus.DONE
+        for stage in (_workflow_stage(card),)
+        if stage is not None
+    }
+    terminal = not active_cards and {"merge", "post_merge"}.issubset(done_stages)
+    status = "completed" if terminal else "in_progress" if active_cards else "blocked"
+    summary: dict[str, Any] = {
+        "status": status,
+        "board": board_id,
+        "cards": len(latest_cards),
+        "counts": counts,
+        "active_cards": len(active_cards),
+        "terminal_stages": sorted(done_stages & {"merge", "post_merge"}),
+    }
+    if terminal:
+        summary["message"] = "Workboard merge and post-merge verification completed."
+    return summary
 
 
 class SidecarServer:
@@ -69,6 +170,26 @@ class SidecarServer:
         self.state = StateStore(self.config.state_dir / "state.db")
         self.interaction = interaction or NativeInteractionAdapter()
         self.github = github or GhGitHubProvider()
+
+    def _workboard_status(self, repo: RepoConfig) -> dict[str, Any] | None:
+        """Read built-in OpenClaw Workboard progress without mutating it."""
+        if not repo.orchestrator or not repo.orchestration_board:
+            return None
+        configured = self.config.orchestrators.get(repo.orchestrator)
+        if not isinstance(configured, OpenClawWorkboardConfig):
+            return None
+        try:
+            adapter = build_work_queue_adapter(configured)
+            return _summarize_workboard(
+                adapter.list_cards(repo.orchestration_board),
+                repo.orchestration_board,
+            )
+        except Exception as exc:
+            return {
+                "status": "unavailable",
+                "board": repo.orchestration_board,
+                "error": str(exc)[:500],
+            }
 
     def request(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         payload = params or {}
@@ -138,6 +259,10 @@ class SidecarServer:
     def _repo_status(self, repo: RepoConfig) -> dict[str, Any]:
         summary = self.state.usage_summary(repo=repo.full_name)
         usage = build_usage_report(summary, self.config.usage)
+        workboard = self._workboard_status(repo)
+        state = self.state.current_state(repo.full_name).value
+        if workboard is not None and workboard.get("status") == "completed":
+            state = "merged"
         events = [
             event.model_dump(mode="json")
             for event in self.state.recent_events(repo.full_name, limit=12)
@@ -164,7 +289,9 @@ class SidecarServer:
             "default_branch": repo.default_branch,
             "operation_mode": repo.operation_mode.value,
             "completion_policy": repo.completion_policy.value,
-            "state": self.state.current_state(repo.full_name).value,
+            "state": state,
+            "state_source": "workboard" if workboard is not None else "state_store",
+            "workboard_status": workboard,
             "orchestrator": repo.orchestrator or "direct",
             "orchestration_board": repo.orchestration_board,
             "schedule_enabled": repo.schedule_enabled,
