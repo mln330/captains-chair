@@ -75,6 +75,97 @@ ALLOWED_TRANSITIONS: dict[RunState, frozenset[RunState]] = {
     ),
 }
 
+_ATTEMPT_TOKEN_FIELDS = (
+    "input_tokens",
+    "cached_input_tokens",
+    "reasoning_tokens",
+    "output_tokens",
+    "total_tokens",
+)
+
+
+def _direct_attempt_groups(rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
+    """Attribute direct telemetry to the model that actually made each attempt."""
+    grouped: dict[tuple[str, ...], dict[str, Any]] = {}
+    known_fields: dict[tuple[str, ...], set[str]] = {}
+    for row in rows:
+        try:
+            attempts = json.loads(str(row["attempts_json"]))
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(attempts, list):
+            continue
+        for attempt_index, raw_attempt in enumerate(attempts):
+            if not isinstance(raw_attempt, dict):
+                continue
+            attempt = cast(dict[str, Any], raw_attempt)
+            model = str(attempt.get("model") or row["resolved_model"] or "unknown")
+            stage = str(row["stage"] or row["role"])
+            key = (
+                str(row["repo"]),
+                str(row["runtime"]),
+                str(row["role"]),
+                str(row["course_key"] or ""),
+                str(row["work_package_key"] or ""),
+                stage,
+                model,
+            )
+            item = grouped.setdefault(
+                key,
+                {
+                    "repo": key[0],
+                    "runtime": key[1],
+                    "role": key[2],
+                    "course_key": row["course_key"],
+                    "work_package_key": row["work_package_key"],
+                    "stage": key[5],
+                    "model": key[6],
+                    "date": str(row["created_at"])[:10],
+                    "calls": 0,
+                    "fallback_attempts": 0,
+                    "model_mismatch_attempts": 0,
+                    "measured_calls": 0,
+                    "unknown_calls": 0,
+                    "breakdown_calls": 0,
+                    "aggregate_only_calls": 0,
+                    "aggregate_only_tokens": 0,
+                    "prompt_bytes": 0,
+                    "response_bytes": 0,
+                    "duration_ms": 0,
+                    **{field: None for field in _ATTEMPT_TOKEN_FIELDS},
+                },
+            )
+            known = known_fields.setdefault(key, set())
+            item["calls"] += 1
+            if attempt_index > 0:
+                item["fallback_attempts"] += 1
+            if "model route mismatch" in str(attempt.get("error") or ""):
+                item["model_mismatch_attempts"] += 1
+            token_values = {field: attempt.get(field) for field in _ATTEMPT_TOKEN_FIELDS}
+            has_telemetry = any(value is not None for value in token_values.values())
+            if has_telemetry:
+                item["measured_calls"] += 1
+            else:
+                item["unknown_calls"] += 1
+            if token_values["input_tokens"] is not None and token_values["output_tokens"] is not None:
+                item["breakdown_calls"] += 1
+            elif token_values["total_tokens"] is not None:
+                item["aggregate_only_calls"] += 1
+                item["aggregate_only_tokens"] += int(token_values["total_tokens"])
+            for field, value in token_values.items():
+                if value is not None:
+                    item[field] = int(item[field] or 0) + int(value)
+                    known.add(field)
+            item["prompt_bytes"] += int(attempt.get("prompt_bytes", 0) or 0)
+            item["response_bytes"] += int(attempt.get("response_bytes", 0) or 0)
+            item["duration_ms"] += int(attempt.get("duration_ms", 0) or 0)
+    for key, item in grouped.items():
+        known = known_fields[key]
+        for field in _ATTEMPT_TOKEN_FIELDS:
+            if field not in known:
+                item[field] = None
+    return list(grouped.values())
+
 
 class LeaseBusyError(RuntimeError):
     pass
@@ -758,6 +849,29 @@ class StateStore:
 
     def usage_dimensions(self, repo: str) -> list[dict[str, Any]]:
         """Group direct provider telemetry by the operator-facing workflow dimensions."""
+        attempt_groups = self.usage_summary(repo=repo).get("direct_attempt_groups", [])
+        if attempt_groups:
+            dimensions: list[dict[str, Any]] = []
+            for group in cast(list[dict[str, Any]], attempt_groups):
+                model = str(group.get("model") or "unknown")
+                if "/" not in model and str(group.get("runtime") or "").lower() == "codex":
+                    model = f"codex/{model}"
+                dimensions.append(
+                    {
+                        "date": group.get("date"),
+                        "course_key": group.get("course_key"),
+                        "work_package_key": group.get("work_package_key"),
+                        "stage": group.get("stage"),
+                        "model": model,
+                        "calls": group.get("calls", 0),
+                        "tokens": group.get("total_tokens")
+                        or sum(
+                            int(group.get(field) or 0)
+                            for field in ("input_tokens", "cached_input_tokens", "output_tokens")
+                        ),
+                    }
+                )
+            return sorted(dimensions, key=lambda item: (str(item["date"]), int(item["tokens"])), reverse=True)
         with self._connect() as conn:
             rows = conn.execute(
                 "SELECT substr(created_at,1,10) AS date, course_key, work_package_key, "
@@ -1037,9 +1151,15 @@ class StateStore:
                 "SELECT repo, role, resolved_model AS model, attempts_json FROM model_calls" + where,
                 params,
             ).fetchall()
+            model_call_rows = conn.execute(
+                "SELECT repo, runtime, role, course_key, work_package_key, stage, resolved_model, "
+                "attempts_json, created_at FROM model_calls" + where,
+                params,
+            ).fetchall()
         return {
             "direct_calls": dict(calls) if calls else {},
             "direct_groups": [dict(row) for row in groups],
+            "direct_attempt_groups": _direct_attempt_groups(model_call_rows),
             "external_sessions": dict(external) if external else {},
             "external_groups": [dict(row) for row in external_groups],
             "repeated_prompts": [dict(row) for row in repeated_prompts],

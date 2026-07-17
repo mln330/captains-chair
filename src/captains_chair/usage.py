@@ -27,9 +27,12 @@ def build_usage_report(summary: dict[str, Any], config: UsageConfig) -> dict[str
     direct = dict(summary.get("direct_calls", {}))
     external = dict(summary.get("external_sessions", {}))
     direct_groups = [_decorate_group(group) for group in summary.get("direct_groups", [])]
+    direct_attempt_groups = [
+        _decorate_group(group) for group in summary.get("direct_attempt_groups", [])
+    ]
     external_groups = [_decorate_group(group) for group in summary.get("external_groups", [])]
     repeated_prompts = [_decorate_group(group) for group in summary.get("repeated_prompts", [])]
-    groups = [*direct_groups, *external_groups]
+    groups = [*(direct_attempt_groups or direct_groups), *external_groups]
 
     token_totals = _token_totals(direct, external, groups)
     model_totals = _model_totals(groups)
@@ -81,6 +84,7 @@ def build_usage_report(summary: dict[str, Any], config: UsageConfig) -> dict[str
         "direct_calls": direct,
         "external_sessions": external,
         "direct_groups": direct_groups,
+        "direct_attempt_groups": direct_attempt_groups,
         "external_groups": external_groups,
         "token_totals": token_totals,
         "model_totals": model_totals,

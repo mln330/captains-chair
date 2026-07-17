@@ -379,13 +379,13 @@ class WorkerAssignments(StrictModel):
 
 class WorkerModelAssignments(StrictModel):
     captain: str = "codex/gpt-5.6-sol"
-    coder: str = "codex/gpt-5.6-sol"
-    reviewer: str = "codex/gpt-5.6-sol"
-    tester: str = "codex/gpt-5.6-sol"
-    ux_reviewer: str = "codex/gpt-5.6-sol"
+    coder: str = "codex/gpt-5.3-codex-spark"
+    reviewer: str = "codex/gpt-5.6-terra"
+    tester: str = "codex/gpt-5.6-luna"
+    ux_reviewer: str = "codex/gpt-5.6-terra"
     final_reviewer: str = "codex/gpt-5.6-sol"
-    merger: str = "codex/gpt-5.6-sol"
-    verifier: str = "codex/gpt-5.6-sol"
+    merger: str = "codex/gpt-5.6-terra"
+    verifier: str = "codex/gpt-5.6-terra"
 
 
 class WorkerOrchestrationConfig(StrictModel):

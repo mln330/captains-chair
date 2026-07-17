@@ -48,16 +48,14 @@ orchestrators:
       verifier: github-verify
     worker_models:
       captain: codex/gpt-5.6-sol
-      # Validate coding models against the selected auth source with
-      # `captains-chair model-check --role coder`. Spark is an optional Codex OAuth
-      # coding canary; keep planning and review on the stronger model.
-      coder: codex/gpt-5.6-sol
-      tester: codex/gpt-5.6-sol
-      reviewer: codex/gpt-5.6-sol
-      ux_reviewer: codex/gpt-5.6-sol
+      # Validate routes against the selected runtime with `captains-chair model-check`.
+      coder: codex/gpt-5.3-codex-spark
+      tester: codex/gpt-5.6-luna
+      reviewer: codex/gpt-5.6-terra
+      ux_reviewer: codex/gpt-5.6-terra
       final_reviewer: codex/gpt-5.6-sol
-      merger: codex/gpt-5.6-sol
-      verifier: codex/gpt-5.6-sol
+      merger: codex/gpt-5.6-terra
+      verifier: codex/gpt-5.6-terra
     auth_source_agent: codex-harness
     dispatch_timeout_seconds: 120
     # Bound metadata-only usage imports; increase only when the audit needs older sessions.
@@ -67,23 +65,23 @@ orchestrators:
     require_live_completion_validation: true
 models:
   baseline:
-    primary: {model: codex/gpt-5.6-sol, agent: codex-harness, thinking: high}
+    primary: {model: codex/gpt-5.6-terra, agent: codex-harness, thinking: high}
     fallbacks: []
     allow_fallback: true
   planner:
-    primary: {model: codex/gpt-5.6-sol, agent: codex-harness, thinking: high}
+    primary: {model: codex/gpt-5.6-terra, agent: codex-harness, thinking: medium}
     fallbacks: []
     allow_fallback: true
   coder:
-    primary: {model: codex/gpt-5.6-sol, agent: codex-harness, thinking: high}
+    primary: {model: codex/gpt-5.3-codex-spark, agent: codex-harness, thinking: medium}
     fallbacks: []
     allow_fallback: true
   tester:
-    primary: {model: codex/gpt-5.6-sol, agent: codex-harness, thinking: high}
+    primary: {model: codex/gpt-5.6-luna, agent: codex-harness, thinking: medium}
     fallbacks: []
     allow_fallback: true
   reviewer:
-    primary: {model: codex/gpt-5.6-sol, agent: codex-harness, thinking: high}
+    primary: {model: codex/gpt-5.6-terra, agent: codex-harness, thinking: high}
     fallbacks: []
     allow_fallback: true
   final_reviewer:
@@ -91,23 +89,23 @@ models:
     fallbacks: []
     allow_fallback: false
   ux_reviewer:
-    primary: {model: codex/gpt-5.6-sol, agent: codex-harness, thinking: high}
+    primary: {model: codex/gpt-5.6-terra, agent: codex-harness, thinking: medium}
     fallbacks: []
     allow_fallback: true
 harness_model_overrides:
   codex:
     baseline:
-      primary: {model: gpt-5.6-sol, thinking: high}
+      primary: {model: gpt-5.6-terra, thinking: high}
     planner:
-      primary: {model: gpt-5.6-sol, thinking: high}
+      primary: {model: gpt-5.6-terra, thinking: medium}
     coder:
-      primary: {model: gpt-5.6-sol, thinking: high}
+      primary: {model: gpt-5.3-codex-spark, thinking: medium}
     tester:
-      primary: {model: gpt-5.6-sol, thinking: high}
+      primary: {model: gpt-5.6-luna, thinking: medium}
     reviewer:
-      primary: {model: gpt-5.6-sol, thinking: high}
+      primary: {model: gpt-5.6-terra, thinking: high}
     ux_reviewer:
-      primary: {model: gpt-5.6-sol, thinking: high}
+      primary: {model: gpt-5.6-terra, thinking: medium}
     final_reviewer:
       primary: {model: gpt-5.6-sol, thinking: high}
       allow_fallback: false

@@ -19,6 +19,7 @@ from captains_chair.models import (
     OperationMode,
     PlanDecision,
     WorkerAssignments,
+    WorkerModelAssignments,
 )
 from captains_chair.orchestration import (
     BlockerKind,
@@ -140,9 +141,54 @@ def test_direct_runtime_completes_workflow_without_workboard(
             not model.startswith("codex/")
             for model in routed_models
         )
-        assert "gpt-5.6-sol" in routed_models
+        assert "gpt-5.3-codex-spark" in routed_models
     else:
         assert all(command[1:3] == ["agent", "--agent"] for command in runner.commands)
+
+
+def test_direct_process_routes_documented_models_by_stage(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    runner = StructuredWorkerRunner()
+    config = DirectOrchestratorConfig(
+        database_path=tmp_path / "documented-models.db",
+        worker_runtime="codex",
+        executable="codex",
+        max_dispatch_workers=10,
+        require_live_completion_validation=False,
+        workers=WORKERS,
+        worker_models=WorkerModelAssignments(),
+    )
+    orchestrator = build_work_queue_orchestrator(config, runner)
+    repo = repo_config(
+        workspace,
+        mode=OperationMode.AUTONOMOUS,
+        completion=CompletionPolicy.OWNER_APPROVAL,
+    )
+    workflow = orchestrator.enqueue(
+        repo,
+        _decision(),
+        "documented-models-direct-e2e",
+        workspace=WorkspaceRef(kind="worktree", path=workspace, branch="fixture"),
+    )
+
+    for _ in range(8):
+        orchestrator.reconcile(repo)
+        cards = orchestrator.adapter.list_cards(workflow.board_id)
+        if cards and all(card.status == QueueStatus.DONE for card in cards):
+            break
+
+    observed: dict[str, str] = {}
+    for command, prompt in zip(runner.commands, runner.prompts, strict=True):
+        stage = next(line.split(": ", 1)[1] for line in prompt.splitlines() if line.startswith("Stage: "))
+        observed[stage] = command[command.index("--model") + 1]
+
+    assert observed == {
+        "implementation": "gpt-5.3-codex-spark",
+        "review": "gpt-5.6-terra",
+        "test": "gpt-5.6-luna",
+        "final_review": "gpt-5.6-sol",
+    }
 
 
 def test_direct_claims_are_atomic_under_overlapping_workers(tmp_path: Path) -> None:

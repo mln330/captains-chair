@@ -471,6 +471,49 @@ def test_usage_report_quantifies_failed_fallback_attempt_tokens(tmp_path: Path) 
     assert report["failure_hotspots"][0]["accounted_tokens"] == 1_000_100
 
 
+def test_usage_tracks_fallback_tokens_by_stage_and_actual_model(tmp_path: Path) -> None:
+    state = StateStore(tmp_path / "state.db")
+    state.record_model_call(
+        "repo/project",
+        "run-1",
+        "coder",
+        "gpt-5.3-codex-spark",
+        [
+            {
+                "model": "gpt-5.6-terra",
+                "success": False,
+                "input_tokens": 100,
+                "output_tokens": 10,
+                "error": "provider unavailable",
+            },
+            {
+                "model": "gpt-5.3-codex-spark",
+                "success": True,
+                "input_tokens": 50,
+                "output_tokens": 5,
+            },
+        ],
+        runtime="codex",
+        course_key="course-1",
+        work_package_key="package-1",
+        stage="implementation",
+    )
+
+    report = build_usage_report(state.usage_summary(repo="repo/project"), UsageConfig())
+    totals = {item["model"]: item["accounted_tokens"] for item in report["model_totals"]}
+
+    assert report["token_totals"]["accounted_tokens"] == 165
+    assert totals == {
+        "codex/gpt-5.6-terra": 110,
+        "codex/gpt-5.3-codex-spark": 55,
+    }
+    dimensions = state.usage_dimensions("repo/project")
+    assert {(item["stage"], item["model"], item["tokens"]) for item in dimensions} == {
+        ("implementation", "codex/gpt-5.6-terra", 110),
+        ("implementation", "codex/gpt-5.3-codex-spark", 55),
+    }
+
+
 def test_usage_report_ranks_external_token_hotspots_and_marks_partial_telemetry() -> None:
     report = build_usage_report(
         {

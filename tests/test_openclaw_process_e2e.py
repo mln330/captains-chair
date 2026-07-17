@@ -52,13 +52,13 @@ if args[:3] == ["agents", "list", "--json"]:
     emit(
         [
             {"id": "captain", "model": "openai/gpt-5.6-sol"},
-            {"id": "coder", "model": "openai/gpt-5.6-sol"},
-            {"id": "reviewer", "model": "openai/gpt-5.6-sol"},
-            {"id": "tester", "model": "openai/gpt-5.6-sol"},
-            {"id": "ux", "model": "openai/gpt-5.6-sol"},
+            {"id": "coder", "model": "openai/gpt-5.3-codex-spark"},
+            {"id": "reviewer", "model": "openai/gpt-5.6-terra"},
+            {"id": "tester", "model": "openai/gpt-5.6-luna"},
+            {"id": "ux", "model": "openai/gpt-5.6-terra"},
             {"id": "final", "model": "openai/gpt-5.6-sol"},
-            {"id": "merge", "model": "openai/gpt-5.6-sol"},
-            {"id": "verify", "model": "openai/gpt-5.6-sol"},
+            {"id": "merge", "model": "openai/gpt-5.6-terra"},
+            {"id": "verify", "model": "openai/gpt-5.6-terra"},
         ]
     )
     raise SystemExit(0)
@@ -205,13 +205,13 @@ if args[:3] == ["agents", "list", "--json"]:
     emit(
         [
             {"id": "captain", "model": "codex/gpt-5.6-sol"},
-            {"id": "coder", "model": "codex/gpt-5.6-sol"},
-            {"id": "reviewer", "model": "codex/gpt-5.6-sol"},
-            {"id": "tester", "model": "codex/gpt-5.6-sol"},
-            {"id": "ux", "model": "codex/gpt-5.6-sol"},
+            {"id": "coder", "model": "codex/gpt-5.3-codex-spark"},
+            {"id": "reviewer", "model": "codex/gpt-5.6-terra"},
+            {"id": "tester", "model": "codex/gpt-5.6-luna"},
+            {"id": "ux", "model": "codex/gpt-5.6-terra"},
             {"id": "final", "model": "codex/gpt-5.6-sol"},
-            {"id": "merge", "model": "codex/gpt-5.6-sol"},
-            {"id": "verify", "model": "codex/gpt-5.6-sol"},
+            {"id": "merge", "model": "codex/gpt-5.6-terra"},
+            {"id": "verify", "model": "codex/gpt-5.6-terra"},
         ]
     )
     raise SystemExit(0)

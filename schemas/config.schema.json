@@ -65,13 +65,13 @@
           "$ref": "#/$defs/WorkerModelAssignments",
           "default": {
             "captain": "codex/gpt-5.6-sol",
-            "coder": "codex/gpt-5.6-sol",
-            "reviewer": "codex/gpt-5.6-sol",
-            "tester": "codex/gpt-5.6-sol",
-            "ux_reviewer": "codex/gpt-5.6-sol",
+            "coder": "codex/gpt-5.3-codex-spark",
+            "reviewer": "codex/gpt-5.6-terra",
+            "tester": "codex/gpt-5.6-luna",
+            "ux_reviewer": "codex/gpt-5.6-terra",
             "final_reviewer": "codex/gpt-5.6-sol",
-            "merger": "codex/gpt-5.6-sol",
-            "verifier": "codex/gpt-5.6-sol"
+            "merger": "codex/gpt-5.6-terra",
+            "verifier": "codex/gpt-5.6-terra"
           }
         },
         "max_runtime_seconds": {
@@ -165,13 +165,13 @@
           "$ref": "#/$defs/WorkerModelAssignments",
           "default": {
             "captain": "codex/gpt-5.6-sol",
-            "coder": "codex/gpt-5.6-sol",
-            "reviewer": "codex/gpt-5.6-sol",
-            "tester": "codex/gpt-5.6-sol",
-            "ux_reviewer": "codex/gpt-5.6-sol",
+            "coder": "codex/gpt-5.3-codex-spark",
+            "reviewer": "codex/gpt-5.6-terra",
+            "tester": "codex/gpt-5.6-luna",
+            "ux_reviewer": "codex/gpt-5.6-terra",
             "final_reviewer": "codex/gpt-5.6-sol",
-            "merger": "codex/gpt-5.6-sol",
-            "verifier": "codex/gpt-5.6-sol"
+            "merger": "codex/gpt-5.6-terra",
+            "verifier": "codex/gpt-5.6-terra"
           }
         },
         "max_runtime_seconds": {
@@ -629,13 +629,13 @@
           "$ref": "#/$defs/WorkerModelAssignments",
           "default": {
             "captain": "codex/gpt-5.6-sol",
-            "coder": "codex/gpt-5.6-sol",
-            "reviewer": "codex/gpt-5.6-sol",
-            "tester": "codex/gpt-5.6-sol",
-            "ux_reviewer": "codex/gpt-5.6-sol",
+            "coder": "codex/gpt-5.3-codex-spark",
+            "reviewer": "codex/gpt-5.6-terra",
+            "tester": "codex/gpt-5.6-luna",
+            "ux_reviewer": "codex/gpt-5.6-terra",
             "final_reviewer": "codex/gpt-5.6-sol",
-            "merger": "codex/gpt-5.6-sol",
-            "verifier": "codex/gpt-5.6-sol"
+            "merger": "codex/gpt-5.6-terra",
+            "verifier": "codex/gpt-5.6-terra"
           }
         },
         "max_runtime_seconds": {
@@ -1171,22 +1171,22 @@
           "type": "string"
         },
         "coder": {
-          "default": "codex/gpt-5.6-sol",
+          "default": "codex/gpt-5.3-codex-spark",
           "title": "Coder",
           "type": "string"
         },
         "reviewer": {
-          "default": "codex/gpt-5.6-sol",
+          "default": "codex/gpt-5.6-terra",
           "title": "Reviewer",
           "type": "string"
         },
         "tester": {
-          "default": "codex/gpt-5.6-sol",
+          "default": "codex/gpt-5.6-luna",
           "title": "Tester",
           "type": "string"
         },
         "ux_reviewer": {
-          "default": "codex/gpt-5.6-sol",
+          "default": "codex/gpt-5.6-terra",
           "title": "Ux Reviewer",
           "type": "string"
         },
@@ -1196,12 +1196,12 @@
           "type": "string"
         },
         "merger": {
-          "default": "codex/gpt-5.6-sol",
+          "default": "codex/gpt-5.6-terra",
           "title": "Merger",
           "type": "string"
         },
         "verifier": {
-          "default": "codex/gpt-5.6-sol",
+          "default": "codex/gpt-5.6-terra",
           "title": "Verifier",
           "type": "string"
         }

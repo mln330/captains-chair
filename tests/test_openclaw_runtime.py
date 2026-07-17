@@ -368,13 +368,13 @@ def test_runtime_plan_accepts_codex_openai_model_route_alias(tmp_path: Path) -> 
             json.dumps(
                 [
                     {"id": "captains-chair", "model": "openai/gpt-5.6-sol"},
-                    {"id": "github-coder", "model": "openai/gpt-5.6-sol"},
-                    {"id": "github-reviewer", "model": "openai/gpt-5.6-sol"},
-                    {"id": "github-tester", "model": "openai/gpt-5.6-sol"},
-                    {"id": "github-ux", "model": "openai/gpt-5.6-sol"},
+                    {"id": "github-coder", "model": "openai/gpt-5.3-codex-spark"},
+                    {"id": "github-reviewer", "model": "openai/gpt-5.6-terra"},
+                    {"id": "github-tester", "model": "openai/gpt-5.6-luna"},
+                    {"id": "github-ux", "model": "openai/gpt-5.6-terra"},
                     {"id": "github-final", "model": "openai/gpt-5.6-sol"},
-                    {"id": "github-merge", "model": "openai/gpt-5.6-sol"},
-                    {"id": "github-verify", "model": "openai/gpt-5.6-sol"},
+                    {"id": "github-merge", "model": "openai/gpt-5.6-terra"},
+                    {"id": "github-verify", "model": "openai/gpt-5.6-terra"},
                 ]
             ),
             "",

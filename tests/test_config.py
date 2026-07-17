@@ -303,22 +303,31 @@ def test_external_runtime_config_accepts_plugin_owned_kind_and_settings(tmp_path
     assert selected.settings == {"workspace_mode": "disposable"}
 
 
-def test_public_example_routes_all_worker_roles_to_codex_gpt56() -> None:
+def test_public_example_uses_documented_balanced_model_routes() -> None:
     example = Path(__file__).parents[1] / "config" / "config.example.yaml"
 
     configured = load_config(example)
 
-    assert configured.models.coder.primary.model == "codex/gpt-5.6-sol"
-    assert configured.models.coder.primary.thinking == "high"
+    assert configured.models.baseline.primary.model == "codex/gpt-5.6-terra"
+    assert configured.models.planner.primary.model == "codex/gpt-5.6-terra"
+    assert configured.models.planner.primary.thinking == "medium"
+    assert configured.models.coder.primary.model == "codex/gpt-5.3-codex-spark"
+    assert configured.models.coder.primary.thinking == "medium"
     assert configured.models.tester is not None
-    assert configured.models.tester.primary.model == "codex/gpt-5.6-sol"
+    assert configured.models.tester.primary.model == "codex/gpt-5.6-luna"
     assert configured.models.ux_reviewer is not None
-    assert configured.models.ux_reviewer.primary.model == "codex/gpt-5.6-sol"
-    assert configured.harness_model_overrides["codex"].coder.primary.model == "gpt-5.6-sol"
+    assert configured.models.ux_reviewer.primary.model == "codex/gpt-5.6-terra"
+    assert configured.harness_model_overrides["codex"].coder.primary.model == "gpt-5.3-codex-spark"
     assert configured.harness_model_overrides["codex"].tester is not None
-    assert configured.harness_model_overrides["codex"].tester.primary.model == "gpt-5.6-sol"
+    assert configured.harness_model_overrides["codex"].tester.primary.model == "gpt-5.6-luna"
     assert configured.harness_model_overrides["codex"].ux_reviewer is not None
-    assert configured.harness_model_overrides["codex"].ux_reviewer.primary.model == "gpt-5.6-sol"
+    assert configured.harness_model_overrides["codex"].ux_reviewer.primary.model == "gpt-5.6-terra"
+
+    worker_models = configured.orchestrators["openclaw-workers"].worker_models
+    assert worker_models.coder == "codex/gpt-5.3-codex-spark"
+    assert worker_models.tester == "codex/gpt-5.6-luna"
+    assert worker_models.reviewer == "codex/gpt-5.6-terra"
+    assert worker_models.final_reviewer == "codex/gpt-5.6-sol"
 
 
 def test_model_route_rejects_unsupported_effort_and_execution_mode() -> None:
