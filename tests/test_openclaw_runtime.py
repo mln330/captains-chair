@@ -94,6 +94,9 @@ def test_runtime_install_creates_agents_and_role_protocols(tmp_path: Path) -> No
     assert "USER_SECRET:" in coder
     assert "captains_chair worker-protocol complete" in coder
     assert "Never call `heartbeat_respond`" in coder
+    final = (tmp_path / "github-final" / "AGENTS.md").read_text(encoding="utf-8")
+    assert "Never call session-inventory tools" in final
+    assert "bounded set of checks" in final
     merger = (tmp_path / "github-merge" / "AGENTS.md").read_text(encoding="utf-8")
     assert "merge-gate --repo <owner/repo>" in merger
     assert "Never invoke `gh pr merge` directly" in merger
