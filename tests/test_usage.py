@@ -32,7 +32,7 @@ def test_codex_usage_is_recorded_without_retaining_response_content(tmp_path: Pa
         return CommandResult(
             0,
             '{"type":"turn.completed","model":"gpt-5.3-codex-spark",'
-            '"usage":{"input_tokens":100,"cached_input_tokens":20,'
+            '"usage":{"input_tokens":100,"cached_input_tokens":20,"cache_write_tokens":7,'
             '"output_tokens_details":{"reasoning_tokens":8},'
             '"output_tokens":30,"total_tokens":130}}',
             "",
@@ -51,6 +51,7 @@ def test_codex_usage_is_recorded_without_retaining_response_content(tmp_path: Pa
     attempt = result.attempts[0]
     assert attempt.input_tokens == 100
     assert attempt.cached_input_tokens == 20
+    assert attempt.cache_write_tokens == 7
     assert attempt.reasoning_tokens == 8
     assert attempt.output_tokens == 30
     assert attempt.total_tokens == 130
@@ -142,7 +143,7 @@ def test_openclaw_worker_usage_uses_card_context_for_stage_and_model_dimensions(
     output = (
         '{"sessions":[{"key":"agent:github-coder:captains-chair:worker:card-123:attempt-1",'
         '"agentId":"github-coder","model":"gpt-5.6-terra","modelProvider":"codex",'
-        '"inputTokens":100,"cachedInputTokens":20,"outputTokens":30,"totalTokens":150}]}'
+        '"inputTokens":100,"cachedInputTokens":20,"cacheWriteTokens":7,"outputTokens":30,"totalTokens":150}]}'
     )
 
     def runner(command: Sequence[str], *, timeout: int = 60, **_: object) -> CommandResult:
@@ -177,9 +178,15 @@ def test_openclaw_worker_usage_uses_card_context_for_stage_and_model_dimensions(
             "course_key": "hello-cli",
             "work_package_key": "hello-implementation",
             "stage": "implementation",
-            "model": "codex/gpt-5.6-terra",
-            "calls": 1,
-            "tokens": 150,
+                "model": "codex/gpt-5.6-terra",
+                "calls": 1,
+                "input_tokens": 100,
+                "cached_input_tokens": 20,
+                "cache_write_tokens": 7,
+                "reasoning_tokens": None,
+                "output_tokens": 30,
+                "total_tokens": 150,
+                "tokens": 150,
         }
     ]
 

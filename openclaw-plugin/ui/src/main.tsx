@@ -16,7 +16,7 @@ type UsageDetail = {
   efficiency: { repeated_prompt_tokens?: number; failed_attempt_tokens?: number; fallback_attempts?: number };
   failed_attempts?: number;
   warnings: string[];
-  dimensions?: Array<{ date?: string; course_key?: string | null; work_package_key?: string | null; stage?: string; model?: string; tokens?: number; calls?: number }>;
+  dimensions?: Array<{ date?: string; course_key?: string | null; work_package_key?: string | null; stage?: string; model?: string; tokens?: number; calls?: number; input_tokens?: number; cached_input_tokens?: number; cache_write_tokens?: number; reasoning_tokens?: number; output_tokens?: number; total_tokens?: number }>;
 };
 type Repo = {
   full_name: string;

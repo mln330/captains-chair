@@ -102,6 +102,9 @@ def sync_openclaw_sessions(
             "cached_input_tokens": _integer(
                 row.get("cachedInputTokens", row.get("cached_input_tokens"))
             ),
+            "cache_write_tokens": _integer(
+                row.get("cacheWriteTokens", row.get("cache_write_tokens"))
+            ),
             "reasoning_tokens": _integer(
                 row.get("reasoningTokens", row.get("reasoning_tokens"))
             ),

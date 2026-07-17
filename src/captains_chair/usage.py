@@ -197,6 +197,7 @@ def usage_summary_text(
             f"Tokens: {_number(tokens.get('accounted_tokens'))} accounted "
             f"({_number(tokens.get('input_tokens'))} input, "
             f"{_number(tokens.get('cached_input_tokens'))} cached input, "
+            f"{_number(tokens.get('cache_write_tokens'))} cache write, "
             f"{_number(tokens.get('reasoning_tokens'))} reasoning, "
             f"{_number(tokens.get('output_tokens'))} output)"
         ),
@@ -269,6 +270,7 @@ def _model_totals(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "calls": 0,
                 "input_tokens": 0,
                 "cached_input_tokens": 0,
+                "cache_write_tokens": 0,
                 "reasoning_tokens": 0,
                 "output_tokens": 0,
                 "accounted_tokens": 0,
@@ -279,6 +281,7 @@ def _model_totals(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
         for field in (
             "input_tokens",
             "cached_input_tokens",
+            "cache_write_tokens",
             "reasoning_tokens",
             "output_tokens",
             "accounted_tokens",
@@ -336,6 +339,7 @@ def _failure_hotspots(records: Any) -> list[dict[str, Any]]:
                     "unknown_failed_attempts": 0,
                     "input_tokens": 0,
                     "cached_input_tokens": 0,
+                    "cache_write_tokens": 0,
                     "reasoning_tokens": 0,
                     "output_tokens": 0,
                     "accounted_tokens": 0,
@@ -348,6 +352,7 @@ def _failure_hotspots(records: Any) -> list[dict[str, Any]]:
             for field in (
                 "input_tokens",
                 "cached_input_tokens",
+                "cache_write_tokens",
                 "reasoning_tokens",
                 "output_tokens",
             ):

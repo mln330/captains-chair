@@ -78,6 +78,7 @@ ALLOWED_TRANSITIONS: dict[RunState, frozenset[RunState]] = {
 _ATTEMPT_TOKEN_FIELDS = (
     "input_tokens",
     "cached_input_tokens",
+    "cache_write_tokens",
     "reasoning_tokens",
     "output_tokens",
     "total_tokens",
@@ -298,6 +299,7 @@ class StateStore:
                     attempts_json TEXT NOT NULL,
                     input_tokens INTEGER,
                     cached_input_tokens INTEGER,
+                    cache_write_tokens INTEGER,
                     reasoning_tokens INTEGER,
                     output_tokens INTEGER,
                     total_tokens INTEGER,
@@ -324,6 +326,7 @@ class StateStore:
                     model TEXT,
                     input_tokens INTEGER,
                     cached_input_tokens INTEGER,
+                    cache_write_tokens INTEGER,
                     reasoning_tokens INTEGER,
                     output_tokens INTEGER,
                     total_tokens INTEGER,
@@ -391,6 +394,7 @@ class StateStore:
                 "runtime": "TEXT NOT NULL DEFAULT 'legacy'",
                 "input_tokens": "INTEGER",
                 "cached_input_tokens": "INTEGER",
+                "cache_write_tokens": "INTEGER",
                 "reasoning_tokens": "INTEGER",
                 "output_tokens": "INTEGER",
                 "total_tokens": "INTEGER",
@@ -414,6 +418,7 @@ class StateStore:
                 "work_package_key": "TEXT",
                 "stage": "TEXT",
                 "status": "TEXT",
+                "cache_write_tokens": "INTEGER",
                 "reasoning_tokens": "INTEGER",
                 "context_tokens": "INTEGER",
                 "total_tokens_fresh": "INTEGER",
@@ -856,6 +861,7 @@ class StateStore:
 
         input_tokens = total("input_tokens")
         cached_input_tokens = total("cached_input_tokens")
+        cache_write_tokens = total("cache_write_tokens")
         reasoning_tokens = total("reasoning_tokens")
         output_tokens = total("output_tokens")
         total_tokens = total("total_tokens")
@@ -865,13 +871,13 @@ class StateStore:
             1 for row in rows if "model route mismatch" in str(row.get("error") or "")
         )
         duration_ms = sum(int(row.get("duration_ms", 0)) for row in rows)
-        usage_known = int(any(value is not None for value in (input_tokens, cached_input_tokens, output_tokens, total_tokens)))
+        usage_known = int(any(value is not None for value in (input_tokens, cached_input_tokens, cache_write_tokens, output_tokens, total_tokens)))
         with self._connect() as conn:
             conn.execute(
                 "INSERT INTO model_calls(repo,run_id,session_id,runtime,role,course_key,work_package_key,stage,resolved_model,attempts_json,input_tokens,"
-                "cached_input_tokens,reasoning_tokens,output_tokens,total_tokens,prompt_bytes,response_bytes,usage_known,"
+                "cached_input_tokens,cache_write_tokens,reasoning_tokens,output_tokens,total_tokens,prompt_bytes,response_bytes,usage_known,"
                 "fallback_count,model_mismatch_count,duration_ms,prompt_fingerprint,created_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     repo,
                     run_id,
@@ -885,6 +891,7 @@ class StateStore:
                     serialized,
                     input_tokens,
                     cached_input_tokens,
+                    cache_write_tokens,
                     reasoning_tokens,
                     output_tokens,
                     total_tokens,
@@ -915,6 +922,12 @@ class StateStore:
                     "stage": group.get("stage"),
                     "model": model,
                     "calls": group.get("calls", 0),
+                    "input_tokens": group.get("input_tokens"),
+                    "cached_input_tokens": group.get("cached_input_tokens"),
+                    "cache_write_tokens": group.get("cache_write_tokens"),
+                    "reasoning_tokens": group.get("reasoning_tokens"),
+                    "output_tokens": group.get("output_tokens"),
+                    "total_tokens": group.get("total_tokens"),
                     "tokens": group.get("total_tokens")
                     or sum(
                         int(group.get(field) or 0)
@@ -934,6 +947,12 @@ class StateStore:
                     "stage": group.get("stage") or group.get("role"),
                     "model": model,
                     "calls": group.get("calls", 0),
+                    "input_tokens": group.get("input_tokens"),
+                    "cached_input_tokens": group.get("cached_input_tokens"),
+                    "cache_write_tokens": group.get("cache_write_tokens"),
+                    "reasoning_tokens": group.get("reasoning_tokens"),
+                    "output_tokens": group.get("output_tokens"),
+                    "total_tokens": group.get("total_tokens"),
                     "tokens": group.get("total_tokens")
                     or sum(
                         int(group.get(field) or 0)
@@ -989,6 +1008,7 @@ class StateStore:
                 {
                     "input_tokens": record.get("input_tokens"),
                     "cached_input_tokens": record.get("cached_input_tokens"),
+                    "cache_write_tokens": record.get("cache_write_tokens"),
                     "reasoning_tokens": record.get("reasoning_tokens"),
                     "output_tokens": record.get("output_tokens"),
                     "total_tokens": total_tokens,
@@ -1008,6 +1028,7 @@ class StateStore:
 
             input_tokens = total("input_tokens")
             cached_input_tokens = total("cached_input_tokens")
+            cache_write_tokens = total("cache_write_tokens")
             reasoning_tokens = total("reasoning_tokens")
             output_tokens = total("output_tokens")
             total_tokens_value = total("total_tokens")
@@ -1027,19 +1048,21 @@ class StateStore:
                     for value in (
                         input_tokens,
                         cached_input_tokens,
+                        cache_write_tokens,
                         output_tokens,
                         total_tokens_value,
                     )
                 )
             )
             cursor = conn.execute(
-                "UPDATE model_calls SET attempts_json=?,input_tokens=?,cached_input_tokens=?,"
+                "UPDATE model_calls SET attempts_json=?,input_tokens=?,cached_input_tokens=?,cache_write_tokens=?,"
                 "reasoning_tokens=?,output_tokens=?,total_tokens=?,prompt_bytes=?,response_bytes=?,"
                 "usage_known=? WHERE id=?",
                 (
                     json.dumps(attempts, sort_keys=True, default=str),
                     input_tokens,
                     cached_input_tokens,
+                    cache_write_tokens,
                     reasoning_tokens,
                     output_tokens,
                     total_tokens_value,
@@ -1059,13 +1082,13 @@ class StateStore:
         with self._connect() as conn:
             conn.execute(
                 "INSERT INTO external_usage(source,external_id,repo,role,course_key,work_package_key,stage,status,provider,model,input_tokens,"
-                "cached_input_tokens,reasoning_tokens,output_tokens,total_tokens,total_tokens_fresh,context_tokens,"
+                "cached_input_tokens,cache_write_tokens,reasoning_tokens,output_tokens,total_tokens,total_tokens_fresh,context_tokens,"
                 "model_mismatch_count,prompt_bytes,response_bytes,duration_ms,updated_at,payload_json) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(source,external_id) DO UPDATE SET repo=excluded.repo,role=excluded.role,"
                 "course_key=excluded.course_key,work_package_key=excluded.work_package_key,stage=excluded.stage,status=excluded.status,"
                 "provider=excluded.provider,model=excluded.model,input_tokens=excluded.input_tokens,"
-                "cached_input_tokens=excluded.cached_input_tokens,reasoning_tokens=excluded.reasoning_tokens,"
+                "cached_input_tokens=excluded.cached_input_tokens,cache_write_tokens=excluded.cache_write_tokens,reasoning_tokens=excluded.reasoning_tokens,"
                 "output_tokens=excluded.output_tokens,"
                 "total_tokens=excluded.total_tokens,total_tokens_fresh=excluded.total_tokens_fresh,"
                 "context_tokens=excluded.context_tokens,model_mismatch_count=excluded.model_mismatch_count,"
@@ -1085,6 +1108,7 @@ class StateStore:
                     record.get("model"),
                     record.get("input_tokens"),
                     record.get("cached_input_tokens"),
+                    record.get("cache_write_tokens"),
                     record.get("reasoning_tokens"),
                     record.get("output_tokens"),
                     record.get("total_tokens"),
@@ -1142,7 +1166,7 @@ class StateStore:
                 "SUM(CASE WHEN input_tokens IS NOT NULL AND output_tokens IS NOT NULL THEN 1 ELSE 0 END) AS breakdown_calls, "
                 "SUM(CASE WHEN total_tokens IS NOT NULL AND (input_tokens IS NULL OR output_tokens IS NULL) THEN 1 ELSE 0 END) AS aggregate_only_calls, "
                 "SUM(CASE WHEN total_tokens IS NOT NULL AND (input_tokens IS NULL OR output_tokens IS NULL) THEN total_tokens ELSE 0 END) AS aggregate_only_tokens, "
-                "SUM(input_tokens) AS input_tokens, SUM(cached_input_tokens) AS cached_input_tokens, "
+                "SUM(input_tokens) AS input_tokens, SUM(cached_input_tokens) AS cached_input_tokens, SUM(cache_write_tokens) AS cache_write_tokens, "
                 "SUM(reasoning_tokens) AS reasoning_tokens, "
                 "SUM(output_tokens) AS output_tokens, SUM(total_tokens) AS total_tokens, "
                 "SUM(prompt_bytes) AS prompt_bytes, SUM(response_bytes) AS response_bytes, "
@@ -1156,7 +1180,7 @@ class StateStore:
                 "SUM(CASE WHEN input_tokens IS NOT NULL AND output_tokens IS NOT NULL THEN 1 ELSE 0 END) AS breakdown_calls, "
                 "SUM(CASE WHEN total_tokens IS NOT NULL AND (input_tokens IS NULL OR output_tokens IS NULL) THEN 1 ELSE 0 END) AS aggregate_only_calls, "
                 "SUM(CASE WHEN total_tokens IS NOT NULL AND (input_tokens IS NULL OR output_tokens IS NULL) THEN total_tokens ELSE 0 END) AS aggregate_only_tokens, "
-                "SUM(cached_input_tokens) AS cached_input_tokens, SUM(reasoning_tokens) AS reasoning_tokens, "
+                "SUM(cached_input_tokens) AS cached_input_tokens, SUM(cache_write_tokens) AS cache_write_tokens, SUM(reasoning_tokens) AS reasoning_tokens, "
                 "SUM(output_tokens) AS output_tokens, "
                 "SUM(total_tokens) AS total_tokens, SUM(prompt_bytes) AS prompt_bytes, "
                 "SUM(response_bytes) AS response_bytes, SUM(duration_ms) AS duration_ms "
@@ -1164,7 +1188,7 @@ class StateStore:
                 params,
             ).fetchall()
             external = conn.execute(
-                "SELECT COUNT(*) AS calls, SUM(input_tokens) AS input_tokens, SUM(cached_input_tokens) AS cached_input_tokens, "
+                "SELECT COUNT(*) AS calls, SUM(input_tokens) AS input_tokens, SUM(cached_input_tokens) AS cached_input_tokens, SUM(cache_write_tokens) AS cache_write_tokens, "
                 "SUM(reasoning_tokens) AS reasoning_tokens, "
                 "SUM(output_tokens) AS output_tokens, SUM(total_tokens) AS total_tokens, "
                 "SUM(model_mismatch_count) AS model_mismatch_attempts, "
@@ -1175,14 +1199,14 @@ class StateStore:
                 "SUM(CASE WHEN total_tokens IS NOT NULL AND total_tokens_fresh = 0 THEN total_tokens ELSE 0 END) AS stale_total_tokens, "
                 "MAX(context_tokens) AS max_context_tokens, AVG(context_tokens) AS average_context_tokens, "
                 "SUM(prompt_bytes) AS prompt_bytes, SUM(response_bytes) AS response_bytes, SUM(duration_ms) AS duration_ms, "
-                "SUM(CASE WHEN input_tokens IS NULL AND cached_input_tokens IS NULL AND output_tokens IS NULL "
+                "SUM(CASE WHEN input_tokens IS NULL AND cached_input_tokens IS NULL AND cache_write_tokens IS NULL AND output_tokens IS NULL "
                 "AND total_tokens IS NULL AND COALESCE(status,'') != 'failed' THEN 1 ELSE 0 END) AS unknown_sessions, "
                 "SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) AS failed_sessions FROM external_usage" + external_where,
                 external_params,
             ).fetchone()
             external_groups = conn.execute(
                 "SELECT repo, substr(updated_at,1,10) AS date, role, course_key, work_package_key, stage, provider, model, COUNT(*) AS calls, SUM(input_tokens) AS input_tokens, "
-                "SUM(cached_input_tokens) AS cached_input_tokens, SUM(reasoning_tokens) AS reasoning_tokens, "
+                "SUM(cached_input_tokens) AS cached_input_tokens, SUM(cache_write_tokens) AS cache_write_tokens, SUM(reasoning_tokens) AS reasoning_tokens, "
                 "SUM(output_tokens) AS output_tokens, "
                 "SUM(total_tokens) AS total_tokens, SUM(model_mismatch_count) AS model_mismatch_attempts, "
                 "SUM(prompt_bytes) AS prompt_bytes, "
@@ -1193,7 +1217,7 @@ class StateStore:
                 "SUM(CASE WHEN total_tokens IS NOT NULL AND total_tokens_fresh = 0 THEN total_tokens ELSE 0 END) AS stale_total_tokens, "
                 "MAX(context_tokens) AS max_context_tokens, AVG(context_tokens) AS average_context_tokens, "
                 "SUM(response_bytes) AS response_bytes, SUM(duration_ms) AS duration_ms, "
-                "SUM(CASE WHEN input_tokens IS NULL AND cached_input_tokens IS NULL "
+                "SUM(CASE WHEN input_tokens IS NULL AND cached_input_tokens IS NULL AND cache_write_tokens IS NULL "
                 "AND output_tokens IS NULL AND total_tokens IS NULL THEN 1 ELSE 0 END) AS unknown_sessions "
                 "FROM external_usage" + external_where
                 + " GROUP BY repo, date, role, course_key, work_package_key, stage, provider, model ORDER BY total_tokens DESC NULLS LAST, calls DESC",
@@ -1201,7 +1225,7 @@ class StateStore:
             ).fetchall()
             repeated_prompts = conn.execute(
                 "SELECT repo, role, resolved_model AS model, prompt_fingerprint, COUNT(*) AS calls, "
-                "SUM(input_tokens) AS input_tokens, SUM(cached_input_tokens) AS cached_input_tokens, "
+                "SUM(input_tokens) AS input_tokens, SUM(cached_input_tokens) AS cached_input_tokens, SUM(cache_write_tokens) AS cache_write_tokens, "
                 "SUM(output_tokens) AS output_tokens, SUM(total_tokens) AS total_tokens, "
                 "SUM(prompt_bytes) AS prompt_bytes, SUM(duration_ms) AS duration_ms "
                 "FROM model_calls WHERE prompt_fingerprint IS NOT NULL"
