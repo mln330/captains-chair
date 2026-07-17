@@ -169,8 +169,11 @@ const STAGE_ROUTE_DEFAULTS: Record<string, EditableRoute> = {
   baseline: { model: "codex/gpt-5.6-terra", effort: "high" },
   planning: { model: "codex/gpt-5.6-terra", effort: "medium" },
   decomposition: { model: "codex/gpt-5.6-terra", effort: "medium" },
-  implementation: { model: "codex/gpt-5.3-codex-spark", effort: "medium" },
-  repair: { model: "codex/gpt-5.3-codex-spark", effort: "medium" },
+  // The OpenClaw plugin runs through the gateway. Its ChatGPT-account Codex
+  // route rejects Spark, so bounded coding uses Terra here; direct Codex
+  // keeps Spark through the portable runtime mapping.
+  implementation: { model: "codex/gpt-5.6-terra", effort: "medium" },
+  repair: { model: "codex/gpt-5.6-terra", effort: "medium" },
   review: { model: "codex/gpt-5.6-terra", effort: "high" },
   comment_adjudication: { model: "codex/gpt-5.6-terra", effort: "high" },
   test: { model: "codex/gpt-5.6-luna", effort: "medium" },

@@ -636,6 +636,25 @@ class WorkflowOrchestrator:
             }:
                 repair_label = _repair_label(card.id)
                 repairs = [item for item in cards if _is_repair_for(item, card.id)]
+                # A final reviewer can race the last QA handoff and observe an
+                # incomplete dependency snapshot. Once every predecessor has
+                # durable current evidence, retry the reviewer directly. Do not
+                # spend a coding session repairing a PR that has no finding.
+                if (
+                    stage == WorkStage.FINAL_REVIEW
+                    and _is_stale_gate_block(reason)
+                    and self._has_valid_predecessors(repo, card, cards)
+                ):
+                    for repair in repairs:
+                        if repair.status in {QueueStatus.READY, QueueStatus.TODO}:
+                            self.adapter.reclaim_card(
+                                repair.id,
+                                status=QueueStatus.BLOCKED,
+                                reason="CANCELLED: final-review gate evidence is current; retry reviewer directly",
+                            )
+                    retry = self._create_fresh_retry(repo, card, cards)
+                    protocol_retries.append(retry.id)
+                    continue
                 completed = next(
                     (
                         item
@@ -1066,6 +1085,30 @@ class WorkflowOrchestrator:
     ) -> bool:
         """Find a passed final-review card, including any retry descendant."""
         return bool(self._valid_merge_final_review_ids(repo, merge_card, cards))
+
+    def _has_valid_predecessors(
+        self,
+        repo: RepoConfig,
+        card: QueueCard,
+        cards: list[QueueCard],
+    ) -> bool:
+        """Return whether every direct dependency has current completion proof."""
+        parents = _parent_ids(card)
+        if not parents:
+            return False
+        for parent_id in parents:
+            if not any(
+                candidate.status == QueueStatus.DONE
+                and self._has_valid_completion(repo, candidate, cards)
+                and (
+                    candidate.id == parent_id
+                    or candidate.id.startswith(parent_id)
+                    or _is_retry_descendant(candidate, parent_id, cards)
+                )
+                for candidate in cards
+            ):
+                return False
+        return True
 
     def _valid_merge_final_review_ids(
         self,
@@ -1695,6 +1738,17 @@ def _block_reason(card: QueueCard) -> str:
                 if attempt_row.get("error"):
                     return str(attempt_row["error"])
     return "TECHNICAL: worker blocked without structured failure evidence"
+
+
+def _is_stale_gate_block(reason: str) -> bool:
+    """Recognize a dependency-snapshot failure without masking real findings."""
+    normalized = reason.lower()
+    return (
+        "without structured failure evidence" in normalized
+        or "stale" in normalized
+        or "remain ready" in normalized
+        or "not recorded" in normalized
+    )
 
 
 def _is_cancelled_card(card: QueueCard) -> bool:

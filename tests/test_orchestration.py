@@ -1128,6 +1128,64 @@ def test_valid_final_retry_reopens_blocked_merge_card(tmp_path: Path) -> None:
     assert "final-1" in queue.specs[-1].notes
 
 
+def test_stale_final_block_retries_review_instead_of_creating_coder_repair(
+    tmp_path: Path,
+) -> None:
+    repo = repo_config(
+        tmp_path,
+        mode=OperationMode.AUTONOMOUS,
+        completion=CompletionPolicy.AUTO_MERGE,
+    )
+    queue = MemoryQueue()
+    queue.cards["review"] = QueueCard(
+        id="review-1",
+        title="Independent review",
+        status=QueueStatus.DONE,
+        labels=("captains_chair", "workflow:flow-1", "stage:review"),
+        metadata={"proof": [{"status": "passed", "note": "reviewed abcdef1"}]},
+    )
+    queue.cards["qa"] = QueueCard(
+        id="qa-1",
+        title="CLI QA",
+        status=QueueStatus.DONE,
+        labels=("captains_chair", "workflow:flow-1", "stage:test"),
+        metadata={"proof": [{"status": "passed", "note": "QA_PASSED:cli:abcdef1"}]},
+    )
+    queue.cards["final"] = QueueCard(
+        id="final-1",
+        title="Final review",
+        status=QueueStatus.BLOCKED,
+        labels=("captains_chair", "workflow:flow-1", "stage:final_review"),
+        metadata={
+            "links": [
+                {"type": "parent", "targetCardId": "review-1"},
+                {"type": "parent", "targetCardId": "qa-1"},
+            ],
+            "failureCount": 1,
+        },
+    )
+    queue.cards["repair"] = QueueCard(
+        id="repair-1",
+        title="Repair findings from Final review",
+        status=QueueStatus.READY,
+        labels=("captains_chair", "workflow:flow-1", "stage:repair", "repair:final-1"),
+    )
+
+    result = WorkflowOrchestrator(queue, worker_config()).reconcile(
+        repo,
+        dispatch=False,
+        dispatch_reason="test",
+    )
+
+    assert len(result.protocol_retries) == 1
+    assert result.repairs_created == ()
+    assert queue.reclaimed == ["repair-1"]
+    retry = queue.specs[-1]
+    assert retry.agent_id == "github-final"
+    assert "stage:final_review" in retry.labels
+    assert "retry-for:final-1" in retry.labels
+
+
 def test_recovered_control_plane_card_is_cancelled_without_dispatch(tmp_path: Path) -> None:
     repo = repo_config(tmp_path)
     queue = MemoryQueue()
