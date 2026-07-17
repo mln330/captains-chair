@@ -319,6 +319,7 @@ class StateStore:
                     course_key TEXT,
                     work_package_key TEXT,
                     stage TEXT,
+                    status TEXT,
                     provider TEXT,
                     model TEXT,
                     input_tokens INTEGER,
@@ -412,6 +413,7 @@ class StateStore:
                 "course_key": "TEXT",
                 "work_package_key": "TEXT",
                 "stage": "TEXT",
+                "status": "TEXT",
                 "reasoning_tokens": "INTEGER",
                 "context_tokens": "INTEGER",
                 "total_tokens_fresh": "INTEGER",
@@ -1053,12 +1055,12 @@ class StateStore:
         activity_at = _external_activity_timestamp(record)
         with self._connect() as conn:
             conn.execute(
-                "INSERT INTO external_usage(source,external_id,repo,role,course_key,work_package_key,stage,provider,model,input_tokens,"
+                "INSERT INTO external_usage(source,external_id,repo,role,course_key,work_package_key,stage,status,provider,model,input_tokens,"
                 "cached_input_tokens,reasoning_tokens,output_tokens,total_tokens,total_tokens_fresh,context_tokens,"
                 "model_mismatch_count,prompt_bytes,response_bytes,duration_ms,updated_at,payload_json) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(source,external_id) DO UPDATE SET repo=excluded.repo,role=excluded.role,"
-                "course_key=excluded.course_key,work_package_key=excluded.work_package_key,stage=excluded.stage,"
+                "course_key=excluded.course_key,work_package_key=excluded.work_package_key,stage=excluded.stage,status=excluded.status,"
                 "provider=excluded.provider,model=excluded.model,input_tokens=excluded.input_tokens,"
                 "cached_input_tokens=excluded.cached_input_tokens,reasoning_tokens=excluded.reasoning_tokens,"
                 "output_tokens=excluded.output_tokens,"
@@ -1075,6 +1077,7 @@ class StateStore:
                     record.get("course_key"),
                     record.get("work_package_key"),
                     record.get("stage") or record.get("role"),
+                    record.get("status"),
                     record.get("provider"),
                     record.get("model"),
                     record.get("input_tokens"),
@@ -1170,7 +1173,8 @@ class StateStore:
                 "MAX(context_tokens) AS max_context_tokens, AVG(context_tokens) AS average_context_tokens, "
                 "SUM(prompt_bytes) AS prompt_bytes, SUM(response_bytes) AS response_bytes, SUM(duration_ms) AS duration_ms, "
                 "SUM(CASE WHEN input_tokens IS NULL AND cached_input_tokens IS NULL AND output_tokens IS NULL "
-                "AND total_tokens IS NULL THEN 1 ELSE 0 END) AS unknown_sessions FROM external_usage" + external_where,
+                "AND total_tokens IS NULL AND COALESCE(status,'') != 'failed' THEN 1 ELSE 0 END) AS unknown_sessions, "
+                "SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) AS failed_sessions FROM external_usage" + external_where,
                 external_params,
             ).fetchone()
             external_groups = conn.execute(

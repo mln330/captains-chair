@@ -91,6 +91,7 @@ def sync_openclaw_sessions(
             "card_id": card_id,
             "provider": row.get("modelProvider"),
             "model": observed_model,
+            "status": row.get("status"),
             "expected_model": expected_model,
             "model_mismatch_count": model_mismatch,
             "input_tokens": _integer(row.get("inputTokens", row.get("input_tokens"))),

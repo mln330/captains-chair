@@ -184,6 +184,32 @@ def test_openclaw_worker_usage_uses_card_context_for_stage_and_model_dimensions(
     ]
 
 
+def test_failed_openclaw_session_without_model_usage_is_not_counted_as_unknown(
+    tmp_path: Path,
+) -> None:
+    output = (
+        '{"sessions":[{"key":"agent:github-coder:captains-chair:worker:card-failed:attempt-1",'
+        '"agentId":"github-coder","model":"gpt-5.6-terra","modelProvider":"codex",'
+        '"status":"failed","totalTokens":null,"totalTokensFresh":false}]}'
+    )
+
+    def runner(command: Sequence[str], *, timeout: int = 60, **_: object) -> CommandResult:
+        del command, timeout
+        return CommandResult(0, output, "")
+
+    state = StateStore(tmp_path / "state.db")
+    sync_openclaw_sessions(
+        state,
+        repo="repo/project",
+        runner=runner,
+        session_context={"card-failed": {"stage": "implementation"}},
+    )
+
+    summary = state.usage_summary(repo="repo/project")
+    assert summary["external_sessions"]["unknown_sessions"] == 0
+    assert summary["external_sessions"]["failed_sessions"] == 1
+
+
 def test_openclaw_session_import_uses_a_bounded_limit(tmp_path: Path) -> None:
     commands: list[Sequence[str]] = []
 
