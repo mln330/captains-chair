@@ -327,6 +327,22 @@ def test_orchestration_card_helpers_fail_closed_and_preserve_latest_evidence(tmp
     assert _completion_summary(passed) == "Recovered completed review card from runtime review status."
 
 
+def test_passed_proof_handoff_uses_only_latest_record() -> None:
+    card = QueueCard(
+        id="proof-1",
+        title="Proof",
+        status=QueueStatus.DONE,
+        metadata={
+            "proof": [
+                {"status": "passed", "note": "old"},
+                {"status": "passed", "note": "latest"},
+            ]
+        },
+    )
+
+    assert _passed_proof(card) == ({"status": "passed", "note": "latest"},)
+
+
 def test_final_completion_proof_requires_current_head_marker_for_each_policy(tmp_path: Path) -> None:
     card = QueueCard(
         id="final",

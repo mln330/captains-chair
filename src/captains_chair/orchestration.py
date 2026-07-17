@@ -1794,12 +1794,16 @@ def _passed_proof(card: QueueCard) -> tuple[dict[str, Any], ...]:
     value = card.metadata.get("proof")
     if not isinstance(value, list):
         return ()
-    return tuple(
-        cast(dict[str, Any], item)
-        for item in cast(list[Any], value)
-        if isinstance(item, dict)
-        and str(cast(dict[str, object], item).get("status") or "").lower() == "passed"
+    latest = next(
+        (
+            cast(dict[str, Any], item)
+            for item in reversed(cast(list[Any], value))
+            if isinstance(item, dict)
+            and str(cast(dict[str, object], item).get("status") or "").lower() == "passed"
+        ),
+        None,
     )
+    return (latest,) if latest is not None else ()
 
 
 def _completion_summary(card: QueueCard) -> str:
