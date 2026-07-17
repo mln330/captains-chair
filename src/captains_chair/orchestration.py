@@ -624,6 +624,22 @@ class WorkflowOrchestrator:
             if _is_cancelled_card(card):
                 continue
             stage = _card_stage(card)
+            if retry_with_proof:
+                # Downstream cards reference the stable original stage card.
+                # Promote durable proof from any successful retry descendant
+                # before handling the original block or its repair cards.
+                retry = next(
+                    item
+                    for item in cards
+                    if _is_retry_descendant(item, card.id, cards)
+                    and _has_valid_proof(repo, item)
+                )
+                self.adapter.complete_card(
+                    card.id,
+                    summary=_completion_summary(retry),
+                    proof=_passed_proof(retry),
+                )
+                continue
             if stage == WorkStage.MERGE and self._has_valid_merge_predecessor(repo, card, cards):
                 retry = self._create_fresh_retry(repo, card, cards)
                 protocol_retries.append(retry.id)

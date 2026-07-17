@@ -1186,6 +1186,66 @@ def test_stale_final_block_retries_review_instead_of_creating_coder_repair(
     assert "retry-for:final-1" in retry.labels
 
 
+def test_nested_final_retry_promotes_blocked_original_for_downstream_merge(
+    tmp_path: Path,
+) -> None:
+    repo = repo_config(
+        tmp_path,
+        mode=OperationMode.AUTONOMOUS,
+        completion=CompletionPolicy.AUTO_MERGE,
+    )
+    queue = MemoryQueue()
+    queue.cards["final"] = QueueCard(
+        id="final-1",
+        title="Final review",
+        status=QueueStatus.BLOCKED,
+        labels=("captains_chair", "workflow:flow-1", "stage:final_review"),
+        metadata={
+            "workerProtocol": {"detail": "TECHNICAL: stale final review handoff"},
+        },
+    )
+    queue.cards["first-retry"] = QueueCard(
+        id="first-retry-1",
+        title="Retry final review",
+        status=QueueStatus.BLOCKED,
+        labels=(
+            "captains_chair",
+            "workflow:flow-1",
+            "stage:final_review",
+            "retry-for:final-1",
+        ),
+        metadata={"workerProtocol": {"detail": "TECHNICAL: worker timeout"}},
+    )
+    queue.cards["nested-retry"] = QueueCard(
+        id="nested-retry-1",
+        title="Nested retry final review",
+        status=QueueStatus.DONE,
+        labels=(
+            "captains_chair",
+            "workflow:flow-1",
+            "stage:final_review",
+            "retry-for:first-retry-1",
+        ),
+        metadata={
+            "proof": [
+                {"status": "passed", "note": "AUTO_MERGE_ALLOWED:abcdef1"}
+            ]
+        },
+    )
+    queue.cards["merge"] = QueueCard(
+        id="merge-1",
+        title="Merge",
+        status=QueueStatus.TODO,
+        labels=("captains_chair", "workflow:flow-1", "stage:merge"),
+        metadata={"links": [{"type": "parent", "targetCardId": "final-1"}]},
+    )
+
+    WorkflowOrchestrator(queue, worker_config()).reconcile(repo, dispatch=False)
+
+    assert ("final-1", ()) in queue.completed
+    assert queue.specs == []
+
+
 def test_recovered_control_plane_card_is_cancelled_without_dispatch(tmp_path: Path) -> None:
     repo = repo_config(tmp_path)
     queue = MemoryQueue()
