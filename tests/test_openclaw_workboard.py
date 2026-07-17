@@ -677,7 +677,7 @@ def test_worker_model_health_fails_closed_when_agent_inventory_fails() -> None:
 
 def test_worker_model_health_accepts_codex_route_reported_by_openai_provider() -> None:
     observed = {
-        "captain": "openai/gpt-5.6-sol",
+        "captain": "openai/gpt-5.6-terra",
         "coder": "openai/gpt-5.3-codex-spark",
         "reviewer": "openai/gpt-5.6-terra",
         "tester": "openai/gpt-5.6-luna",

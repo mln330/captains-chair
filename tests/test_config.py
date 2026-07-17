@@ -322,10 +322,35 @@ def test_public_example_uses_documented_balanced_model_routes() -> None:
     assert configured.harness_model_overrides["codex"].tester.primary.model == "gpt-5.6-luna"
     assert configured.harness_model_overrides["codex"].ux_reviewer is not None
     assert configured.harness_model_overrides["codex"].ux_reviewer.primary.model == "gpt-5.6-terra"
+    documented_profiles = {
+        "strategist": ("codex/gpt-5.6-sol", "high"),
+        "course_verifier": ("codex/gpt-5.6-sol", "high"),
+        "baseline_analyst": ("codex/gpt-5.6-terra", "high"),
+        "subsystem_analyst": ("codex/gpt-5.6-luna", "medium"),
+        "readiness_reviewer": ("codex/gpt-5.6-terra", "high"),
+        "decomposer": ("codex/gpt-5.6-terra", "medium"),
+        "package_planner": ("codex/gpt-5.6-terra", "medium"),
+        "fast_coder": ("codex/gpt-5.3-codex-spark", "medium"),
+        "complex_coder": ("codex/gpt-5.6-sol", "high"),
+        "focused_coder": ("codex/gpt-5.3-codex-spark", "medium"),
+        "local_coder": ("ollama/qualified-local", "medium"),
+        "code_reviewer": ("codex/gpt-5.6-terra", "high"),
+        "security_reviewer": ("codex/gpt-5.6-terra", "high"),
+        "qa_assistant": ("codex/gpt-5.6-luna", "medium"),
+        "ui_qa_reviewer": ("codex/gpt-5.6-terra", "medium"),
+        "recovery_planner": ("codex/gpt-5.6-terra", "high"),
+        "summarizer": ("codex/gpt-5.6-luna", "low"),
+    }
+    assert {
+        key: (profile.primary.model, profile.primary.thinking)
+        for key, profile in configured.models.profiles.items()
+    } == documented_profiles
+    assert configured.models.comment_adjudicator is not None
+    assert configured.models.comment_adjudicator.primary.model == "codex/gpt-5.6-terra"
 
     worker_models = configured.orchestrators["openclaw-workers"].worker_models
     assert worker_models.model_dump() == {
-        "captain": "codex/gpt-5.6-sol",
+        "captain": "codex/gpt-5.6-terra",
         "coder": "codex/gpt-5.6-terra",
         "reviewer": "codex/gpt-5.6-terra",
         "tester": "codex/gpt-5.6-luna",

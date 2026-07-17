@@ -64,7 +64,7 @@
         "worker_models": {
           "$ref": "#/$defs/WorkerModelAssignments",
           "default": {
-            "captain": "codex/gpt-5.6-sol",
+            "captain": "codex/gpt-5.6-terra",
             "coder": "codex/gpt-5.3-codex-spark",
             "reviewer": "codex/gpt-5.6-terra",
             "tester": "codex/gpt-5.6-luna",
@@ -164,7 +164,7 @@
         "worker_models": {
           "$ref": "#/$defs/WorkerModelAssignments",
           "default": {
-            "captain": "codex/gpt-5.6-sol",
+            "captain": "codex/gpt-5.6-terra",
             "coder": "codex/gpt-5.3-codex-spark",
             "reviewer": "codex/gpt-5.6-terra",
             "tester": "codex/gpt-5.6-luna",
@@ -628,7 +628,7 @@
         "worker_models": {
           "$ref": "#/$defs/WorkerModelAssignments",
           "default": {
-            "captain": "codex/gpt-5.6-sol",
+            "captain": "codex/gpt-5.6-terra",
             "coder": "codex/gpt-5.3-codex-spark",
             "reviewer": "codex/gpt-5.6-terra",
             "tester": "codex/gpt-5.6-luna",
@@ -1166,7 +1166,7 @@
       "additionalProperties": false,
       "properties": {
         "captain": {
-          "default": "codex/gpt-5.6-sol",
+          "default": "codex/gpt-5.6-terra",
           "title": "Captain",
           "type": "string"
         },

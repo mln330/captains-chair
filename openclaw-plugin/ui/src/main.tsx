@@ -165,8 +165,24 @@ function initialRoutesFromProfiles(profiles?: Record<string, ModelRoute>): Recor
   }));
 }
 
-function initialStageRoute(profile?: ModelRoute): EditableRoute {
-  return { model: profile?.primary?.model ?? "codex/gpt-5.6-sol", effort: profile?.primary?.thinking ?? "high" };
+const STAGE_ROUTE_DEFAULTS: Record<string, EditableRoute> = {
+  baseline: { model: "codex/gpt-5.6-terra", effort: "high" },
+  planning: { model: "codex/gpt-5.6-terra", effort: "medium" },
+  decomposition: { model: "codex/gpt-5.6-terra", effort: "medium" },
+  implementation: { model: "codex/gpt-5.3-codex-spark", effort: "medium" },
+  repair: { model: "codex/gpt-5.3-codex-spark", effort: "medium" },
+  review: { model: "codex/gpt-5.6-terra", effort: "high" },
+  comment_adjudication: { model: "codex/gpt-5.6-terra", effort: "high" },
+  test: { model: "codex/gpt-5.6-luna", effort: "medium" },
+  ux_review: { model: "codex/gpt-5.6-terra", effort: "medium" },
+  final_review: { model: "codex/gpt-5.6-sol", effort: "high" },
+  merge: { model: "codex/gpt-5.6-terra", effort: "medium" },
+  post_merge: { model: "codex/gpt-5.6-terra", effort: "high" },
+};
+
+function initialStageRoute(profile?: ModelRoute, stageName = "implementation"): EditableRoute {
+  const fallback = STAGE_ROUTE_DEFAULTS[stageName] ?? STAGE_ROUTE_DEFAULTS.implementation;
+  return { model: profile?.primary?.model ?? fallback.model, effort: profile?.primary?.thinking ?? fallback.effort };
 }
 
 function effectiveRoute(repo: Repo | undefined, course: Course, workPackage: WorkPackage | undefined, role: string, fallbackModel: string, fallbackEffort: string, stageName = "implementation") {
@@ -459,14 +475,14 @@ function CourseModelSettings({ repository, repo, course, onSaved }: { repository
   const [packageKey, setPackageKey] = useState(course.work_packages[0]?.key ?? "");
   const [preset, setPreset] = useState<ModelPreset>("balanced");
   const [routes, setRoutes] = useState<Record<string, EditableRoute>>(() => initialRoutesFromProfiles(course.model_profiles));
-  const [stageRoute, setStageRoute] = useState<EditableRoute>(() => initialStageRoute(course.model_profiles?.["stage:implementation"]));
+  const [stageRoute, setStageRoute] = useState<EditableRoute>(() => initialStageRoute(course.model_profiles?.["stage:implementation"], stageName));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const selectedPackage = course.work_packages.find((item) => item.key === packageKey);
   const selectedProfiles = layer === "course" ? course.model_profiles : selectedPackage?.model_profiles;
   const stageProfiles = stageScope === "course" ? course.model_profiles : selectedPackage?.model_profiles;
   useEffect(() => {
-    if (layer === "stage") setStageRoute(initialStageRoute(stageProfiles?.[`stage:${stageName}`]));
+    if (layer === "stage") setStageRoute(initialStageRoute(stageProfiles?.[`stage:${stageName}`], stageName));
     else setRoutes(initialRoutesFromProfiles(selectedProfiles));
     setPreset("balanced");
     setError(null);

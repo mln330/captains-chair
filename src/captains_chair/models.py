@@ -378,7 +378,9 @@ class WorkerAssignments(StrictModel):
 
 
 class WorkerModelAssignments(StrictModel):
-    captain: str = "codex/gpt-5.6-sol"
+    # Control-plane recovery is a Terra route in the documented capability
+    # matrix. Sol is reserved for course strategy and final verification.
+    captain: str = "codex/gpt-5.6-terra"
     coder: str = "codex/gpt-5.3-codex-spark"
     reviewer: str = "codex/gpt-5.6-terra"
     tester: str = "codex/gpt-5.6-luna"
