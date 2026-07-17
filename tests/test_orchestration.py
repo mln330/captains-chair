@@ -1111,6 +1111,32 @@ def test_valid_final_retry_reopens_blocked_merge_card(tmp_path: Path) -> None:
     assert queue.reclaimed == ["merge-1"]
 
 
+def test_recovered_control_plane_card_is_cancelled_without_dispatch(tmp_path: Path) -> None:
+    repo = repo_config(tmp_path)
+    queue = MemoryQueue()
+    queue.cards["target"] = QueueCard(
+        id="target-1",
+        title="Review",
+        status=QueueStatus.DONE,
+        labels=("captains_chair", "stage:review"),
+        metadata={"proof": [{"status": "passed", "note": "reviewed abcdef1"}]},
+    )
+    queue.cards["recovery"] = QueueCard(
+        id="recovery-1",
+        title="Recovery",
+        status=QueueStatus.READY,
+        labels=(
+            "captains_chair",
+            "stage:control_plane_action",
+            "control-plane-recovery:target-1",
+        ),
+    )
+
+    WorkflowOrchestrator(queue, worker_config()).reconcile(repo)
+
+    assert queue.reclaimed == ["recovery-1"]
+
+
 def test_nested_retry_proof_completes_original_without_another_retry(tmp_path: Path) -> None:
     repo = repo_config(
         tmp_path,

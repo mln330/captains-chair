@@ -492,6 +492,21 @@ class WorkflowOrchestrator:
                     reason="CANCELLED: superseded by a passed retry for this stage",
                 )
 
+        # Recovery cards are control-plane work, not project work. Once their
+        # target has recovered, leaving them READY would dispatch another
+        # Captain session and recreate the same context at additional cost.
+        for card in cards:
+            if (
+                card.status in {QueueStatus.READY, QueueStatus.TODO}
+                and _card_stage(card) == WorkStage.CONTROL_PLANE_ACTION
+                and self._control_recovery_is_obsolete(repo, card, cards)
+            ):
+                self.adapter.reclaim_card(
+                    card.id,
+                    status=QueueStatus.BLOCKED,
+                    reason="CANCELLED: recovery target already has durable completion evidence",
+                )
+
         for card in cards:
             if card.metadata.get("archivedAt"):
                 continue
@@ -513,7 +528,7 @@ class WorkflowOrchestrator:
                     retry = next(
                         item
                         for item in cards
-                        if _is_retry_descendant(item, card.id, cards) and self._has_valid_completion(repo, item, cards)
+                        if _is_retry_descendant(item, card.id, cards) and _has_valid_proof(repo, item)
                     )
                     self.adapter.complete_card(
                         card.id,
@@ -550,7 +565,7 @@ class WorkflowOrchestrator:
                         item
                         for item in cards
                         if _is_retry_descendant(item, card.id, cards)
-                        and self._has_valid_completion(repo, item, cards)
+                        and _has_valid_proof(repo, item)
                     )
                     self.adapter.complete_card(
                         card.id,
@@ -609,7 +624,7 @@ class WorkflowOrchestrator:
                         retry = next(
                             item
                             for item in cards
-                            if _is_retry_descendant(item, card.id, cards) and self._has_valid_completion(repo, item, cards)
+                            if _is_retry_descendant(item, card.id, cards) and _has_valid_proof(repo, item)
                         )
                         self.adapter.complete_card(
                             card.id,
@@ -753,6 +768,15 @@ class WorkflowOrchestrator:
                 for card in workflow_cards
                 if card.metadata.get("qaProfile")
             }
+            # OpenClaw Workboard versions in the field may omit arbitrary
+            # metadata on a read-back. The bounded qa:<profile> label is the
+            # durable identity for idempotent QA materialization.
+            existing.update(
+                label.split(":", 1)[1]
+                for card in workflow_cards
+                for label in card.labels
+                if label.startswith("qa:")
+            )
             workspace = next(
                 (card.workspace for card in workflow_cards if card.workspace is not None),
                 None,
@@ -889,7 +913,7 @@ class WorkflowOrchestrator:
         card_id: str,
     ) -> bool:
         return any(
-            _is_retry_descendant(item, card_id, cards) and self._has_valid_completion(repo, item, cards)
+            _is_retry_descendant(item, card_id, cards) and _has_valid_proof(repo, item)
             for item in cards
         )
 
@@ -919,6 +943,46 @@ class WorkflowOrchestrator:
             if _has_valid_proof(repo, parent):
                 return True
             current = parent
+
+    def _control_recovery_is_obsolete(
+        self,
+        repo: RepoConfig,
+        recovery_card: QueueCard,
+        cards: list[QueueCard],
+    ) -> bool:
+        token = next(
+            (
+                label.split(":", 1)[1]
+                for label in recovery_card.labels
+                if label.startswith("control-plane-recovery:")
+                or label.startswith("control-plane-recovery-for:")
+            ),
+            None,
+        )
+        if not token:
+            return False
+        target = next(
+            (item for item in cards if item.id == token or item.id.startswith(token)),
+            None,
+        )
+        if target is None:
+            return False
+        if _card_stage(target) == WorkStage.MERGE:
+            return self._has_valid_merge_predecessor(repo, target, cards)
+        if target.status == QueueStatus.DONE:
+            return _has_valid_proof(repo, target) or self._retry_with_passed_completion(
+                repo, cards, target.id
+            )
+        if target.status != QueueStatus.BLOCKED:
+            return False
+        comments = target.metadata.get("comments")
+        return isinstance(comments, list) and any(
+            isinstance(item, dict)
+            and str(cast(dict[str, object], item).get("body") or "")
+            .upper()
+            .startswith("CANCELLED:")
+            for item in cast(list[object], comments)
+        )
 
     def _workflow_has_passed_completion(
         self,
