@@ -185,7 +185,10 @@ def build_readiness_prompt(course: Course, evidence: dict[str, object] | None = 
         "approval. When repository_lifecycle.provisioning_enabled and github_auth.authenticated are true, "
         "treat repository creation permissions and GitHub external access as verified capability evidence; "
         "do not block readiness merely because pre-provisioning snapshot, branch, CI, or deployment evidence "
-        "does not exist. Those facts must be checked after provisioning.\n\n"
+        "does not exist. Those facts must be checked after provisioning. The control_plane_capabilities "
+        "section describes stages provided by Captain's Chair itself. Do not require a separate project work "
+        "package for a capability that is explicitly enabled there, including fresh branch/worktree creation, "
+        "PR creation, independent review, targeted checks, final review, or durable event/token evidence.\n\n"
         f"Required categories:\n{categories}\n\nCourse context:\n{context}\n\n"
         f"Live evidence envelope (SHA-256 {readiness_evidence_sha(evidence or {})}):\n{live_context}"
     )

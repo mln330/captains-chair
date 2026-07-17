@@ -263,6 +263,17 @@ class ControlPlaneEngine:
                     )
                 },
             },
+            "control_plane_capabilities": {
+                "fresh_branch_and_worktree": True,
+                "pull_request_creation": True,
+                "independent_review": True,
+                "targeted_checks": True,
+                "review_comment_adjudication": True,
+                "final_review": True,
+                "durable_stage_events": True,
+                "per_stage_model_token_telemetry": True,
+                "evidence_state_dir_configured": bool(self.config.state_dir),
+            },
         }
         prompt = build_readiness_prompt(course, source_evidence)
         result = self.run_model(
