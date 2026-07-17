@@ -238,6 +238,10 @@ class SidecarServer:
         visibility = str(payload.get("visibility") or "private")
         if visibility not in {"private", "public"}:
             raise SidecarError("repo.create visibility must be private or public")
+        configured_orchestrator = str(payload.get("orchestrator") or "").strip()
+        default_orchestrator = (
+            "openclaw-workers" if "openclaw-workers" in self.config.orchestrators else None
+        )
         repo = RepoConfig(
             full_name=full_name,
             local_path=local_path,
@@ -247,6 +251,10 @@ class SidecarServer:
             checks=tuple(str(item) for item in _list_value(payload.get("checks"))),
             docs_checks=tuple(str(item) for item in _list_value(payload.get("docs_checks"))),
             surfaces=frozenset(ApplicationSurface(str(item)) for item in _list_value(payload.get("surfaces"))),
+            orchestrator=configured_orchestrator or default_orchestrator,
+            orchestration_board=(
+                str(payload.get("orchestration_board") or "").strip() or None
+            ),
             require_project_manifest=True,
             provisioning=RepositoryProvisioningConfig(
                 enabled=True,

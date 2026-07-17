@@ -12,9 +12,11 @@ from captains_chair.config import load_config
 from captains_chair.models import (
     CourseKind,
     HarnessConfig,
+    OpenClawWorkboardConfig,
     OperationMode,
     RepoConfig,
     RepositoryProvisioningConfig,
+    WorkerAssignments,
 )
 from captains_chair.sidecar import SidecarError, SidecarServer
 from tests.helpers import app_config, repo_config
@@ -298,6 +300,52 @@ def test_greenfield_repo_creation_waits_for_course_approval_and_seeds_durable_fi
     assert (local_path / "docs" / "IMPLEMENTATION_PLAN.md").is_file()
     assert (local_path / ".captains-chair" / "project.yaml").is_file()
     assert load_config(config_path).repo("example/new-project").provisioning.enabled is True
+
+
+def test_greenfield_repo_creation_defaults_to_configured_openclaw_orchestrator(
+    tmp_path: Path,
+) -> None:
+    workers = WorkerAssignments(
+        captain="captain",
+        coder="coder",
+        reviewer="reviewer",
+        tester="tester",
+        ux_reviewer="ux",
+        final_reviewer="final",
+        merger="merger",
+        verifier="verifier",
+    )
+    root_config = app_config(tmp_path, repo_config(tmp_path))
+    config = root_config.model_copy(
+        update={
+            "orchestrators": {
+                "openclaw-workers": OpenClawWorkboardConfig(workers=workers)
+            }
+        }
+    )
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+    server = SidecarServer(config_path, github=cast(Any, GreenfieldProvider()))
+    course = rebind_readiness_review(
+        ready_course().model_copy(
+            update={
+                "key": "openclaw-course",
+                "repository": "example/openclaw-project",
+                "kind": CourseKind.GREENFIELD,
+            }
+        )
+    ).model_dump(mode="json")
+
+    server.request(
+        "repo.create",
+        {
+            "full_name": "example/openclaw-project",
+            "local_path": str(tmp_path / "openclaw-project"),
+            "course": course,
+        },
+    )
+
+    assert load_config(config_path).repo("example/openclaw-project").orchestrator == "openclaw-workers"
 
 
 @pytest.mark.parametrize("kind", tuple(CourseKind))
