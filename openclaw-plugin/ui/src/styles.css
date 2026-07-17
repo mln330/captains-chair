@@ -40,6 +40,42 @@ h3 { font-size: 17px; margin-bottom: 5px; }
 .flow-stage.active .flow-line { background: #528e89; }
 .flow-stage span:last-child:not(.flow-line) { margin-top: 9px; white-space: nowrap; }
 .repo-meta { border-top: 1px solid #2e3b3e; color: #9eb0b2; font-size: 12px; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding-top: 14px; }
+.usage-pending { color: #f0d393; }
+.repo-stats { border-bottom: 1px solid #2e3b3e; display: flex; flex-wrap: wrap; gap: 7px 14px; padding: 12px 0; }
+.repo-stats span { color: #9eb0b2; font-size: 11px; }
+.repo-stats strong { color: #d9e8e7; font-size: 14px; margin-right: 3px; }
+.execution-panel { border-bottom: 1px solid #2e3b3e; padding: 14px 0 4px; }
+.execution-heading { align-items: center; display: flex; gap: 12px; justify-content: space-between; }
+.execution-heading h4, .pr-list h4, .token-breakdown h5 { color: #7fc7c0; font-size: 11px; letter-spacing: .8px; margin: 0; text-transform: uppercase; }
+.execution-heading span { color: #9eb0b2; display: block; font-size: 11px; margin-top: 3px; }
+.execution-heading > strong { color: #f0d393; font-size: 11px; font-weight: 650; white-space: nowrap; }
+.execution-path { display: flex; gap: 0; margin: 12px 0 4px; overflow-x: auto; padding: 4px 0 8px; }
+.path-step { display: grid; flex: 1 0 105px; gap: 7px; grid-template-columns: 12px minmax(0, 1fr); min-width: 105px; padding-right: 10px; position: relative; }
+.path-step:not(:last-child)::after { background: #3b4c4f; content: ""; height: 1px; left: 12px; position: absolute; right: 0; top: 6px; }
+.path-dot { background: #354447; border: 2px solid #647578; border-radius: 50%; height: 12px; position: relative; width: 12px; z-index: 1; }
+.path-step.done .path-dot { background: #7fc7c0; border-color: #b0e1d9; }
+.path-step.running .path-dot, .path-step.ready .path-dot, .path-step.review .path-dot { background: #f0c36a; border-color: #ffe0a1; }
+.path-step.blocked .path-dot { background: #c16b73; border-color: #f0bfc6; }
+.path-step.loop .path-dot { box-shadow: 0 0 0 4px #473c22; }
+.path-step div { min-width: 0; }
+.path-step strong, .path-step span, .path-step small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.path-step strong { color: #d9e8e7; font-size: 11px; text-transform: capitalize; }
+.path-step span { color: #9eb0b2; font-size: 10px; margin-top: 2px; text-transform: capitalize; }
+.path-step small { color: #829396; font-size: 10px; margin-top: 4px; }
+.path-step a, .pr-list a { color: #8bd0c6; font-size: 10px; }
+.stage-summary { border-top: 1px solid #2e3b3e; display: flex; flex-wrap: wrap; gap: 8px 14px; padding: 10px 0; }
+.stage-summary span { display: grid; gap: 2px; }
+.stage-summary strong { color: #b5c3c5; font-size: 10px; text-transform: capitalize; }
+.stage-summary small { color: #829396; font-size: 10px; }
+.token-breakdown { border-top: 1px solid #2e3b3e; padding: 10px 0 2px; }
+.token-breakdown > div { align-items: center; border-top: 1px solid #2e3b3e; display: flex; gap: 8px; justify-content: space-between; padding: 7px 0; }
+.token-breakdown span { color: #b5c3c5; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.token-breakdown strong { color: #f2f5f7; font-size: 11px; white-space: nowrap; }
+.usage-note { font-size: 11px; margin: 10px 0; }
+.pr-list { border-bottom: 1px solid #2e3b3e; padding: 12px 0 4px; }
+.pr-list a { align-items: center; border-top: 1px solid #2e3b3e; display: grid; gap: 7px; grid-template-columns: auto minmax(0, 1fr) auto; padding: 8px 0; text-decoration: none; }
+.pr-list a span { color: #d9e8e7; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pr-list a small { color: #9eb0b2; font-size: 10px; text-transform: capitalize; }
 .warning { color: #f0d393; font-size: 12px; margin: 14px 0 0; }
 .empty { border: 1px dashed #405154; margin-top: 22px; padding: 34px; text-align: center; color: #b5c3c5; }
 .empty h3 { color: #f2f5f7; }
@@ -161,6 +197,16 @@ legend { color: #7fc7c0; font-size: 12px; padding: 0 5px; }
   .primary { background: #c6442f; color: #fff; }
   .status-pill { background: #f5ddd7; color: #8d2f22; }
   .repo-panel, .course-card, .activity-panel, .schedule-row { background: #fff; border-color: #ded8d0; }
+  .repo-stats, .execution-panel, .stage-summary, .token-breakdown, .token-breakdown > div, .pr-list, .pr-list a { border-color: #ded8d0; }
+  .repo-stats span, .repo-meta, .execution-heading span, .path-step span, .path-step small, .stage-summary small, .token-breakdown span, .pr-list a small { color: #6f6a63; }
+  .repo-stats strong, .path-step strong, .pr-list a span { color: #292724; }
+  .execution-heading h4, .pr-list h4, .token-breakdown h5 { color: #a83324; }
+  .execution-heading > strong, .usage-pending { color: #7b5b12; }
+  .path-step:not(:last-child)::after { background: #d2cbc2; }
+  .path-dot { background: #e2ddd6; border-color: #aaa198; }
+  .path-step.done .path-dot { background: #a83324; border-color: #d56b5b; }
+  .path-step.loop .path-dot { box-shadow: 0 0 0 4px #fff0c9; }
+  .path-step a, .pr-list a { color: #a83324; }
   .mode { background: #e1eedb; color: #32602b; }
   .mode.supervised, .health.paused, .readiness.waiting { background: #fff0c9; color: #7b5b12; }
   .mode.advisory { background: #e1eef7; color: #265a7c; }

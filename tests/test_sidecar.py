@@ -9,6 +9,7 @@ import yaml
 
 import captains_chair.sidecar as sidecar_module
 from captains_chair.config import load_config
+from captains_chair.github import GitHubProvider, RepositorySnapshot
 from captains_chair.models import (
     CourseKind,
     HarnessConfig,
@@ -140,6 +141,116 @@ def test_sidecar_does_not_mark_workboard_with_active_cards_completed(
     assert result["state"] == "unbaselined"
     assert result["workboard_status"]["status"] == "in_progress"
     assert result["workboard_status"]["active_cards"] == 2
+
+
+def test_sidecar_correlates_workboard_sessions_and_reports_execution_facts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = repo_config(tmp_path).model_copy(
+        update={"orchestrator": "openclaw", "orchestration_board": "test-board"}
+    )
+    workers = WorkerAssignments(
+        captain="captain",
+        coder="coder",
+        reviewer="reviewer",
+        tester="tester",
+        ux_reviewer="ux",
+        final_reviewer="final",
+        merger="merger",
+        verifier="verifier",
+    )
+    orchestrator = OpenClawWorkboardConfig(
+        workers=workers,
+        require_live_completion_validation=False,
+    )
+    config = app_config(tmp_path, repo_config(tmp_path)).model_copy(
+        update={"repos": (repo,), "orchestrators": {"openclaw": orchestrator}}
+    )
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+
+    cards = [
+        QueueCard(
+            id="merge-done",
+            title="Merge implementation PR",
+            status=QueueStatus.DONE,
+            labels=("workflow:routing-canary", "stage:merge"),
+            agent_id="merger",
+            source_url="https://github.com/mln330/captains-chair/pull/42",
+            metadata={"comments": [{"createdAt": 2, "body": "Merged after green gates."}]},
+        ),
+        QueueCard(
+            id="post-merge-done",
+            title="Verify merged change",
+            status=QueueStatus.DONE,
+            labels=("workflow:routing-canary", "stage:post_merge"),
+            agent_id="verifier",
+            metadata={"comments": [{"createdAt": 3, "body": "Post-merge check passed."}]},
+        ),
+    ]
+
+    class Adapter:
+        def list_cards(self, board_id: str) -> list[QueueCard]:
+            assert board_id == "test-board"
+            return cards
+
+    class Github:
+        def snapshot(self, _repo: RepoConfig) -> RepositorySnapshot:
+            return RepositorySnapshot(
+                repo={},
+                issues=[{"number": 7}],
+                pull_requests=[
+                    {
+                        "number": 42,
+                        "title": "Routing canary",
+                        "url": "https://github.com/mln330/captains-chair/pull/42",
+                        "isDraft": False,
+                        "reviewDecision": "APPROVED",
+                    }
+                ],
+                branches=["main", "feature/routing"],
+                workflow_runs=[{"status": "completed", "conclusion": "success"}],
+            )
+
+    def sync(state: Any, **kwargs: Any) -> dict[str, Any]:
+        assert "merge-done" in kwargs["session_context"]
+        state.record_external_usage(
+            {
+                "source": "openclaw-session",
+                "external_id": "agent:github-merge:captains-chair:worker:merge-done:managed:1",
+                "repo": kwargs["repo"],
+                "role": "merger",
+                "stage": "merge",
+                "provider": "codex",
+                "model": "codex/gpt-5.6-terra",
+                "input_tokens": 20,
+                "output_tokens": 7,
+                "total_tokens": 27,
+                "total_tokens_fresh": True,
+            }
+        )
+        return {
+            "repo": kwargs["repo"],
+            "source": "openclaw-session",
+            "sessions_seen": 1,
+            "sessions_imported": 1,
+            "sessions_with_usage": 1,
+        }
+
+    monkeypatch.setattr(sidecar_module, "build_work_queue_adapter", lambda _config: Adapter())
+    monkeypatch.setattr(sidecar_module, "sync_openclaw_sessions", sync)
+    server = SidecarServer(config_path, github=cast(GitHubProvider, Github()))
+
+    result = server.request("portfolio.status")["repos"][0]
+
+    assert result["tokens"]["accounted_tokens"] == 27
+    assert result["workboard_status"]["usage_sync"]["status"] == "ok"
+    assert result["workboard_status"]["loop_count"] == 0
+    assert result["workboard_status"]["pr_urls"] == [
+        "https://github.com/mln330/captains-chair/pull/42"
+    ]
+    assert result["github_status"]["open_prs"] == 1
+    assert result["github_status"]["checks"] == {"recent": 1, "failed": 0, "pending": 0, "passed": 1}
 
 
 def test_sidecar_reports_health_portfolio_and_schedule_contract(tmp_path: Path) -> None:

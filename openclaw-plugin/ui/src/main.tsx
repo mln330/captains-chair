@@ -18,6 +18,41 @@ type UsageDetail = {
   warnings: string[];
   dimensions?: Array<{ date?: string; course_key?: string | null; work_package_key?: string | null; stage?: string; model?: string; tokens?: number; calls?: number; input_tokens?: number; cached_input_tokens?: number; cache_write_tokens?: number; reasoning_tokens?: number; output_tokens?: number; total_tokens?: number }>;
 };
+type WorkflowTimelineItem = {
+  stage?: string;
+  status?: string;
+  title?: string;
+  summary?: string;
+  agent?: string | null;
+  pr_url?: string | null;
+  updated_at?: string | null;
+  loop?: boolean;
+};
+type WorkboardStatus = {
+  status?: string;
+  board?: string;
+  workflow?: string;
+  cards?: number;
+  counts?: Record<string, number>;
+  active_cards?: number;
+  current_stage?: string | null;
+  stages?: Array<{ stage?: string; total?: number; done?: number; active?: number; blocked?: number; loops?: number }>;
+  timeline?: WorkflowTimelineItem[];
+  loop_count?: number;
+  pr_urls?: string[];
+  usage_sync?: { status?: string; sessions_seen?: number; sessions_imported?: number; sessions_with_usage?: number; error?: string };
+  message?: string;
+  error?: string;
+};
+type GitHubStatus = {
+  status?: string;
+  open_prs?: number;
+  open_issues?: number;
+  branches?: number;
+  checks?: { recent?: number; failed?: number; pending?: number; passed?: number };
+  prs?: Array<{ number?: number; title?: string; url?: string; headRefName?: string; isDraft?: boolean; mergeStateStatus?: string; reviewDecision?: string; updatedAt?: string }>;
+  error?: string;
+};
 type Repo = {
   full_name: string;
   local_path: string;
@@ -37,6 +72,9 @@ type Repo = {
   tokens: { total_tokens?: number; accounted_tokens?: number };
   usage_detail?: UsageDetail;
   active_work?: Record<string, unknown> | null;
+  workboard_status?: WorkboardStatus | null;
+  github_status?: GitHubStatus;
+  telemetry?: { status?: string; measured_records?: number; total_records?: number };
   events?: EventRecord[];
   warnings: string[];
 };
@@ -151,6 +189,25 @@ function Flow({ state }: { state: string }) {
       {index < stages.length - 1 && <span className="flow-line" aria-hidden="true" />}
     </div>)}
   </div>;
+}
+
+function stageLabel(stage?: string | null): string {
+  return (stage || "unknown").split("_").join(" ");
+}
+
+function ExecutionPath({ repo }: { repo: Repo }) {
+  const workboard = repo.workboard_status;
+  if (!workboard || workboard.status === "unknown" || workboard.status === "unavailable") return null;
+  const timeline = (workboard.timeline ?? []).slice(-12);
+  const dimensions = (repo.usage_detail?.dimensions ?? []).slice(0, 5);
+  return <section className="execution-panel" aria-label={`Execution evidence for ${repo.full_name}`}>
+    <div className="execution-heading"><div><h4>Execution path</h4><span>{workboard.current_stage ? `Current: ${stageLabel(workboard.current_stage)}` : "No active stage"}</span></div><strong>{workboard.loop_count ?? 0} retry/repair loops</strong></div>
+    {timeline.length ? <div className="execution-path" role="list">{timeline.map((item, index) => <div className={`path-step ${item.status ?? "unknown"} ${item.loop ? "loop" : ""}`} role="listitem" key={`${item.stage}-${item.updated_at}-${index}`}>
+      <span className="path-dot" aria-hidden="true" /><div><strong>{stageLabel(item.stage)}</strong><span>{item.status ?? "unknown"}</span><small title={item.summary ?? item.title}>{item.summary ?? item.title ?? "Workboard transition"}</small>{item.pr_url && <a href={item.pr_url} target="_blank" rel="noreferrer">PR</a>}</div>
+    </div>)}</div> : <p className="muted">No stage transitions recorded yet.</p>}
+    {workboard.stages?.length ? <div className="stage-summary">{workboard.stages.map((stage) => <span key={stage.stage}><strong>{stageLabel(stage.stage)}</strong><small>{stage.done ?? 0}/{stage.total ?? 0} done{stage.blocked ? ` | ${stage.blocked} blocked` : ""}</small></span>)}</div> : null}
+    {dimensions.length ? <div className="token-breakdown"><h5>Usage by stage and model</h5>{dimensions.map((row, index) => <div key={`${row.date}-${row.stage}-${row.model}-${index}`}><span>{stageLabel(row.stage)} | {row.model ?? "model unknown"}</span><strong>{(row.tokens ?? 0).toLocaleString()}</strong></div>)}</div> : <p className="muted usage-note">No correlated provider usage recorded for this repository yet.</p>}
+  </section>;
 }
 
 function routeValue(repo: Repo, role: string, fallbackModel: string, fallbackEffort: string) {
@@ -285,10 +342,21 @@ function RepoPanel({ repo, onSave }: { repo: Repo; onSave: (name: string, payloa
       if (validation.warnings?.length) window.alert("Routes saved. Run a harness route test before autonomous use.");
     } finally { setSaving(false); }
   };
+  const recordedTokens = repo.tokens.accounted_tokens ?? repo.tokens.total_tokens ?? 0;
+  const usageSync = repo.workboard_status?.usage_sync;
+  const usagePending = recordedTokens === 0 && usageSync?.status !== "ok" && (usageSync?.sessions_with_usage ?? 0) === 0;
+  const usageLabel = usagePending ? "Usage not correlated" : `${recordedTokens.toLocaleString()} tokens recorded`;
+  const github = repo.github_status;
+  const trackedPrs = repo.workboard_status?.pr_urls?.length ?? 0;
   return <article className="repo-panel">
     <div className="repo-heading"><div><h3>{repo.full_name}</h3><p>{repo.local_path}</p></div><span className={`mode ${repo.operation_mode}`}>{repo.operation_mode}</span></div>
     <Flow state={repo.state} />
-    <div className="repo-meta"><span>{repo.state.split("_").join(" ")}</span><span>{(repo.tokens.total_tokens ?? repo.tokens.accounted_tokens ?? 0).toLocaleString()} tokens</span><span>{repo.dirty ? "Uncommitted changes" : "Clean checkout"}</span>{repo.orchestrator === "openclaw" && repo.orchestration_board && <span>Workboard: {repo.orchestration_board}</span>}</div>
+    <div className="repo-meta"><span>{repo.state.split("_").join(" ")}</span><span className={usagePending ? "usage-pending" : ""}>{usageLabel}</span><span>{repo.dirty ? "Uncommitted changes" : "Clean checkout"}</span></div>
+    <div className="repo-stats" aria-label={`Repository facts for ${repo.full_name}`}>
+      <span><strong>{github?.open_prs ?? "-"}</strong> open PRs</span><span><strong>{trackedPrs}</strong> PRs in run</span><span><strong>{github?.open_issues ?? "-"}</strong> issues</span><span><strong>{github?.branches ?? "-"}</strong> branches</span><span><strong>{github?.checks?.failed ?? 0}</strong> failed checks</span><span><strong>{repo.workboard_status?.cards ?? 0}</strong> work cards</span>
+    </div>
+    <ExecutionPath repo={repo} />
+    {github?.prs?.length ? <div className="pr-list"><h4>Open pull requests</h4>{github.prs.slice(0, 4).map((pr) => <a href={pr.url} target="_blank" rel="noreferrer" key={pr.number}><strong>#{pr.number}</strong><span>{pr.title ?? "Untitled PR"}</span><small>{pr.isDraft ? "draft" : pr.reviewDecision ?? pr.mergeStateStatus ?? "open"}</small></a>)}</div> : null}
     {repo.warnings[0] && <p className="warning">{repo.warnings[0]}</p>}
     <details className="settings"><summary>Repository controls</summary>
       <div className="settings-grid">
