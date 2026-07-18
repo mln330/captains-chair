@@ -521,6 +521,27 @@ class WorkflowOrchestrator:
                     reason="CANCELLED: repair target already recovered or was superseded",
                 )
 
+        # A merge closes the implementation workflow. Late retries can be
+        # materialized by a stale worker handoff after the merge card has
+        # completed; preserve them as evidence but never dispatch them after
+        # post-merge verification becomes the only valid next stage.
+        for card in cards:
+            workflow = _card_workflow_label(card)
+            stage = _card_stage(card)
+            if (
+                workflow is not None
+                and stage is not None
+                and stage not in {WorkStage.MERGE, WorkStage.POST_MERGE}
+                and card.status in {QueueStatus.READY, QueueStatus.TODO, QueueStatus.BLOCKED}
+                and _workflow_has_merged_completion(workflow, cards)
+                and not _is_cancelled_card(card)
+            ):
+                self.adapter.reclaim_card(
+                    card.id,
+                    status=QueueStatus.BLOCKED,
+                    reason="CANCELLED: workflow already merged; stale pre-merge retry preserved as evidence",
+                )
+
         for card in cards:
             if card.metadata.get("archivedAt"):
                 continue
@@ -1074,6 +1095,15 @@ class WorkflowOrchestrator:
         )
         if target is None:
             return False
+        workflow = _card_workflow_label(repair_card)
+        if workflow is not None and any(
+            item.status == QueueStatus.DONE
+            and _card_stage(item) == WorkStage.MERGE
+            and _card_workflow_label(item) == workflow
+            and _has_merge_completion_proof(item)
+            for item in cards
+        ):
+            return True
         if target.status == QueueStatus.DONE:
             return _has_valid_proof(repo, target) or self._retry_with_passed_completion(
                 repo, cards, target.id
@@ -1981,6 +2011,33 @@ def _has_failure_evidence(card: QueueCard) -> bool:
         isinstance(item, dict)
         and cast(dict[str, object], item).get("status") in {"failed", "blocked", "stopped"}
         for item in cast(list[object], attempts)
+    )
+
+
+def _has_merge_completion_proof(card: QueueCard) -> bool:
+    """Recognize a deterministic merge completion without relying on live GitHub calls."""
+    proof = card.metadata.get("proof")
+    if not isinstance(proof, list):
+        return False
+    return any(
+        isinstance(item, dict)
+        and str(cast(dict[str, object], item).get("status") or "").lower() == "passed"
+        and "merged pr #" in str(
+            cast(dict[str, object], item).get("note")
+            or cast(dict[str, object], item).get("label")
+            or ""
+        ).lower()
+        for item in cast(list[object], proof)
+    )
+
+
+def _workflow_has_merged_completion(workflow: str, cards: list[QueueCard]) -> bool:
+    return any(
+        _card_workflow_label(card) == workflow
+        and _card_stage(card) == WorkStage.MERGE
+        and card.status == QueueStatus.DONE
+        and _has_merge_completion_proof(card)
+        for card in cards
     )
 
 

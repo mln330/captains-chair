@@ -248,6 +248,21 @@ class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
         if merge_card is None:
             return None
         workflow_cards = _workflow_scope(cards, merge_card)
+        active_repairs = [
+            card
+            for card in workflow_cards
+            if "stage:repair" in card.labels
+            and card.status != QueueStatus.DONE
+            and not _is_cancelled_card(card)
+            and not card.metadata.get("archivedAt")
+        ]
+        if active_repairs:
+            return {
+                "status": "waiting",
+                "card": merge_card.id,
+                "reason": "merge is waiting for active repair cards to complete",
+                "repairs": [card.id for card in active_repairs],
+            }
         repo = _repository_name(workflow_cards)
         pr_numbers = _pull_request_numbers(workflow_cards, repo)
         final_cards = [
@@ -850,6 +865,17 @@ def _parent_ids(card: QueueCard) -> tuple[str, ...]:
         if link.get("type") == "parent"
         for target in [link.get("targetCardId")]
         if target
+    )
+
+
+def _is_cancelled_card(card: QueueCard) -> bool:
+    comments = card.metadata.get("comments")
+    return isinstance(comments, list) and any(
+        isinstance(item, dict)
+        and str(cast(dict[str, object], item).get("body") or "")
+        .upper()
+        .startswith("CANCELLED:")
+        for item in cast(list[object], comments)
     )
 
 

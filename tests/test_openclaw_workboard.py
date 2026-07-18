@@ -1235,6 +1235,41 @@ def test_assigned_merge_card_never_falls_through_to_model_dispatch() -> None:
     assert not any("sessions.spawn" in call for call in calls)
 
 
+def test_deterministic_merge_waits_for_active_repair() -> None:
+    cards: dict[str, dict[str, Any]] = {
+        "final": {
+            **_managed_card("final", status="done", agent_id="final"),
+            "notes": "Repository: mln330/canary",
+            "labels": ["workflow:current", "stage:final_review"],
+            "metadata": {
+                "proof": [
+                    {
+                        "status": "passed",
+                        "note": "AUTO_MERGE_ALLOWED:6fc76b2",
+                        "url": "https://github.com/mln330/canary/pull/1",
+                    }
+                ]
+            },
+        },
+        "repair": {
+            **_managed_card("repair", status="running", agent_id="coder"),
+            "notes": "Repository: mln330/canary",
+            "labels": ["workflow:current", "stage:repair", "repair-for:review"],
+        },
+        "merge": {
+            **_managed_card("merge", status="todo", agent_id="", parents=("final",)),
+            "notes": "Repository: mln330/canary",
+            "labels": ["workflow:current", "stage:merge"],
+        },
+    }
+
+    result = OpenClawWorkboardAdapter(config(), _managed_runner(cards, [])).dispatch("board")
+
+    assert result["deterministic_merge"]["status"] == "waiting"
+    assert cards["merge"]["status"] == "ready"
+    assert cards["repair"]["status"] == "running"
+
+
 @pytest.mark.parametrize("missing", ("repository", "pull_request", "final_review"))
 def test_deterministic_merge_waits_for_unambiguous_context(missing: str) -> None:
     final_labels = ["workflow:current", "stage:final_review"]

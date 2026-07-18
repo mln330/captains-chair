@@ -1378,6 +1378,47 @@ def test_repair_for_cancelled_target_is_not_dispatched(tmp_path: Path) -> None:
     assert queue.reclaimed == ["repair-1"]
 
 
+def test_merged_workflow_cancels_stale_premerge_retry(tmp_path: Path) -> None:
+    repo = repo_config(
+        tmp_path,
+        mode=OperationMode.AUTONOMOUS,
+        completion=CompletionPolicy.AUTO_MERGE,
+    )
+    queue = MemoryQueue()
+    queue.cards["stale-final"] = QueueCard(
+        id="stale-final-1",
+        title="Retry final review",
+        status=QueueStatus.READY,
+        labels=("make_it_so", "workflow:flow-1", "stage:final_review"),
+        metadata={"proof": []},
+    )
+    queue.cards["merge"] = QueueCard(
+        id="merge-1",
+        title="Merge",
+        status=QueueStatus.DONE,
+        labels=("make_it_so", "workflow:flow-1", "stage:merge"),
+        metadata={
+            "proof": [
+                {
+                    "status": "passed",
+                    "note": "Merged PR #1 at reviewed head abcdef1; Model: deterministic/no-model",
+                }
+            ]
+        },
+    )
+    queue.cards["post-merge"] = QueueCard(
+        id="post-merge-1",
+        title="Post merge",
+        status=QueueStatus.TODO,
+        labels=("make_it_so", "workflow:flow-1", "stage:post_merge"),
+    )
+
+    WorkflowOrchestrator(queue, worker_config()).reconcile(repo, dispatch=False)
+
+    assert queue.reclaimed == ["stale-final-1"]
+    assert queue.cards["post-merge"].status == QueueStatus.TODO
+
+
 def test_nested_retry_proof_completes_original_without_another_retry(tmp_path: Path) -> None:
     repo = repo_config(
         tmp_path,
