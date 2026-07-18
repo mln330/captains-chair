@@ -420,7 +420,7 @@ def test_sidecar_reports_health_portfolio_and_schedule_contract(tmp_path: Path) 
 
     health = server.request("health")
     assert health["status"] == "healthy"
-    assert health["version"] == "0.2.0"
+    assert health["version"] == "0.2.1"
     assert health["protocol_version"] == 1
     status = server.request("portfolio.status")
     assert status["repos"][0]["full_name"] == "example/project"
