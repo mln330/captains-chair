@@ -307,6 +307,7 @@ class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
         proof_note = f"Deterministic merge gate authorized and merged PR #{pr_number}"
         if current_head:
             proof_note += f" at reviewed head {current_head}"
+        proof_note += "; Model: deterministic/no-model; Provider: captains-chair"
         self.complete_claimed_card(
             claimed.id,
             owner_id=owner_id,

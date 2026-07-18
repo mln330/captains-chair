@@ -1202,6 +1202,7 @@ def test_merge_card_uses_deterministic_gate_without_model_worker(
     if allowed:
         proof = cards["merge"]["metadata"]["proof"][0]
         assert proof["model"] == "deterministic/no-model"
+        assert "Model: deterministic/no-model; Provider: captains-chair" in proof["note"]
     else:
         assert "missing AUTO_MERGE_ALLOWED" in cards["merge"]["metadata"]["workerProtocol"][
             "detail"
