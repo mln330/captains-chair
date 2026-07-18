@@ -182,7 +182,7 @@ export default definePluginEntry({
         res.setHeader("cache-control", "no-store");
         res.setHeader("content-security-policy", "frame-ancestors 'self'");
         res.setHeader("x-content-type-options", "nosniff");
-        res.end(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="make-it-so-control-token" content="${controlUiToken}"><title>Make It So</title><link rel="stylesheet" crossorigin="anonymous" href="/make-it-so/assets/index.css"></head><body><div id="root"></div><script crossorigin="anonymous" src="/make-it-so/assets/index.js"></script></body></html>`);
+        res.end(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="make-it-so-control-token" content="${controlUiToken}"><title>Make It So</title><link rel="stylesheet" crossorigin="anonymous" href="/make-it-so/assets/index.css"></head><body><div id="root"></div><script type="module" crossorigin="anonymous" src="/make-it-so/assets/index.js"></script></body></html>`);
       },
     });
     api.registerHttpRoute?.({

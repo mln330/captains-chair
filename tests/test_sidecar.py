@@ -384,6 +384,46 @@ def test_sidecar_collects_github_and_workboard_status_concurrently(
     assert repo_result["github_status"]["status"] == "available"
 
 
+def test_sidecar_cached_workboard_status_projects_the_durable_card_mirror(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = repo_config(tmp_path).model_copy(
+        update={"orchestrator": "openclaw", "orchestration_board": "cached-board"}
+    )
+    workers = WorkerAssignments(
+        captain="captain",
+        coder="coder",
+        reviewer="reviewer",
+        tester="tester",
+        ux_reviewer="ux",
+        final_reviewer="final",
+        merger="merger",
+        verifier="verifier",
+    )
+    config = app_config(tmp_path, repo_config(tmp_path)).model_copy(update={
+        "repos": (repo,),
+        "orchestrators": {
+            "openclaw": OpenClawWorkboardConfig(
+                workers=workers,
+                require_live_completion_validation=False,
+            )
+        },
+    })
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+    server = SidecarServer(config_path)
+    card = _workboard_card("review", QueueStatus.DONE, 1).model_dump(mode="json")
+    monkeypatch.setattr(server.state, "orchestration_card_payloads", lambda _repo: [card])
+
+    result = server._cached_workboard_status(repo)
+
+    assert result is not None
+    assert result["status"] == "blocked"
+    assert result["review_cycles"] == 1
+    assert result["review_status"] == "passed"
+    assert result["usage_sync"]["status"] == "cached"
+
+
 def test_sidecar_fast_portfolio_status_skips_expensive_usage_sync(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

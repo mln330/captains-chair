@@ -134,7 +134,8 @@ describe("Make It So OpenClaw registration", () => {
   it("marks embedded UI assets as CORS-enabled for the sandboxed plugin frame", () => {
     const source = readFileSync(resolve(process.cwd(), "src/index.ts"), "utf8");
     expect(source).toContain('<link rel="stylesheet" crossorigin="anonymous"');
-    expect(source).toContain('<script crossorigin="anonymous"');
+    expect(source).toContain('<script type="module" crossorigin="anonymous"');
+    expect(source).toContain('src="/make-it-so/assets/index.js"');
     expect(source).toContain('content-security-policy", "frame-ancestors \'self\'');
     expect(source).toContain('make-it-so-control-token');
   });
