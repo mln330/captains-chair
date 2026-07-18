@@ -148,6 +148,14 @@ def test_workboard_history_preserves_build_review_and_completion_runs() -> None:
     summary = sidecar_module._summarize_workboard(  # pyright: ignore[reportPrivateUsage]
         [
             card("build", "build-run", "implementation", QueueStatus.DONE, 1_000, "coder"),
+            card(
+                "stale-build-card",
+                "build-run",
+                "implementation",
+                QueueStatus.TODO,
+                1_100,
+                "coder",
+            ),
             card("review", "review-run", "review", QueueStatus.DONE, 2_000, "reviewer"),
             card(
                 "repair",
@@ -187,9 +195,11 @@ def test_workboard_history_preserves_build_review_and_completion_runs() -> None:
         "superseded",
         "completed",
     ]
-    assert next(row for row in summary["stage_history"] if row["stage"] == "implementation")[
-        "models"
-    ] == ["codex/gpt-5.6-terra"]
+    implementation = next(
+        row for row in summary["stage_history"] if row["stage"] == "implementation"
+    )
+    assert implementation["models"] == ["codex/gpt-5.6-terra"]
+    assert implementation["active"] == 0
     assert summary["total_loop_count"] == 1
     assert summary["pr_count"] == 1
 

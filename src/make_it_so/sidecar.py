@@ -349,6 +349,7 @@ def _summarize_workboard(
     )
     historical_blockers = sum(card.status == QueueStatus.BLOCKED for card in all_workflow_cards)
     current_blockers = 0 if terminal else counts.get(QueueStatus.BLOCKED.value, 0)
+    latest_card_ids = {card.id for card in latest_cards}
     stage_history: list[dict[str, Any]] = []
     for stage_name in stage_names:
         stage_cards = [card for card in all_workflow_cards if _workflow_stage(card) == stage_name]
@@ -367,7 +368,10 @@ def _summarize_workboard(
                 "stage": stage_name,
                 "total": len(stage_cards),
                 "done": sum(card.status == QueueStatus.DONE for card in stage_cards),
-                "active": sum(card.status in _WORKBOARD_ACTIVE_STATUSES for card in stage_cards),
+                "active": sum(
+                    card.id in latest_card_ids and card.status in _WORKBOARD_ACTIVE_STATUSES
+                    for card in stage_cards
+                ),
                 "blocked": sum(card.status == QueueStatus.BLOCKED for card in stage_cards),
                 "loops": sum(_is_loop_card(card) for card in stage_cards),
                 "models": models,

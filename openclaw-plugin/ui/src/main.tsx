@@ -278,8 +278,8 @@ function stageTelemetry(repo: Repo, stage: string) {
 
 function stageTone(stage?: StageHistory, terminal = false): string {
   if (!stage) return "idle";
-  if ((stage.active ?? 0) > 0) return "active";
   if (terminal && (stage.done ?? 0) > 0) return "done";
+  if ((stage.active ?? 0) > 0) return "active";
   if ((stage.blocked ?? 0) > 0 && (stage.done ?? 0) === 0) return "blocked";
   if ((stage.done ?? 0) > 0) return "done";
   return "idle";
