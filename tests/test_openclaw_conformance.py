@@ -72,6 +72,19 @@ class FakeGateway:
     ) -> CommandResult:
         del cwd, input_text, timeout
         values = list(command)
+        if values and values[0] == "captains_chair":
+            return CommandResult(
+                0,
+                json.dumps(
+                    {
+                        "allowed": True,
+                        "merged": True,
+                        "reason": "all deterministic merge gates passed",
+                        "current_head": "bcdef12",
+                    }
+                ),
+                "",
+            )
         if "sessions" in values:
             session_key = values[values.index("--session-key") + 1]
             if self.session_inspection_error:
@@ -172,6 +185,19 @@ class FakeGateway:
             "automation": {
                 **card.get("metadata", {}).get("automation", {}),
                 "summary": params.get("summary", ""),
+            },
+        }
+        return {"card": card}
+
+    def _workboard_cards_claim(self, params: dict[str, Any]) -> dict[str, Any]:
+        card = self.cards[params["id"]]
+        card["status"] = "running"
+        card["metadata"] = {
+            **card.get("metadata", {}),
+            "claim": {
+                "ownerId": params["ownerId"],
+                "token": params["token"],
+                "attemptId": params.get("attemptId"),
             },
         }
         return {"card": card}

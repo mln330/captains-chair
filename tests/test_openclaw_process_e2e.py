@@ -350,6 +350,15 @@ def test_openclaw_adapter_crosses_real_process_boundary_for_canary(tmp_path: Pat
     executable.write_text(FAKE_OPENCLAW, encoding="utf-8")
     config = OpenClawWorkboardConfig(
         executable=sys.executable,
+        captains_chair_command=(
+            sys.executable,
+            "-c",
+            (
+                "import json; print(json.dumps({'allowed': True, 'merged': True, "
+                "'reason': 'all deterministic merge gates passed', "
+                "'current_head': 'bcdef12'}))"
+            ),
+        ),
         dispatch_timeout_seconds=10,
         workers=WorkerAssignments(
             captain="captain",
@@ -371,6 +380,8 @@ def test_openclaw_adapter_crosses_real_process_boundary_for_canary(tmp_path: Pat
         timeout: int = 60,
     ) -> CommandResult:
         del cwd, input_text
+        if "merge-gate" in command:
+            return run_command(command, timeout=timeout)
         return run_command([*command[:1], str(executable), *command[1:]], timeout=timeout)
 
     adapter = OpenClawWorkboardAdapter(config, process_runner)
@@ -405,6 +416,15 @@ def test_openclaw_adapter_crosses_real_process_boundary_for_full_conformance(
     executable.write_text(FAKE_OPENCLAW_WORKBOARD, encoding="utf-8")
     config = OpenClawWorkboardConfig(
         executable=sys.executable,
+        captains_chair_command=(
+            sys.executable,
+            "-c",
+            (
+                "import json; print(json.dumps({'allowed': True, 'merged': True, "
+                "'reason': 'all deterministic merge gates passed', "
+                "'current_head': 'bcdef12'}))"
+            ),
+        ),
         dispatch_timeout_seconds=10,
         dispatch_strategy="workboard",
         require_live_completion_validation=False,
@@ -428,6 +448,8 @@ def test_openclaw_adapter_crosses_real_process_boundary_for_full_conformance(
         timeout: int = 60,
     ) -> CommandResult:
         del cwd, input_text
+        if "merge-gate" in command:
+            return run_command(command, timeout=timeout)
         return run_command([*command[:1], str(executable), *command[1:]], timeout=timeout)
 
     adapter = OpenClawWorkboardAdapter(config, process_runner)

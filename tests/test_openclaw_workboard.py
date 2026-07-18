@@ -61,6 +61,7 @@ def test_managed_completion_proof_preserves_policy_marker_from_summary() -> None
         '{"state":"aborted"}',
         "session ended: worker exited without proof",
         "session crashed: worker exited without proof",
+        "gateway closed (1006 abnormal closure)",
     ),
 )
 def test_recovery_recognizes_terminal_session_output(output: str) -> None:
@@ -693,6 +694,47 @@ def test_recover_expired_claim_without_session_lookup() -> None:
     assert any("workboard.cards.reclaim" in command for command in commands)
 
 
+def test_recover_stopped_attempt_without_session_lookup() -> None:
+    commands: list[Sequence[str]] = []
+
+    def runner(
+        command: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        input_text: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        del cwd, input_text, timeout
+        commands.append(command)
+        if "workboard.cards.reclaim" in command:
+            return CommandResult(
+                0,
+                json.dumps({"card": {"id": "card-1", "title": "Test", "status": "review"}}),
+                "",
+            )
+        raise AssertionError(f"unexpected command: {command}")
+
+    card = QueueCard(
+        id="card-1",
+        title="Test",
+        status=QueueStatus.RUNNING,
+        metadata={
+            "attempts": [
+                {
+                    "sessionKey": "agent:tester:subagent:workboard-board-card-1",
+                    "status": "stopped",
+                    "error": "gateway closed (1006 abnormal closure)",
+                }
+            ]
+        },
+    )
+
+    assert OpenClawWorkboardAdapter(config(), runner).recover_ended_workers("board", [card]) == (
+        "card-1",
+    )
+    assert not any("sessions" in command for command in commands)
+
+
 def test_worker_model_health_fails_closed_when_agent_inventory_fails() -> None:
     def runner(
         command: Sequence[str],
@@ -1061,6 +1103,153 @@ def test_managed_dispatch_promotes_dependency_ready_card(monkeypatch: pytest.Mon
     assert result["promoted"] == ["child"]
     assert result["completed"] == ["child"]
     assert cards["child"]["status"] == "done"
+
+
+@pytest.mark.parametrize(
+    ("allowed", "expected_status"),
+    ((True, "done"), (False, "blocked")),
+)
+def test_merge_card_uses_deterministic_gate_without_model_worker(
+    allowed: bool,
+    expected_status: str,
+) -> None:
+    head = "6fc76b212ac2011b01eb91b6ad008f9d9c2c6267"
+    cards: dict[str, dict[str, Any]] = {
+        "implementation": {
+            **_managed_card("implementation", status="done", agent_id="coder"),
+            "notes": "Repository: mln330/canary",
+            "labels": ["workflow:current"],
+            "metadata": {
+                "proof": [
+                    {
+                        "status": "passed",
+                        "url": "https://github.com/mln330/canary/pull/1",
+                    }
+                ]
+            },
+        },
+        "final": {
+            **_managed_card("final", status="done", agent_id="final"),
+            "notes": "Repository: mln330/canary",
+            "labels": ["workflow:current", "stage:final_review"],
+            "metadata": {
+                "proof": [
+                    {
+                        "status": "passed",
+                        "note": (
+                            f"AUTO_MERGE_ALLOWED:{head}"
+                            if allowed
+                            else f"READY_FOR_OWNER:{head}"
+                        ),
+                    }
+                ]
+            },
+        },
+        "merge": {
+            **_managed_card("merge", status="todo", agent_id="", parents=("final",)),
+            "notes": "Repository: mln330/canary",
+            "labels": ["workflow:current", "stage:merge"],
+        },
+        "older-implementation": {
+            **_managed_card("older-implementation", status="done", agent_id="coder"),
+            "notes": "Repository: mln330/canary",
+            "labels": ["workflow:older"],
+            "metadata": {
+                "proof": [
+                    {
+                        "status": "passed",
+                        "url": "https://github.com/mln330/canary/pull/2",
+                    }
+                ]
+            },
+        },
+    }
+    calls: list[str] = []
+    gateway_runner = _managed_runner(cards, calls)
+    merge_commands: list[Sequence[str]] = []
+
+    def runner(
+        command: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        input_text: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        if command and command[0] == "captains_chair":
+            merge_commands.append(command)
+            payload = {
+                "allowed": allowed,
+                "merged": allowed,
+                "reason": "all merge gates passed" if allowed else "missing AUTO_MERGE_ALLOWED proof",
+                "current_head": head,
+            }
+            return CommandResult(0 if allowed else 2, json.dumps(payload), "")
+        return gateway_runner(
+            command,
+            cwd=cwd,
+            input_text=input_text,
+            timeout=timeout,
+        )
+
+    result = OpenClawWorkboardAdapter(config(), runner).dispatch("board")
+
+    assert cards["merge"]["status"] == expected_status
+    assert len(merge_commands) == 1
+    assert "merge-gate" in merge_commands[0]
+    assert "--merge" in merge_commands[0]
+    assert merge_commands[0][merge_commands[0].index("--pr") + 1] == "1"
+    assert result["deterministic_merge"]["status"] == ("completed" if allowed else "blocked")
+    if allowed:
+        proof = cards["merge"]["metadata"]["proof"][0]
+        assert proof["model"] == "deterministic/no-model"
+    else:
+        assert "missing AUTO_MERGE_ALLOWED" in cards["merge"]["metadata"]["workerProtocol"][
+            "detail"
+        ]
+
+
+def test_deterministic_merge_command_failure_blocks_claimed_card() -> None:
+    cards: dict[str, dict[str, Any]] = {
+        "final": {
+            **_managed_card("final", status="done", agent_id="final"),
+            "notes": "Repository: mln330/canary",
+            "labels": ["workflow:current", "stage:final_review"],
+            "metadata": {
+                "proof": [
+                    {
+                        "status": "passed",
+                        "note": "AUTO_MERGE_ALLOWED:6fc76b2",
+                        "url": "https://github.com/mln330/canary/pull/1",
+                    }
+                ]
+            },
+        },
+        "merge": {
+            **_managed_card("merge", status="todo", agent_id="", parents=("final",)),
+            "notes": "Repository: mln330/canary",
+            "labels": ["workflow:current", "stage:merge"],
+        },
+    }
+    gateway_runner = _managed_runner(cards, [])
+
+    def runner(
+        command: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        input_text: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        if command and command[0] == "captains_chair":
+            raise OSError("merge executable is unavailable")
+        return gateway_runner(command, cwd=cwd, input_text=input_text, timeout=timeout)
+
+    result = OpenClawWorkboardAdapter(config(), runner).dispatch("board")
+
+    assert result["deterministic_merge"]["status"] == "blocked"
+    assert cards["merge"]["status"] == "blocked"
+    assert "merge executable is unavailable" in cards["merge"]["metadata"]["workerProtocol"][
+        "detail"
+    ]
 
 
 def test_managed_dispatch_idles_when_dependencies_are_not_done() -> None:

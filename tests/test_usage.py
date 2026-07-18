@@ -191,6 +191,53 @@ def test_openclaw_worker_usage_uses_card_context_for_stage_and_model_dimensions(
     ]
 
 
+def test_openclaw_native_workboard_session_uses_durable_card_context(tmp_path: Path) -> None:
+    card_id = "039ef01a-7bc3-4fc9-9834-eaad70f8cf9e"
+    output = json.dumps(
+        {
+            "sessions": [
+                {
+                    "key": (
+                        "agent:github-coder:subagent:"
+                        f"workboard-captains-chair-canary-{card_id}"
+                    ),
+                    "agentId": "github-coder",
+                    "model": "gpt-5.3-codex-spark",
+                    "modelProvider": "codex",
+                    "inputTokens": 80,
+                    "outputTokens": 20,
+                    "totalTokens": 100,
+                }
+            ]
+        }
+    )
+
+    def runner(command: Sequence[str], *, timeout: int = 60, **_: object) -> CommandResult:
+        del command, timeout
+        return CommandResult(0, output, "")
+
+    state = StateStore(tmp_path / "state.db")
+    result = sync_openclaw_sessions(
+        state,
+        repo="mln330/captains-chair-canary",
+        runner=runner,
+        expected_models={"github-coder": "codex/gpt-5.3-codex-spark"},
+        session_context={
+            card_id: {
+                "course_key": "health-cli",
+                "work_package_key": "implementation",
+                "stage": "implementation",
+            }
+        },
+    )
+
+    assert result["sessions_imported"] == 1
+    group = state.usage_summary(repo="mln330/captains-chair-canary")["external_groups"][0]
+    assert group["stage"] == "implementation"
+    assert group["model"] == "gpt-5.3-codex-spark"
+    assert group["total_tokens"] == 100
+
+
 def test_failed_openclaw_session_without_model_usage_is_not_counted_as_unknown(
     tmp_path: Path,
 ) -> None:

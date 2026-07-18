@@ -109,6 +109,11 @@ role used for a work package. Token limits are provider-reported daily limits,
 optionally scoped by model; missing telemetry remains unknown and can be configured
 to block autonomous work rather than being treated as zero.
 
+OpenClaw's native Workboard session keys are correlated to durable card IDs so
+worker calls are attributed to the card's course, work package, stage, and
+configured model. Deterministic merge cards record `deterministic/no-model` and
+consume no model tokens.
+
 Planning is hybrid by design. Use the dashboard's planning brief, the OpenClaw
 `/captains-chair plan OWNER/REPO COURSE_KEY` command, or the Codex
 `captains_chair_planning_session` MCP tool to hand durable course context to the

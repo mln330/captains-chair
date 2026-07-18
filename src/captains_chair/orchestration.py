@@ -21,6 +21,7 @@ from captains_chair.models import (
     RepoConfig,
     StrictModel,
     WorkerAssignments,
+    WorkerModelAssignments,
 )
 from captains_chair.qa import QASelection, select_qa
 
@@ -351,6 +352,7 @@ class OrchestrationPolicy(Protocol):
 
     board_prefix: str
     workers: WorkerAssignments
+    worker_models: WorkerModelAssignments
     max_runtime_seconds: int
     max_retries: int
     require_live_completion_validation: bool
@@ -1217,7 +1219,11 @@ class WorkflowOrchestrator:
                 status=QueueStatus.READY,
                 priority="high",
                 labels=tuple(_bounded_label(label) for label in (*card.labels, retry_label)),
-                agent_id=card.agent_id or _worker_for(stage, self.config),
+                agent_id=(
+                    None
+                    if stage == WorkStage.MERGE
+                    else card.agent_id or _worker_for(stage, self.config)
+                ),
                 source_url=card.source_url,
                 parents=_parent_ids(card),
                 workspace=card.workspace,
@@ -1414,7 +1420,11 @@ def build_workflow(
         key = f"{action_id}:{suffix}"
         stage_workspace = None if stage in {WorkStage.MERGE, WorkStage.POST_MERGE} else workspace
         parents = tuple(root_key if parent is None else f"{action_id}:{parent}" for parent in dependencies)
-        metadata: dict[str, Any] = _course_metadata(decision)
+        metadata: dict[str, Any] = {
+            **_course_metadata(decision),
+            "workerRole": _role_for(stage),
+            "expectedModel": _model_for(stage, config),
+        }
         if qa_profile is not None:
             metadata.update(_qa_metadata(qa_profile, decision.changed_paths))
         qa_labels = (_bounded_label(f"qa:{qa_profile.key}"),) if qa_profile is not None else ()
@@ -1435,7 +1445,9 @@ def build_workflow(
                     qa_profile=qa_profile,
                 ),
                 labels=(*common_labels, *qa_labels, f"stage:{stage.value}"),
-                agent_id=_worker_for(stage, config),
+                # Merge is a deterministic control-plane mutation. Leaving it
+                # unassigned prevents any model worker from bypassing the gate.
+                agent_id=None if stage == WorkStage.MERGE else _worker_for(stage, config),
                 source_url=source_url,
                 parents=parents,
                 workspace=stage_workspace,
@@ -1545,6 +1557,26 @@ def _worker_for(stage: WorkStage, config: OrchestrationPolicy) -> str:
         WorkStage.MERGE: config.workers.merger,
         WorkStage.POST_MERGE: config.workers.verifier,
     }[stage]
+
+
+def _role_for(stage: WorkStage) -> str:
+    return {
+        WorkStage.CONTROL_PLANE_ACTION: "captain",
+        WorkStage.IMPLEMENTATION: "coder",
+        WorkStage.REPAIR: "coder",
+        WorkStage.REVIEW: "reviewer",
+        WorkStage.TEST: "tester",
+        WorkStage.UX_REVIEW: "ux_reviewer",
+        WorkStage.FINAL_REVIEW: "final_reviewer",
+        WorkStage.MERGE: "deterministic_merge",
+        WorkStage.POST_MERGE: "verifier",
+    }[stage]
+
+
+def _model_for(stage: WorkStage, config: OrchestrationPolicy) -> str:
+    if stage == WorkStage.MERGE:
+        return "deterministic/no-model"
+    return str(getattr(config.worker_models, _role_for(stage)))
 
 
 def _source_url(repo: RepoConfig, decision: PlanDecision) -> str:
@@ -1713,6 +1745,19 @@ def _stage_notes(
             f"`QA_PASSED:{qa_profile.key}:<head-sha>`, non-empty `model`, `provider`, and `evidence` fields."
             f"{ui_evidence}\n"
         )
+    completion_policy_note = ""
+    if stage == WorkStage.FINAL_REVIEW:
+        marker = {
+            CompletionPolicy.OWNER_APPROVAL: "READY_FOR_OWNER:<head-sha>",
+            CompletionPolicy.CONTROL_PLANE_COMPLETE: "CONTROL_PLANE_COMPLETE:<head-sha>",
+            CompletionPolicy.AUTO_MERGE: "AUTO_MERGE_ALLOWED:<head-sha>",
+        }[repo.completion_policy]
+        completion_policy_note = (
+            f"Configured completion policy: {repo.completion_policy.value}.\n"
+            f"Required final-review marker: {marker}.\n"
+            f"Autonomous merge enabled: {str(repo.allow_autonomous_merge).lower()}.\n"
+            "A different marker is invalid proof and cannot authorize the next stage.\n"
+        )
     return (
         f"Repository: {repo.full_name}\n"
         f"CAPTAINS_CHAIR workflow: {action_id}\n"
@@ -1720,6 +1765,7 @@ def _stage_notes(
         f"Goal: {decision.summary}\n"
         f"Reason: {decision.reason}\n\n"
         + _workspace_notes(workspace)
+        + completion_policy_note
         + f"Stage contract: {contracts[stage]}{qa_note}\n"
         f"Worker protocol: claim the card through the configured orchestrator, heartbeat during long work, "
         f"and complete it with a concise summary and proof or block it with a specific reason. {blocker_rules}"

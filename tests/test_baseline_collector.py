@@ -208,6 +208,44 @@ def test_analyzed_baseline_runs_checks_batches_models_and_records_artifact(tmp_p
     assert state.usage_summary(repo.full_name)["direct_calls"]["calls"] == 2
 
 
+def test_baseline_records_missing_check_executable_without_aborting(tmp_path: Path) -> None:
+    repo = _repo(tmp_path, checks=("missing-pytest -q",))
+    config = app_config(tmp_path, repo)
+
+    def runner(
+        command: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        input_text: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        del cwd, input_text, timeout
+        if command and command[0] == "missing-pytest":
+            raise FileNotFoundError("missing-pytest was not found")
+        return CommandResult(0, "ok\n", "")
+
+    collector = DeepBaselineCollector(
+        config,
+        StateStore(config.state_dir / "state.db"),
+        cast(GitHubProvider, SnapshotGitHub()),
+        model_policy(),
+        runner=runner,
+    )
+
+    payload, artifact = collector.collect(repo, analyze=False, run_checks=True)
+
+    assert artifact.is_file()
+    assert payload["checks"] == [
+        {
+            "command": "missing-pytest -q",
+            "returncode": None,
+            "stdout_tail": "",
+            "stderr_tail": "missing-pytest was not found",
+            "execution_error": "FileNotFoundError",
+        }
+    ]
+
+
 def test_baseline_uses_named_profile_override(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     config = app_config(tmp_path, repo)

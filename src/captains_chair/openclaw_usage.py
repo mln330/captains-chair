@@ -57,7 +57,7 @@ def sync_openclaw_sessions(
         external_id = str(row.get("key") or row.get("sessionKey") or "").strip()
         if not external_id:
             continue
-        card_id = _worker_card_id(external_id)
+        card_id = _worker_card_id(external_id, session_context)
         context: Mapping[str, str] = (
             session_context.get(card_id, {})
             if session_context is not None and card_id
@@ -151,14 +151,26 @@ def _boolean(value: Any) -> bool | None:
     return value if isinstance(value, bool) else None
 
 
-def _worker_card_id(external_id: str) -> str | None:
+def _worker_card_id(
+    external_id: str,
+    session_context: Mapping[str, Mapping[str, str]] | None = None,
+) -> str | None:
     """Extract the Workboard card ID from a managed OpenClaw session key."""
     parts = external_id.split(":")
     try:
         index = parts.index("worker")
     except ValueError:
-        return None
-    return parts[index + 1] if index + 1 < len(parts) else None
+        index = -1
+    if index >= 0 and index + 1 < len(parts):
+        return parts[index + 1]
+    # OpenClaw's native Workboard dispatcher uses
+    # agent:<agent>:subagent:workboard-<board>-<card-id>. Match against the
+    # durable card inventory instead of trying to split an arbitrary board ID.
+    if session_context:
+        matches = [card_id for card_id in session_context if external_id.endswith(card_id)]
+        if len(matches) == 1:
+            return matches[0]
+    return None
 
 
 def _parse_json(text: str) -> Any:

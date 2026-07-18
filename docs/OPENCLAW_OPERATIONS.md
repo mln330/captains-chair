@@ -78,7 +78,9 @@ captains_chair --config "$CAPTAINS_CHAIR_CONFIG" orchestrate canary --repo OWNER
    targeted checks, repair handling, and useful Discord summaries.
 7. Promote only that repository to `autonomous`, run one bounded implementation
    PR with the configured completion policy, and verify the actual merge and
-   post-merge default-branch checks.
+   post-merge default-branch checks. The merge card must show
+   `deterministic/no-model`; a model-assigned merge card is configuration drift
+   and must not be dispatched.
 8. Install or restore the managed schedules only after the canary and bounded
    autonomous PR pass. Use the dashboard or `openclaw captains-chair schedule`
    commands to inspect, edit, pause, resume, remove, or reconcile them. Pausing

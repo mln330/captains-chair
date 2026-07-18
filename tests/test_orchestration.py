@@ -138,9 +138,15 @@ def test_autonomous_workflow_is_role_separated_and_dependency_gated(tmp_path: Pa
     assert test.parents == (implementation.key,)
     assert set(final.parents) == {review.key, test.key}
     assert merge.parents == (final.key,)
+    assert merge.agent_id is None
+    assert merge.metadata["workerRole"] == "deterministic_merge"
+    assert merge.metadata["expectedModel"] == "deterministic/no-model"
+    assert implementation.metadata["expectedModel"] == "codex/gpt-5.3-codex-spark"
     assert verify.parents == (merge.key,)
     assert "Never merge your own work" in implementation.notes
     assert "USER_SECRET:" in final.notes
+    assert "Configured completion policy: auto_merge." in final.notes
+    assert "Required final-review marker: AUTO_MERGE_ALLOWED:<head-sha>." in final.notes
     assert all("OpenClaw" not in (card.notes or "") for card in workflow.stages)
 
 
