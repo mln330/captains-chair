@@ -14,6 +14,7 @@ from make_it_so.direct_orchestrator import DirectOrchestrator
 from make_it_so.direct_workers import (
     CommandWorkerExecutor,
     WorkerExecutionResult,
+    _codex_usage,  # pyright: ignore[reportPrivateUsage]
     _worker_output_schema,  # pyright: ignore[reportPrivateUsage]
     _worker_prompt,  # pyright: ignore[reportPrivateUsage]
 )
@@ -275,6 +276,25 @@ def test_codex_worker_uses_a_closed_proof_schema() -> None:
     assert proof["additionalProperties"] is False
     assert proof["required"] == ["note", "status", "url"]
     assert set(proof["properties"]) == {"note", "status", "url"}
+
+
+def test_codex_usage_ignores_non_usage_events_and_records_reported_model() -> None:
+    usage = _codex_usage(
+        "\n".join(
+            (
+                "not-json",
+                "[]",
+                '{"type":"message"}',
+                '{"type":"turn.completed","usage":"unavailable","model":"gpt-5.3-codex-spark"}',
+            )
+        ),
+        prompt_bytes=12,
+        response_bytes=7,
+    )
+
+    assert usage.reported_model == "gpt-5.3-codex-spark"
+    assert usage.source == "unreported"
+    assert usage.input_tokens is None
 
 
 def test_direct_claims_are_atomic_under_overlapping_workers(tmp_path: Path) -> None:

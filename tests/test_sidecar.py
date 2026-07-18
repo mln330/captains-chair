@@ -258,6 +258,126 @@ def test_sidecar_imports_direct_codex_workboard_usage(tmp_path: Path) -> None:
     assert summary["external_groups"][0]["model"] == "gpt-5.3-codex-spark"
 
 
+def test_sidecar_worker_receipt_parser_ignores_malformed_comments() -> None:
+    card = QueueCard(
+        id="malformed-receipts",
+        title="Malformed receipts",
+        status=QueueStatus.DONE,
+        metadata={
+            "proof": "not-a-list",
+            "comments": [
+                None,
+                {"body": 123},
+                {"body": "ordinary comment"},
+                {"body": "MAKE_IT_SO_WORKER_EXECUTION:{"},
+                {"body": "MAKE_IT_SO_WORKER_EXECUTION:[]"},
+            ],
+        },
+    )
+
+    assert sidecar_module._card_execution(card) is None  # pyright: ignore[reportPrivateUsage]
+
+
+def test_sidecar_worker_receipt_parser_prefers_proof_execution() -> None:
+    card = QueueCard(
+        id="proof-receipt",
+        title="Proof receipt",
+        status=QueueStatus.DONE,
+        metadata={
+            "proof": [None, {"execution": "invalid"}, {"execution": {"runtime": "codex"}}],
+            "comments": [{"body": "MAKE_IT_SO_WORKER_EXECUTION:{}"}],
+        },
+    )
+
+    assert sidecar_module._card_execution(card) == {  # pyright: ignore[reportPrivateUsage]
+        "runtime": "codex"
+    }
+
+
+def test_sidecar_worker_receipt_parser_handles_absent_collections() -> None:
+    no_comments = QueueCard(
+        id="no-comments",
+        title="No comments",
+        status=QueueStatus.DONE,
+        metadata={"proof": [], "comments": "not-a-list"},
+    )
+    empty_comments = no_comments.model_copy(
+        update={"id": "empty-comments", "metadata": {"proof": [], "comments": []}}
+    )
+
+    assert sidecar_module._card_execution(no_comments) is None  # pyright: ignore[reportPrivateUsage]
+    assert sidecar_module._card_execution(empty_comments) is None  # pyright: ignore[reportPrivateUsage]
+
+
+def test_sidecar_card_model_prefers_receipt_then_configured_fallbacks() -> None:
+    receipt = QueueCard(
+        id="receipt-model",
+        title="Receipt model",
+        status=QueueStatus.DONE,
+        metadata={
+            "comments": [
+                {
+                    "body": "MAKE_IT_SO_WORKER_EXECUTION:"
+                    + json.dumps({"runtime": "codex", "requested_model": "gpt-5.3-codex-spark"})
+                }
+            ]
+        },
+    )
+    configured = receipt.model_copy(update={"id": "configured", "agent_id": "coder", "metadata": {}})
+    deterministic = receipt.model_copy(
+        update={"id": "merge", "agent_id": "make-it-so-managed:deterministic-merge:1", "metadata": {}}
+    )
+    unknown = receipt.model_copy(update={"id": "unknown", "metadata": {}})
+
+    assert sidecar_module._card_model(receipt, {}) == "gpt-5.3-codex-spark"  # pyright: ignore[reportPrivateUsage]
+    assert sidecar_module._card_model(configured, {"coder": "codex/gpt-5.6-terra"}) == (  # pyright: ignore[reportPrivateUsage]
+        "codex/gpt-5.6-terra"
+    )
+    assert sidecar_module._card_model(deterministic, {}) == "deterministic gate"  # pyright: ignore[reportPrivateUsage]
+    assert sidecar_module._card_model(unknown, {}) is None  # pyright: ignore[reportPrivateUsage]
+
+
+def test_sidecar_card_activity_handles_mixed_workboard_timestamps() -> None:
+    empty = QueueCard(id="empty", title="Empty", status=QueueStatus.TODO)
+    active = QueueCard(
+        id="active",
+        title="Active",
+        status=QueueStatus.RUNNING,
+        metadata={
+            "automation": {"createdAt": 1000, "lastDispatchAt": "invalid"},
+            "attempts": "not-a-list",
+            "comments": [None, {"createdAt": 2000, "startedAt": "invalid", "endedAt": 3000}],
+        },
+    )
+
+    assert sidecar_module._card_activity_timestamp(empty) == 0  # pyright: ignore[reportPrivateUsage]
+    assert sidecar_module._card_activity_time(empty) is None  # pyright: ignore[reportPrivateUsage]
+    assert sidecar_module._card_activity_timestamp(active) == 3000  # pyright: ignore[reportPrivateUsage]
+    assert sidecar_module._card_activity_time(active) == "1970-01-01T00:00:03+00:00"  # pyright: ignore[reportPrivateUsage]
+
+
+def test_sidecar_card_summary_uses_automation_then_comments_then_title() -> None:
+    automation = QueueCard(
+        id="automation",
+        title="Title",
+        status=QueueStatus.DONE,
+        metadata={"automation": {"summary": "  automated  "}},
+    )
+    comment = automation.model_copy(
+        update={
+            "id": "comment",
+            "metadata": {"automation": {"summary": 123}, "comments": [None, {"body": "  comment  "}]},
+        }
+    )
+    title = automation.model_copy(
+        update={"id": "title", "metadata": {"comments": [{"body": "   "}, None]}}
+    )
+
+    assert sidecar_module._card_summary(automation) == "automated"  # pyright: ignore[reportPrivateUsage]
+    assert sidecar_module._card_summary(comment) == "comment"  # pyright: ignore[reportPrivateUsage]
+    assert sidecar_module._card_summary(title) == "Title"  # pyright: ignore[reportPrivateUsage]
+
+
 def test_sidecar_does_not_mark_workboard_with_active_cards_completed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

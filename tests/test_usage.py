@@ -676,6 +676,22 @@ def test_usage_dimensions_keep_identical_model_routes_separate_by_date(tmp_path:
     }
 
 
+@pytest.mark.parametrize(
+    ("group", "expected"),
+    (
+        ({"total_tokens": 0, "input_tokens": 9}, 0),
+        ({"total_tokens": 3.0, "input_tokens": 9}, 3),
+        ({"total_tokens": False, "input_tokens": 7, "cached_input_tokens": 100, "output_tokens": 3}, 10),
+        ({"total_tokens": -1, "input_tokens": 2.0, "output_tokens": None}, 2),
+        ({"input_tokens": True, "output_tokens": -2}, 0),
+    ),
+)
+def test_dimension_tokens_never_double_count_cached_input(
+    group: dict[str, Any], expected: int
+) -> None:
+    assert state_module._dimension_tokens(group) == expected  # pyright: ignore[reportPrivateUsage]
+
+
 def test_usage_summary_ignores_corrupt_attempt_envelopes(tmp_path: Path) -> None:
     path = tmp_path / "state.db"
     state = StateStore(path)
