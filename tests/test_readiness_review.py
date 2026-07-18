@@ -135,3 +135,6 @@ def test_prompt_includes_hash_bound_live_evidence_and_collection_guidance() -> N
     assert '"default_branch_sha": "abc123"' in prompt
     assert "authenticated machine evidence" in prompt
     assert "do not treat successfully collected facts as locally unverifiable" in prompt
+    assert "greenfield course" in prompt
+    assert "repository_lifecycle.provisioning_enabled" in prompt
+    assert "control_plane_capabilities" in prompt

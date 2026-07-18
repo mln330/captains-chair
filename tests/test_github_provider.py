@@ -72,6 +72,8 @@ def test_readiness_evidence_collects_live_proof_without_issue_or_pr_bodies(tmp_p
     ) -> CommandResult:
         del cwd, input_text, timeout
         values = list(command)
+        if values[1:3] == ["auth", "status"]:
+            return CommandResult(0, "github.com\n", "")
         if values[1:3] == ["repo", "view"]:
             return json_result({"nameWithOwner": "example/project", "defaultBranchRef": {"name": "main"}})
         if values[1:3] == ["issue", "list"]:
@@ -103,6 +105,8 @@ def test_readiness_evidence_collects_live_proof_without_issue_or_pr_bodies(tmp_p
     evidence = GhGitHubProvider(runner, cwd=tmp_path).readiness_evidence(repo(tmp_path))
 
     assert evidence["default_branch_sha"] == "main-sha"
+    assert evidence["github_auth"] == {"authenticated": True}
+    assert evidence["repository_lifecycle"]["snapshot_expected_before_approval"] is True
     assert evidence["required_checks"] == ["build"]
     assert evidence["pull_requests"][0]["review_threads"]["unresolved_blocking"] == 0
     serialized = json.dumps(evidence)
@@ -111,7 +115,11 @@ def test_readiness_evidence_collects_live_proof_without_issue_or_pr_bodies(tmp_p
     assert evidence["collection_errors"] == {}
 
 
-def test_gate_filters_required_checks_and_counts_only_active_review_threads(tmp_path: Path) -> None:
+@pytest.mark.parametrize("include_security", (False, True))
+def test_gate_requires_complete_required_check_coverage_and_counts_active_threads(
+    tmp_path: Path,
+    include_security: bool,
+) -> None:
     def runner(
         command: Sequence[str],
         *,
@@ -131,6 +139,17 @@ def test_gate_filters_required_checks_and_counts_only_active_review_threads(tmp_
                     "isDraft": False,
                     "statusCheckRollup": [
                         {"name": "build", "status": "COMPLETED", "conclusion": "SUCCESS"},
+                        *(
+                            [
+                                {
+                                    "name": "security",
+                                    "status": "COMPLETED",
+                                    "conclusion": "SUCCESS",
+                                }
+                            ]
+                            if include_security
+                            else []
+                        ),
                         {"name": "optional", "status": "COMPLETED", "conclusion": "FAILURE"},
                     ],
                 }
@@ -160,10 +179,48 @@ def test_gate_filters_required_checks_and_counts_only_active_review_threads(tmp_
     gate = GhGitHubProvider(runner, cwd=tmp_path).gate(repo(tmp_path), 12, "head-12")
 
     assert gate.head_sha == "head-12"
-    assert gate.checks_green
-    assert [check.name for check in gate.required_checks] == ["build"]
+    assert gate.checks_green is include_security
+    assert [(check.name, check.status) for check in gate.required_checks] == [
+        ("build", "COMPLETED"),
+        ("security", "COMPLETED" if include_security else "MISSING"),
+    ]
     assert gate.unresolved_threads == 1
     assert gate.review_head_sha == "head-12"
+
+
+def test_gate_allows_empty_rollup_when_no_checks_are_required(tmp_path: Path) -> None:
+    def runner(
+        command: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        input_text: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        del cwd, input_text, timeout
+        values = list(command)
+        if values[1:3] == ["pr", "view"]:
+            return json_result(
+                {
+                    "number": 13,
+                    "headRefOid": "head-13",
+                    "mergeable": "MERGEABLE",
+                    "mergeStateStatus": "CLEAN",
+                    "isDraft": False,
+                    "statusCheckRollup": [],
+                }
+            )
+        if values[1:3] == ["api", "repos/example/project/branches/main/protection/required_status_checks"]:
+            return json_result({"contexts": []})
+        if values[1:3] == ["api", "graphql"]:
+            return json_result(
+                {"data": {"repository": {"pullRequest": {"reviewThreads": {"nodes": []}}}}}
+            )
+        raise AssertionError(f"unexpected command: {values}")
+
+    gate = GhGitHubProvider(runner, cwd=tmp_path).gate(repo(tmp_path), 13, "head-13")
+
+    assert gate.checks_green
+    assert gate.required_checks == ()
 
 
 def test_pull_request_files_are_collected_as_typed_paths(tmp_path: Path) -> None:
@@ -193,7 +250,14 @@ def test_pull_request_files_are_collected_as_typed_paths(tmp_path: Path) -> None
 
 @pytest.mark.parametrize(
     ("stderr", "expected"),
-    (("HTTP 404: Not Found", "empty"), ("HTTP 500: server error", "error")),
+    (
+        ("HTTP 404: Not Found", "empty"),
+        (
+            "Upgrade to GitHub Pro or make this repository public to enable this feature.",
+            "empty",
+        ),
+        ("HTTP 500: server error", "error"),
+    ),
 )
 def test_required_check_lookup_distinguishes_unprotected_branch_from_provider_failure(
     tmp_path: Path, stderr: str, expected: str

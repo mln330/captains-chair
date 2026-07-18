@@ -253,6 +253,9 @@ def test_engine_runs_readiness_reviewer_and_persists_awaiting_approval(tmp_path:
     assert CourseStore(tmp_path).load(value.key).status == CourseStatus.AWAITING_APPROVAL
     usage = state.usage_summary(repo=repo.full_name)
     assert usage["direct_calls"]["calls"] == 1
+    dimensions = state.usage_dimensions(repo.full_name)
+    assert dimensions[0]["course_key"] == value.key
+    assert dimensions[0]["stage"] == "readiness_review"
 
 
 def test_run_model_records_failed_attempts_and_usage_suppression(tmp_path: Path) -> None:

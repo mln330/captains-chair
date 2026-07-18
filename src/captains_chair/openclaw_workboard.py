@@ -195,13 +195,153 @@ class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
         return self._card_response("workboard.cards.comment", {"id": card_id, "body": body})
 
     def dispatch(self, board_id: str) -> dict[str, Any]:
+        merge_result = self._dispatch_deterministic_merge(board_id)
         if self.config.dispatch_strategy == "managed_single":
-            return self._managed_single_dispatch(board_id)
-        return self._rpc(
-            "workboard.cards.dispatch",
-            {"boardId": board_id},
-            timeout=self.config.dispatch_timeout_seconds,
+            result = self._managed_single_dispatch(board_id)
+        else:
+            result = self._rpc(
+                "workboard.cards.dispatch",
+                {"boardId": board_id},
+                timeout=self.config.dispatch_timeout_seconds,
+            )
+        if merge_result is None:
+            return result
+        return {**result, "deterministic_merge": merge_result}
+
+    def _dispatch_deterministic_merge(self, board_id: str) -> dict[str, Any] | None:
+        """Execute one eligible merge card without granting merge authority to a model."""
+        cards = self.list_cards(board_id)
+        assigned_merge_cards = [
+            card
+            for card in cards
+            if "stage:merge" in card.labels
+            and card.status in {QueueStatus.TODO, QueueStatus.READY}
+            and not card.metadata.get("archivedAt")
+            and card.agent_id
+        ]
+        for card in assigned_merge_cards:
+            self.reassign_card(
+                card.id,
+                agent_id="",
+                status=card.status,
+                reset_failures=False,
+                reason="TECHNICAL_migrate_merge_card_to_deterministic_control_plane",
+            )
+        if assigned_merge_cards:
+            cards = self.list_cards(board_id)
+        by_id = {card.id: card for card in cards}
+        merge_card = next(
+            (
+                card
+                for card in cards
+                if "stage:merge" in card.labels
+                and card.status in {QueueStatus.TODO, QueueStatus.READY}
+                and not card.metadata.get("archivedAt")
+                and _parent_ids(card)
+                and all(
+                    parent_id in by_id and by_id[parent_id].status == QueueStatus.DONE
+                    for parent_id in _parent_ids(card)
+                )
+            ),
+            None,
         )
+        if merge_card is None:
+            return None
+        workflow_cards = _workflow_scope(cards, merge_card)
+        repo = _repository_name(workflow_cards)
+        pr_numbers = _pull_request_numbers(workflow_cards, repo)
+        final_cards = [
+            by_id[parent_id]
+            for parent_id in _parent_ids(merge_card)
+            if parent_id in by_id and "stage:final_review" in by_id[parent_id].labels
+        ]
+        if repo is None or len(pr_numbers) != 1 or len(final_cards) != 1:
+            return {
+                "status": "waiting",
+                "card": merge_card.id,
+                "reason": "deterministic merge context is incomplete or ambiguous",
+            }
+        if merge_card.status == QueueStatus.TODO:
+            merge_card = self.reclaim_card(
+                merge_card.id,
+                status=QueueStatus.READY,
+                reason="TECHNICAL_deterministic_merge_dependencies_satisfied",
+            )
+        token = uuid4().hex
+        attempt_id = f"deterministic-merge:{merge_card.id}:{uuid4().hex}"
+        owner_id = f"captains-chair-managed:{attempt_id}"
+        claimed = self.claim_card(
+            merge_card.id,
+            owner_id=owner_id,
+            token=token,
+            attempt_id=attempt_id,
+        )
+        pr_number = next(iter(pr_numbers))
+        final_card = final_cards[0]
+        command = [
+            *self.config.captains_chair_command,
+            "merge-gate",
+            "--repo",
+            repo,
+            "--pr",
+            str(pr_number),
+            "--final-card",
+            final_card.id,
+            "--merge",
+        ]
+        try:
+            result = self.runner(command, timeout=self.config.dispatch_timeout_seconds)
+        except (OSError, TimeoutError) as exc:
+            reason = f"deterministic merge command failed: {str(exc).strip()[:1400]}"
+            self.block_claimed_card(
+                claimed.id,
+                owner_id=owner_id,
+                token=token,
+                reason=f"TECHNICAL: {reason}",
+            )
+            return {"status": "blocked", "card": claimed.id, "reason": reason}
+        payload: dict[str, Any] = {}
+        with suppress(ValueError):
+            decoded = decode_first_json(result.stdout)
+            if isinstance(decoded, dict):
+                payload = cast(dict[str, Any], decoded)
+        if result.returncode or payload.get("allowed") is not True or payload.get("merged") is not True:
+            reason = str(
+                payload.get("reason")
+                or result.stderr
+                or result.stdout
+                or "deterministic merge gate did not authorize the mutation"
+            ).strip()[:1500]
+            self.block_claimed_card(
+                claimed.id,
+                owner_id=owner_id,
+                token=token,
+                reason=f"TECHNICAL: deterministic merge gate denied: {reason}",
+            )
+            return {"status": "blocked", "card": claimed.id, "reason": reason}
+        pr_url = f"https://github.com/{repo}/pull/{pr_number}"
+        current_head = str(payload.get("current_head") or "").strip()
+        proof_note = f"Deterministic merge gate authorized and merged PR #{pr_number}"
+        if current_head:
+            proof_note += f" at reviewed head {current_head}"
+        proof_note += "; Model: deterministic/no-model; Provider: captains-chair"
+        self.complete_claimed_card(
+            claimed.id,
+            owner_id=owner_id,
+            token=token,
+            summary=f"Merged PR #{pr_number} through the deterministic Captain's Chair gate.",
+            proof=(
+                {
+                    "status": "passed",
+                    "label": "Deterministic autonomous merge",
+                    "note": proof_note,
+                    "url": pr_url,
+                    "model": "deterministic/no-model",
+                    "provider": "captains-chair",
+                },
+            ),
+        )
+        return {"status": "completed", "card": claimed.id, "pr": pr_number, "url": pr_url}
 
     def _managed_single_dispatch(self, board_id: str) -> dict[str, Any]:
         """Dispatch one Workboard card without invoking OpenClaw's board dispatcher."""
@@ -215,6 +355,7 @@ class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
                 if card.status == QueueStatus.READY
                 and not card.metadata.get("archivedAt")
                 and card.agent_id
+                and "stage:merge" not in card.labels
             ),
             None,
         )
@@ -229,8 +370,10 @@ class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
                 "count": len(promoted),
             }
         token = uuid4().hex
-        owner_id = f"captains-chair-managed:{uuid4().hex}"
         attempt_id = f"managed:{ready.id}:{uuid4().hex}"
+        # Keep the attempt in the durable claim owner so a later reconcile can
+        # reconstruct and inspect the exact OpenClaw session after a crash.
+        owner_id = f"captains-chair-managed:{attempt_id}"
         claimed = self.claim_card(ready.id, owner_id=owner_id, token=token, attempt_id=attempt_id)
         completed = False
         blocked = False
@@ -271,7 +414,7 @@ class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
                         owner_id=owner_id,
                         token=token,
                         summary=result.summary,
-                        proof=_managed_completion_proof(result.proof),
+                        proof=_managed_completion_proof(result.proof, result.summary),
                     )
                     completed = True
                 else:
@@ -390,6 +533,14 @@ class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
             if card.status != QueueStatus.RUNNING or card.metadata.get("archivedAt"):
                 continue
             try:
+                if _latest_attempt_ended(card):
+                    self.reclaim_card(
+                        card.id,
+                        status=QueueStatus.REVIEW,
+                        reason="TECHNICAL_worker_attempt_ended_without_CAPTAINS_CHAIR_completion_proof",
+                    )
+                    recovered.append(card.id)
+                    continue
                 if _claim_expired(card):
                     self.reclaim_card(
                         card.id,
@@ -626,6 +777,7 @@ def decode_openclaw_json(value: str) -> object:
 
 _TERMINAL_SESSION_OUTPUT = re.compile(
     r"(?:session[. _-](?:ended|terminated|failed|crashed|aborted|killed)|"
+    r"gateway\s+closed\s*\(1006\s+abnormal\s+closure\)|"
     r"[\"']?(?:status|state|event|type|name)[\"']?\s*[=:]\s*[\"']?(?:ended|completed|terminated|closed|failed|error|crashed|aborted|killed)[\"']?|"
     r"[\"'](?:ended|terminated|failed|crashed|aborted|killed)[\"']\s*[=:]\s*true)",
     re.IGNORECASE,
@@ -652,13 +804,20 @@ def _bounded_label(value: str) -> str:
 
 def _session_key(card: QueueCard) -> str | None:
     attempts = card.metadata.get("attempts")
-    if not isinstance(attempts, list):
-        return None
-    for item in reversed(cast(list[object], attempts)):
-        if isinstance(item, dict):
-            value = cast(dict[str, object], item).get("sessionKey")
-            if value:
-                return str(value)
+    if isinstance(attempts, list):
+        for item in reversed(cast(list[object], attempts)):
+            if isinstance(item, dict):
+                value = cast(dict[str, object], item).get("sessionKey")
+                if value:
+                    return str(value)
+    claim_value = card.metadata.get("claim")
+    if isinstance(claim_value, dict) and card.agent_id:
+        owner_id = cast(dict[str, object], claim_value).get("ownerId")
+        prefix = "captains-chair-managed:"
+        if isinstance(owner_id, str) and owner_id.startswith(prefix):
+            attempt_id = owner_id.removeprefix(prefix).strip()
+            if attempt_id:
+                return f"agent:{card.agent_id}:captains-chair:worker:{card.id}:{attempt_id}"
     return None
 
 
@@ -699,7 +858,9 @@ def _runtime_limit(card: QueueCard, default: int) -> int:
     return default
 
 
-def _managed_completion_proof(proof: tuple[dict[str, Any], ...]) -> tuple[dict[str, Any], ...]:
+def _managed_completion_proof(
+    proof: tuple[dict[str, Any], ...], summary: str = ""
+) -> tuple[dict[str, Any], ...]:
     """Collapse model-supplied evidence to the single proof record OpenClaw accepts."""
     if not proof:
         return ()
@@ -720,6 +881,12 @@ def _managed_completion_proof(proof: tuple[dict[str, Any], ...]) -> tuple[dict[s
             for field in ("note", "label", "proof_note", "command")
             if str(item.get(field) or "").strip()
         )
+    marker = re.search(
+        r"\b(?:READY_FOR_OWNER|CONTROL_PLANE_COMPLETE|AUTO_MERGE_ALLOWED):[0-9a-fA-F]{7,64}\b",
+        summary,
+    )
+    if marker and marker.group(0) not in note:
+        note = f"{note} {marker.group(0)}".strip()
     return (
         {
             **primary,
@@ -728,6 +895,59 @@ def _managed_completion_proof(proof: tuple[dict[str, Any], ...]) -> tuple[dict[s
             **({"evidence": list(proof)} if len(proof) > 1 else {}),
         },
     )
+
+
+def _latest_attempt_ended(card: QueueCard) -> bool:
+    attempts = card.metadata.get("attempts")
+    if not isinstance(attempts, list):
+        return False
+    latest: dict[str, object] | None = None
+    for item in reversed(cast(list[object], attempts)):
+        if isinstance(item, dict):
+            latest = cast(dict[str, object], item)
+            break
+    if latest is None:
+        return False
+    status = str(latest.get("status") or "").strip().lower()
+    return status in {"stopped", "failed", "cancelled", "canceled", "timed_out", "expired"}
+
+
+def _repository_name(cards: list[QueueCard]) -> str | None:
+    pattern = re.compile(r"(?m)^Repository:\s*([^/\s]+/[^\s]+)\s*$")
+    values = {
+        match.group(1).strip()
+        for card in cards
+        for match in pattern.finditer(card.notes or "")
+    }
+    return next(iter(values)) if len(values) == 1 else None
+
+
+def _workflow_scope(cards: list[QueueCard], target: QueueCard) -> list[QueueCard]:
+    workflow_labels = [label for label in target.labels if label.startswith("workflow:")]
+    if len(workflow_labels) != 1:
+        return cards
+    workflow_label = workflow_labels[0]
+    return [card for card in cards if workflow_label in card.labels]
+
+
+def _pull_request_numbers(cards: list[QueueCard], repo: str | None) -> set[int]:
+    if repo is None:
+        return set()
+    pattern = re.compile(
+        rf"https?://github\.com/{re.escape(repo)}/pull/(\d+)\b",
+        re.IGNORECASE,
+    )
+    numbers: set[int] = set()
+    for card in cards:
+        evidence = "\n".join(
+            (
+                card.source_url or "",
+                card.notes or "",
+                json.dumps(card.metadata, sort_keys=True, default=str),
+            )
+        )
+        numbers.update(int(match.group(1)) for match in pattern.finditer(evidence))
+    return numbers
 
 
 def _worker_models(config: OpenClawWorkboardConfig) -> dict[str, str]:

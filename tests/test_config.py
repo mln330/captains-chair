@@ -37,6 +37,43 @@ def test_checked_in_configuration_schema_matches_typed_models() -> None:
     assert checked_in == AppConfig.model_json_schema()
 
 
+def test_openclaw_workboard_rejects_model_worker_merge_execution() -> None:
+    with pytest.raises(ValueError, match="requires deterministic merge execution"):
+        OpenClawWorkboardConfig(
+            merge_execution="worker",
+            workers=WorkerAssignments(
+                captain="captain",
+                coder="coder",
+                reviewer="reviewer",
+                tester="tester",
+                ux_reviewer="ux",
+                final_reviewer="final",
+                merger="merger",
+                verifier="verifier",
+            ),
+        )
+
+
+@pytest.mark.parametrize("command", ((), ("captains_chair", "")))
+def test_openclaw_workboard_rejects_empty_control_plane_command(
+    command: tuple[str, ...],
+) -> None:
+    with pytest.raises(ValueError, match="must contain non-empty argv items"):
+        OpenClawWorkboardConfig(
+            captains_chair_command=command,
+            workers=WorkerAssignments(
+                captain="captain",
+                coder="coder",
+                reviewer="reviewer",
+                tester="tester",
+                ux_reviewer="ux",
+                final_reviewer="final",
+                merger="merger",
+                verifier="verifier",
+            ),
+        )
+
+
 @pytest.mark.parametrize(
     ("schema_name", "model"),
     (
@@ -303,22 +340,78 @@ def test_external_runtime_config_accepts_plugin_owned_kind_and_settings(tmp_path
     assert selected.settings == {"workspace_mode": "disposable"}
 
 
-def test_public_example_routes_bounded_implementation_roles_to_codex_spark() -> None:
+def test_public_example_uses_documented_balanced_model_routes() -> None:
     example = Path(__file__).parents[1] / "config" / "config.example.yaml"
 
     configured = load_config(example)
 
+    assert configured.models.baseline.primary.model == "codex/gpt-5.6-terra"
+    assert configured.models.planner.primary.model == "codex/gpt-5.6-terra"
+    assert configured.models.planner.primary.thinking == "medium"
     assert configured.models.coder.primary.model == "codex/gpt-5.3-codex-spark"
     assert configured.models.coder.primary.thinking == "medium"
     assert configured.models.tester is not None
-    assert configured.models.tester.primary.model == "codex/gpt-5.3-codex-spark"
+    assert configured.models.tester.primary.model == "codex/gpt-5.6-luna"
     assert configured.models.ux_reviewer is not None
-    assert configured.models.ux_reviewer.primary.model == "codex/gpt-5.3-codex-spark"
+    assert configured.models.ux_reviewer.primary.model == "codex/gpt-5.6-terra"
     assert configured.harness_model_overrides["codex"].coder.primary.model == "gpt-5.3-codex-spark"
     assert configured.harness_model_overrides["codex"].tester is not None
-    assert configured.harness_model_overrides["codex"].tester.primary.model == "gpt-5.3-codex-spark"
+    assert configured.harness_model_overrides["codex"].tester.primary.model == "gpt-5.6-luna"
     assert configured.harness_model_overrides["codex"].ux_reviewer is not None
-    assert configured.harness_model_overrides["codex"].ux_reviewer.primary.model == "gpt-5.3-codex-spark"
+    assert configured.harness_model_overrides["codex"].ux_reviewer.primary.model == "gpt-5.6-terra"
+    openclaw = configured.harness_model_overrides["openclaw"]
+    assert openclaw.baseline.primary.model == "codex/gpt-5.6-terra"
+    assert openclaw.baseline.primary.agent == "github-captain"
+    assert openclaw.coder.primary.model == "codex/gpt-5.6-terra"
+    assert openclaw.coder.primary.agent == "github-coder"
+    assert openclaw.tester is not None
+    assert openclaw.tester.primary.model == "codex/gpt-5.6-luna"
+    assert openclaw.tester.primary.agent == "github-tester"
+    assert openclaw.final_reviewer.primary.model == "codex/gpt-5.6-sol"
+    assert openclaw.final_reviewer.primary.agent == "github-final"
+    assert openclaw.final_reviewer.allow_fallback is False
+    assert openclaw.profiles["strategist"].primary.model == "codex/gpt-5.6-sol"
+    assert openclaw.profiles["strategist"].primary.agent == "github-final"
+    assert openclaw.profiles["fast_coder"].primary.model == "codex/gpt-5.6-terra"
+    assert openclaw.profiles["qa_assistant"].primary.model == "codex/gpt-5.6-luna"
+    assert configured.model_policy("openclaw").profiles["readiness_reviewer"].primary.model == "codex/gpt-5.6-terra"
+    documented_profiles = {
+        "strategist": ("codex/gpt-5.6-sol", "high"),
+        "course_verifier": ("codex/gpt-5.6-sol", "high"),
+        "baseline_analyst": ("codex/gpt-5.6-terra", "high"),
+        "subsystem_analyst": ("codex/gpt-5.6-luna", "medium"),
+        "readiness_reviewer": ("codex/gpt-5.6-terra", "high"),
+        "decomposer": ("codex/gpt-5.6-terra", "medium"),
+        "package_planner": ("codex/gpt-5.6-terra", "medium"),
+        "fast_coder": ("codex/gpt-5.3-codex-spark", "medium"),
+        "complex_coder": ("codex/gpt-5.6-sol", "high"),
+        "focused_coder": ("codex/gpt-5.3-codex-spark", "medium"),
+        "local_coder": ("ollama/qualified-local", "medium"),
+        "code_reviewer": ("codex/gpt-5.6-terra", "high"),
+        "security_reviewer": ("codex/gpt-5.6-terra", "high"),
+        "qa_assistant": ("codex/gpt-5.6-luna", "medium"),
+        "ui_qa_reviewer": ("codex/gpt-5.6-terra", "medium"),
+        "recovery_planner": ("codex/gpt-5.6-terra", "high"),
+        "summarizer": ("codex/gpt-5.6-luna", "low"),
+    }
+    assert {
+        key: (profile.primary.model, profile.primary.thinking)
+        for key, profile in configured.models.profiles.items()
+    } == documented_profiles
+    assert configured.models.comment_adjudicator is not None
+    assert configured.models.comment_adjudicator.primary.model == "codex/gpt-5.6-terra"
+
+    worker_models = configured.orchestrators["openclaw-workers"].worker_models
+    assert worker_models.model_dump() == {
+        "captain": "codex/gpt-5.6-terra",
+        "coder": "codex/gpt-5.6-terra",
+        "reviewer": "codex/gpt-5.6-terra",
+        "tester": "codex/gpt-5.6-luna",
+        "ux_reviewer": "codex/gpt-5.6-terra",
+        "final_reviewer": "codex/gpt-5.6-sol",
+        "merger": "codex/gpt-5.6-terra",
+        "verifier": "codex/gpt-5.6-terra",
+    }
 
 
 def test_model_route_rejects_unsupported_effort_and_execution_mode() -> None:

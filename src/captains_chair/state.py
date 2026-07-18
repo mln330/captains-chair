@@ -75,6 +75,99 @@ ALLOWED_TRANSITIONS: dict[RunState, frozenset[RunState]] = {
     ),
 }
 
+_ATTEMPT_TOKEN_FIELDS = (
+    "input_tokens",
+    "cached_input_tokens",
+    "cache_write_tokens",
+    "reasoning_tokens",
+    "output_tokens",
+    "total_tokens",
+)
+
+
+def _direct_attempt_groups(rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
+    """Attribute direct telemetry to the model that actually made each attempt."""
+    grouped: dict[tuple[str, ...], dict[str, Any]] = {}
+    known_fields: dict[tuple[str, ...], set[str]] = {}
+    for row in rows:
+        try:
+            attempts = json.loads(str(row["attempts_json"]))
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(attempts, list):
+            continue
+        for attempt_index, raw_attempt in enumerate(cast(list[Any], attempts)):
+            if not isinstance(raw_attempt, dict):
+                continue
+            attempt = cast(dict[str, Any], raw_attempt)
+            model = str(attempt.get("model") or row["resolved_model"] or "unknown")
+            stage = str(row["stage"] or row["role"])
+            key = (
+                str(row["repo"]),
+                str(row["runtime"]),
+                str(row["role"]),
+                str(row["course_key"] or ""),
+                str(row["work_package_key"] or ""),
+                stage,
+                model,
+                str(row["created_at"])[:10],
+            )
+            item = grouped.setdefault(
+                key,
+                {
+                    "repo": key[0],
+                    "runtime": key[1],
+                    "role": key[2],
+                    "course_key": row["course_key"],
+                    "work_package_key": row["work_package_key"],
+                    "stage": key[5],
+                    "model": key[6],
+                    "date": key[7],
+                    "calls": 0,
+                    "fallback_attempts": 0,
+                    "model_mismatch_attempts": 0,
+                    "measured_calls": 0,
+                    "unknown_calls": 0,
+                    "breakdown_calls": 0,
+                    "aggregate_only_calls": 0,
+                    "aggregate_only_tokens": 0,
+                    "prompt_bytes": 0,
+                    "response_bytes": 0,
+                    "duration_ms": 0,
+                    **{field: None for field in _ATTEMPT_TOKEN_FIELDS},
+                },
+            )
+            known = known_fields.setdefault(key, set())
+            item["calls"] += 1
+            if attempt_index > 0:
+                item["fallback_attempts"] += 1
+            if "model route mismatch" in str(attempt.get("error") or ""):
+                item["model_mismatch_attempts"] += 1
+            token_values = {field: attempt.get(field) for field in _ATTEMPT_TOKEN_FIELDS}
+            has_telemetry = any(value is not None for value in token_values.values())
+            if has_telemetry:
+                item["measured_calls"] += 1
+            else:
+                item["unknown_calls"] += 1
+            if token_values["input_tokens"] is not None and token_values["output_tokens"] is not None:
+                item["breakdown_calls"] += 1
+            elif token_values["total_tokens"] is not None:
+                item["aggregate_only_calls"] += 1
+                item["aggregate_only_tokens"] += int(token_values["total_tokens"])
+            for field, value in token_values.items():
+                if value is not None:
+                    item[field] = int(item[field] or 0) + int(value)
+                    known.add(field)
+            item["prompt_bytes"] += int(attempt.get("prompt_bytes", 0) or 0)
+            item["response_bytes"] += int(attempt.get("response_bytes", 0) or 0)
+            item["duration_ms"] += int(attempt.get("duration_ms", 0) or 0)
+    for key, item in grouped.items():
+        known = known_fields[key]
+        for field in _ATTEMPT_TOKEN_FIELDS:
+            if field not in known:
+                item[field] = None
+    return list(grouped.values())
+
 
 class LeaseBusyError(RuntimeError):
     pass
@@ -207,6 +300,7 @@ class StateStore:
                     attempts_json TEXT NOT NULL,
                     input_tokens INTEGER,
                     cached_input_tokens INTEGER,
+                    cache_write_tokens INTEGER,
                     reasoning_tokens INTEGER,
                     output_tokens INTEGER,
                     total_tokens INTEGER,
@@ -225,10 +319,15 @@ class StateStore:
                     external_id TEXT NOT NULL,
                     repo TEXT NOT NULL,
                     role TEXT NOT NULL,
+                    course_key TEXT,
+                    work_package_key TEXT,
+                    stage TEXT,
+                    status TEXT,
                     provider TEXT,
                     model TEXT,
                     input_tokens INTEGER,
                     cached_input_tokens INTEGER,
+                    cache_write_tokens INTEGER,
                     reasoning_tokens INTEGER,
                     output_tokens INTEGER,
                     total_tokens INTEGER,
@@ -296,6 +395,7 @@ class StateStore:
                 "runtime": "TEXT NOT NULL DEFAULT 'legacy'",
                 "input_tokens": "INTEGER",
                 "cached_input_tokens": "INTEGER",
+                "cache_write_tokens": "INTEGER",
                 "reasoning_tokens": "INTEGER",
                 "output_tokens": "INTEGER",
                 "total_tokens": "INTEGER",
@@ -315,6 +415,11 @@ class StateStore:
                     conn.execute(f"ALTER TABLE model_calls ADD COLUMN {name} {definition}")
             external_columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(external_usage)")}
             external_migrations = {
+                "course_key": "TEXT",
+                "work_package_key": "TEXT",
+                "stage": "TEXT",
+                "status": "TEXT",
+                "cache_write_tokens": "INTEGER",
                 "reasoning_tokens": "INTEGER",
                 "context_tokens": "INTEGER",
                 "total_tokens_fresh": "INTEGER",
@@ -349,6 +454,50 @@ class StateStore:
                     (repo, card_id, status, json.dumps(card, sort_keys=True, default=str), now),
                 )
         return transitions
+
+    def openclaw_session_context(self, repo: str) -> dict[str, dict[str, str]]:
+        """Return stage context keyed by managed Workboard card ID.
+
+        Managed OpenClaw session keys contain the card ID, not the repository
+        name. Persisted card labels are the durable source for the worker stage.
+        """
+        context: dict[str, dict[str, str]] = {}
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT card_id, payload_json FROM orchestration_cards WHERE repo=?",
+                (repo,),
+            ).fetchall()
+        for row in rows:
+            try:
+                payload = json.loads(str(row["payload_json"]))
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            payload = cast(dict[str, Any], payload)
+            raw_labels = payload.get("labels")
+            labels: list[Any] = cast(list[Any], raw_labels) if isinstance(raw_labels, list) else []
+            values = [str(label) for label in labels if isinstance(label, str)]
+            values_by_prefix = {
+                value.split(":", 1)[0]: value.split(":", 1)[1]
+                for value in values
+                if ":" in value
+            }
+            raw_metadata = payload.get("metadata")
+            metadata: dict[str, Any] = (
+                cast(dict[str, Any], raw_metadata) if isinstance(raw_metadata, dict) else {}
+            )
+            context_value: dict[str, str] = {}
+            for key in ("course_key", "work_package_key"):
+                value = payload.get(key) or metadata.get(key)
+                if isinstance(value, str) and value.strip():
+                    context_value[key] = value.strip()
+            if values_by_prefix.get("stage"):
+                context_value["stage"] = values_by_prefix["stage"]
+            if values_by_prefix.get("workflow") and "work_package_key" not in context_value:
+                context_value["work_package_key"] = values_by_prefix["workflow"]
+            context[str(row["card_id"])] = context_value
+        return context
 
     def approve(self, repo: str, action_id: str, approved_by: str) -> None:
         with self._connect() as conn:
@@ -713,6 +862,7 @@ class StateStore:
 
         input_tokens = total("input_tokens")
         cached_input_tokens = total("cached_input_tokens")
+        cache_write_tokens = total("cache_write_tokens")
         reasoning_tokens = total("reasoning_tokens")
         output_tokens = total("output_tokens")
         total_tokens = total("total_tokens")
@@ -722,13 +872,13 @@ class StateStore:
             1 for row in rows if "model route mismatch" in str(row.get("error") or "")
         )
         duration_ms = sum(int(row.get("duration_ms", 0)) for row in rows)
-        usage_known = int(any(value is not None for value in (input_tokens, cached_input_tokens, output_tokens, total_tokens)))
+        usage_known = int(any(value is not None for value in (input_tokens, cached_input_tokens, cache_write_tokens, output_tokens, total_tokens)))
         with self._connect() as conn:
             conn.execute(
                 "INSERT INTO model_calls(repo,run_id,session_id,runtime,role,course_key,work_package_key,stage,resolved_model,attempts_json,input_tokens,"
-                "cached_input_tokens,reasoning_tokens,output_tokens,total_tokens,prompt_bytes,response_bytes,usage_known,"
+                "cached_input_tokens,cache_write_tokens,reasoning_tokens,output_tokens,total_tokens,prompt_bytes,response_bytes,usage_known,"
                 "fallback_count,model_mismatch_count,duration_ms,prompt_fingerprint,created_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     repo,
                     run_id,
@@ -742,6 +892,7 @@ class StateStore:
                     serialized,
                     input_tokens,
                     cached_input_tokens,
+                    cache_write_tokens,
                     reasoning_tokens,
                     output_tokens,
                     total_tokens,
@@ -757,17 +908,60 @@ class StateStore:
             )
 
     def usage_dimensions(self, repo: str) -> list[dict[str, Any]]:
-        """Group direct provider telemetry by the operator-facing workflow dimensions."""
-        with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT substr(created_at,1,10) AS date, course_key, work_package_key, "
-                "COALESCE(stage, role) AS stage, resolved_model AS model, COUNT(*) AS calls, "
-                "SUM(COALESCE(total_tokens, COALESCE(input_tokens,0) + COALESCE(cached_input_tokens,0) + COALESCE(output_tokens,0))) AS tokens "
-                "FROM model_calls WHERE repo=? GROUP BY date,course_key,work_package_key,stage,resolved_model "
-                "ORDER BY date DESC,tokens DESC",
-                (repo,),
-            ).fetchall()
-        return [dict(row) for row in rows]
+        """Group direct and OpenClaw worker telemetry by stage and model."""
+        summary = self.usage_summary(repo=repo)
+        dimensions: list[dict[str, Any]] = []
+        for group in cast(list[dict[str, Any]], summary.get("direct_attempt_groups", [])):
+            model = str(group.get("model") or "unknown")
+            if "/" not in model and str(group.get("runtime") or "").lower() == "codex":
+                model = f"codex/{model}"
+            dimensions.append(
+                {
+                    "date": group.get("date"),
+                    "course_key": group.get("course_key"),
+                    "work_package_key": group.get("work_package_key"),
+                    "stage": group.get("stage"),
+                    "model": model,
+                    "calls": group.get("calls", 0),
+                    "input_tokens": group.get("input_tokens"),
+                    "cached_input_tokens": group.get("cached_input_tokens"),
+                    "cache_write_tokens": group.get("cache_write_tokens"),
+                    "reasoning_tokens": group.get("reasoning_tokens"),
+                    "output_tokens": group.get("output_tokens"),
+                    "total_tokens": group.get("total_tokens"),
+                    "tokens": group.get("total_tokens")
+                    or sum(
+                        int(group.get(field) or 0)
+                        for field in ("input_tokens", "cached_input_tokens", "output_tokens")
+                    ),
+                }
+            )
+        for group in cast(list[dict[str, Any]], summary.get("external_groups", [])):
+            provider = str(group.get("provider") or "unknown")
+            model_name = str(group.get("model") or "unknown")
+            model = model_name if "/" in model_name else f"{provider}/{model_name}"
+            dimensions.append(
+                {
+                    "date": group.get("date"),
+                    "course_key": group.get("course_key"),
+                    "work_package_key": group.get("work_package_key"),
+                    "stage": group.get("stage") or group.get("role"),
+                    "model": model,
+                    "calls": group.get("calls", 0),
+                    "input_tokens": group.get("input_tokens"),
+                    "cached_input_tokens": group.get("cached_input_tokens"),
+                    "cache_write_tokens": group.get("cache_write_tokens"),
+                    "reasoning_tokens": group.get("reasoning_tokens"),
+                    "output_tokens": group.get("output_tokens"),
+                    "total_tokens": group.get("total_tokens"),
+                    "tokens": group.get("total_tokens")
+                    or sum(
+                        int(group.get(field) or 0)
+                        for field in ("input_tokens", "cached_input_tokens", "output_tokens")
+                    ),
+                }
+            )
+        return sorted(dimensions, key=lambda item: (str(item["date"]), int(item["tokens"])), reverse=True)
 
     def direct_session_ids(self, repo: str) -> set[str]:
         """Return opaque direct-harness IDs that may be correlated with OpenClaw sessions."""
@@ -815,6 +1009,7 @@ class StateStore:
                 {
                     "input_tokens": record.get("input_tokens"),
                     "cached_input_tokens": record.get("cached_input_tokens"),
+                    "cache_write_tokens": record.get("cache_write_tokens"),
                     "reasoning_tokens": record.get("reasoning_tokens"),
                     "output_tokens": record.get("output_tokens"),
                     "total_tokens": total_tokens,
@@ -834,6 +1029,7 @@ class StateStore:
 
             input_tokens = total("input_tokens")
             cached_input_tokens = total("cached_input_tokens")
+            cache_write_tokens = total("cache_write_tokens")
             reasoning_tokens = total("reasoning_tokens")
             output_tokens = total("output_tokens")
             total_tokens_value = total("total_tokens")
@@ -853,19 +1049,21 @@ class StateStore:
                     for value in (
                         input_tokens,
                         cached_input_tokens,
+                        cache_write_tokens,
                         output_tokens,
                         total_tokens_value,
                     )
                 )
             )
             cursor = conn.execute(
-                "UPDATE model_calls SET attempts_json=?,input_tokens=?,cached_input_tokens=?,"
+                "UPDATE model_calls SET attempts_json=?,input_tokens=?,cached_input_tokens=?,cache_write_tokens=?,"
                 "reasoning_tokens=?,output_tokens=?,total_tokens=?,prompt_bytes=?,response_bytes=?,"
                 "usage_known=? WHERE id=?",
                 (
                     json.dumps(attempts, sort_keys=True, default=str),
                     input_tokens,
                     cached_input_tokens,
+                    cache_write_tokens,
                     reasoning_tokens,
                     output_tokens,
                     total_tokens_value,
@@ -884,13 +1082,14 @@ class StateStore:
         activity_at = _external_activity_timestamp(record)
         with self._connect() as conn:
             conn.execute(
-                "INSERT INTO external_usage(source,external_id,repo,role,provider,model,input_tokens,"
-                "cached_input_tokens,reasoning_tokens,output_tokens,total_tokens,total_tokens_fresh,context_tokens,"
+                "INSERT INTO external_usage(source,external_id,repo,role,course_key,work_package_key,stage,status,provider,model,input_tokens,"
+                "cached_input_tokens,cache_write_tokens,reasoning_tokens,output_tokens,total_tokens,total_tokens_fresh,context_tokens,"
                 "model_mismatch_count,prompt_bytes,response_bytes,duration_ms,updated_at,payload_json) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(source,external_id) DO UPDATE SET repo=excluded.repo,role=excluded.role,"
+                "course_key=excluded.course_key,work_package_key=excluded.work_package_key,stage=excluded.stage,status=excluded.status,"
                 "provider=excluded.provider,model=excluded.model,input_tokens=excluded.input_tokens,"
-                "cached_input_tokens=excluded.cached_input_tokens,reasoning_tokens=excluded.reasoning_tokens,"
+                "cached_input_tokens=excluded.cached_input_tokens,cache_write_tokens=excluded.cache_write_tokens,reasoning_tokens=excluded.reasoning_tokens,"
                 "output_tokens=excluded.output_tokens,"
                 "total_tokens=excluded.total_tokens,total_tokens_fresh=excluded.total_tokens_fresh,"
                 "context_tokens=excluded.context_tokens,model_mismatch_count=excluded.model_mismatch_count,"
@@ -902,10 +1101,15 @@ class StateStore:
                     str(record["external_id"]),
                     str(record["repo"]),
                     str(record["role"]),
+                    record.get("course_key"),
+                    record.get("work_package_key"),
+                    record.get("stage") or record.get("role"),
+                    record.get("status"),
                     record.get("provider"),
                     record.get("model"),
                     record.get("input_tokens"),
                     record.get("cached_input_tokens"),
+                    record.get("cache_write_tokens"),
                     record.get("reasoning_tokens"),
                     record.get("output_tokens"),
                     record.get("total_tokens"),
@@ -963,7 +1167,7 @@ class StateStore:
                 "SUM(CASE WHEN input_tokens IS NOT NULL AND output_tokens IS NOT NULL THEN 1 ELSE 0 END) AS breakdown_calls, "
                 "SUM(CASE WHEN total_tokens IS NOT NULL AND (input_tokens IS NULL OR output_tokens IS NULL) THEN 1 ELSE 0 END) AS aggregate_only_calls, "
                 "SUM(CASE WHEN total_tokens IS NOT NULL AND (input_tokens IS NULL OR output_tokens IS NULL) THEN total_tokens ELSE 0 END) AS aggregate_only_tokens, "
-                "SUM(input_tokens) AS input_tokens, SUM(cached_input_tokens) AS cached_input_tokens, "
+                "SUM(input_tokens) AS input_tokens, SUM(cached_input_tokens) AS cached_input_tokens, SUM(cache_write_tokens) AS cache_write_tokens, "
                 "SUM(reasoning_tokens) AS reasoning_tokens, "
                 "SUM(output_tokens) AS output_tokens, SUM(total_tokens) AS total_tokens, "
                 "SUM(prompt_bytes) AS prompt_bytes, SUM(response_bytes) AS response_bytes, "
@@ -977,7 +1181,7 @@ class StateStore:
                 "SUM(CASE WHEN input_tokens IS NOT NULL AND output_tokens IS NOT NULL THEN 1 ELSE 0 END) AS breakdown_calls, "
                 "SUM(CASE WHEN total_tokens IS NOT NULL AND (input_tokens IS NULL OR output_tokens IS NULL) THEN 1 ELSE 0 END) AS aggregate_only_calls, "
                 "SUM(CASE WHEN total_tokens IS NOT NULL AND (input_tokens IS NULL OR output_tokens IS NULL) THEN total_tokens ELSE 0 END) AS aggregate_only_tokens, "
-                "SUM(cached_input_tokens) AS cached_input_tokens, SUM(reasoning_tokens) AS reasoning_tokens, "
+                "SUM(cached_input_tokens) AS cached_input_tokens, SUM(cache_write_tokens) AS cache_write_tokens, SUM(reasoning_tokens) AS reasoning_tokens, "
                 "SUM(output_tokens) AS output_tokens, "
                 "SUM(total_tokens) AS total_tokens, SUM(prompt_bytes) AS prompt_bytes, "
                 "SUM(response_bytes) AS response_bytes, SUM(duration_ms) AS duration_ms "
@@ -985,43 +1189,44 @@ class StateStore:
                 params,
             ).fetchall()
             external = conn.execute(
-                "SELECT COUNT(*) AS calls, SUM(input_tokens) AS input_tokens, SUM(cached_input_tokens) AS cached_input_tokens, "
+                "SELECT COUNT(*) AS calls, SUM(input_tokens) AS input_tokens, SUM(cached_input_tokens) AS cached_input_tokens, SUM(cache_write_tokens) AS cache_write_tokens, "
                 "SUM(reasoning_tokens) AS reasoning_tokens, "
                 "SUM(output_tokens) AS output_tokens, SUM(total_tokens) AS total_tokens, "
                 "SUM(model_mismatch_count) AS model_mismatch_attempts, "
-                "SUM(CASE WHEN input_tokens IS NOT NULL AND output_tokens IS NOT NULL THEN 1 ELSE 0 END) AS breakdown_sessions, "
+                "SUM(CASE WHEN (input_tokens IS NOT NULL AND output_tokens IS NOT NULL) OR status='failed' THEN 1 ELSE 0 END) AS breakdown_sessions, "
                 "SUM(CASE WHEN total_tokens IS NOT NULL AND (input_tokens IS NULL OR output_tokens IS NULL) THEN 1 ELSE 0 END) AS aggregate_only_sessions, "
                 "SUM(CASE WHEN total_tokens IS NOT NULL AND (input_tokens IS NULL OR output_tokens IS NULL) THEN total_tokens ELSE 0 END) AS aggregate_only_tokens, "
                 "SUM(CASE WHEN total_tokens IS NOT NULL AND total_tokens_fresh = 0 THEN 1 ELSE 0 END) AS stale_total_sessions, "
                 "SUM(CASE WHEN total_tokens IS NOT NULL AND total_tokens_fresh = 0 THEN total_tokens ELSE 0 END) AS stale_total_tokens, "
                 "MAX(context_tokens) AS max_context_tokens, AVG(context_tokens) AS average_context_tokens, "
                 "SUM(prompt_bytes) AS prompt_bytes, SUM(response_bytes) AS response_bytes, SUM(duration_ms) AS duration_ms, "
-                "SUM(CASE WHEN input_tokens IS NULL AND cached_input_tokens IS NULL AND output_tokens IS NULL "
-                "AND total_tokens IS NULL THEN 1 ELSE 0 END) AS unknown_sessions FROM external_usage" + external_where,
+                "SUM(CASE WHEN input_tokens IS NULL AND cached_input_tokens IS NULL AND cache_write_tokens IS NULL AND output_tokens IS NULL "
+                "AND total_tokens IS NULL AND COALESCE(status,'') != 'failed' THEN 1 ELSE 0 END) AS unknown_sessions, "
+                "SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) AS failed_sessions FROM external_usage" + external_where,
                 external_params,
             ).fetchone()
             external_groups = conn.execute(
-                "SELECT repo, role, provider, model, COUNT(*) AS calls, SUM(input_tokens) AS input_tokens, "
-                "SUM(cached_input_tokens) AS cached_input_tokens, SUM(reasoning_tokens) AS reasoning_tokens, "
+                "SELECT repo, substr(updated_at,1,10) AS date, role, course_key, work_package_key, stage, provider, model, COUNT(*) AS calls, SUM(input_tokens) AS input_tokens, "
+                "SUM(cached_input_tokens) AS cached_input_tokens, SUM(cache_write_tokens) AS cache_write_tokens, SUM(reasoning_tokens) AS reasoning_tokens, "
                 "SUM(output_tokens) AS output_tokens, "
                 "SUM(total_tokens) AS total_tokens, SUM(model_mismatch_count) AS model_mismatch_attempts, "
                 "SUM(prompt_bytes) AS prompt_bytes, "
-                "SUM(CASE WHEN input_tokens IS NOT NULL AND output_tokens IS NOT NULL THEN 1 ELSE 0 END) AS breakdown_sessions, "
+                "SUM(CASE WHEN (input_tokens IS NOT NULL AND output_tokens IS NOT NULL) OR status='failed' THEN 1 ELSE 0 END) AS breakdown_sessions, "
                 "SUM(CASE WHEN total_tokens IS NOT NULL AND (input_tokens IS NULL OR output_tokens IS NULL) THEN 1 ELSE 0 END) AS aggregate_only_sessions, "
                 "SUM(CASE WHEN total_tokens IS NOT NULL AND (input_tokens IS NULL OR output_tokens IS NULL) THEN total_tokens ELSE 0 END) AS aggregate_only_tokens, "
                 "SUM(CASE WHEN total_tokens IS NOT NULL AND total_tokens_fresh = 0 THEN 1 ELSE 0 END) AS stale_total_sessions, "
                 "SUM(CASE WHEN total_tokens IS NOT NULL AND total_tokens_fresh = 0 THEN total_tokens ELSE 0 END) AS stale_total_tokens, "
                 "MAX(context_tokens) AS max_context_tokens, AVG(context_tokens) AS average_context_tokens, "
                 "SUM(response_bytes) AS response_bytes, SUM(duration_ms) AS duration_ms, "
-                "SUM(CASE WHEN input_tokens IS NULL AND cached_input_tokens IS NULL "
+                "SUM(CASE WHEN input_tokens IS NULL AND cached_input_tokens IS NULL AND cache_write_tokens IS NULL "
                 "AND output_tokens IS NULL AND total_tokens IS NULL THEN 1 ELSE 0 END) AS unknown_sessions "
                 "FROM external_usage" + external_where
-                + " GROUP BY repo, role, provider, model ORDER BY total_tokens DESC NULLS LAST, calls DESC",
+                + " GROUP BY repo, date, role, course_key, work_package_key, stage, provider, model ORDER BY total_tokens DESC NULLS LAST, calls DESC",
                 external_params,
             ).fetchall()
             repeated_prompts = conn.execute(
                 "SELECT repo, role, resolved_model AS model, prompt_fingerprint, COUNT(*) AS calls, "
-                "SUM(input_tokens) AS input_tokens, SUM(cached_input_tokens) AS cached_input_tokens, "
+                "SUM(input_tokens) AS input_tokens, SUM(cached_input_tokens) AS cached_input_tokens, SUM(cache_write_tokens) AS cache_write_tokens, "
                 "SUM(output_tokens) AS output_tokens, SUM(total_tokens) AS total_tokens, "
                 "SUM(prompt_bytes) AS prompt_bytes, SUM(duration_ms) AS duration_ms "
                 "FROM model_calls WHERE prompt_fingerprint IS NOT NULL"
@@ -1034,9 +1239,15 @@ class StateStore:
                 "SELECT repo, role, resolved_model AS model, attempts_json FROM model_calls" + where,
                 params,
             ).fetchall()
+            model_call_rows = conn.execute(
+                "SELECT repo, runtime, role, course_key, work_package_key, stage, resolved_model, "
+                "attempts_json, created_at FROM model_calls" + where,
+                params,
+            ).fetchall()
         return {
             "direct_calls": dict(calls) if calls else {},
             "direct_groups": [dict(row) for row in groups],
+            "direct_attempt_groups": _direct_attempt_groups(model_call_rows),
             "external_sessions": dict(external) if external else {},
             "external_groups": [dict(row) for row in external_groups],
             "repeated_prompts": [dict(row) for row in repeated_prompts],

@@ -250,6 +250,29 @@ class ControlPlaneEngine:
                 "daily_token_limit": self.config.usage.daily_token_limit,
                 "model_daily_token_limits": self.config.usage.model_daily_token_limits,
                 "block_on_unknown_usage": self.config.usage.block_on_unknown,
+                "model_routes": {
+                    role: self._models_for(repo, role, course=course).model_dump(mode="json")
+                    for role in (
+                        "baseline",
+                        "planner",
+                        "coder",
+                        "reviewer",
+                        "tester",
+                        "ux_reviewer",
+                        "final_reviewer",
+                    )
+                },
+            },
+            "control_plane_capabilities": {
+                "fresh_branch_and_worktree": True,
+                "pull_request_creation": True,
+                "independent_review": True,
+                "targeted_checks": True,
+                "review_comment_adjudication": True,
+                "final_review": True,
+                "durable_stage_events": True,
+                "per_stage_model_token_telemetry": True,
+                "evidence_state_dir_configured": bool(self.config.state_dir),
             },
         }
         prompt = build_readiness_prompt(course, source_evidence)
@@ -262,6 +285,8 @@ class ControlPlaneEngine:
             output_model=ReadinessReviewDecision,
             cwd=repo.local_path,
             writable=False,
+            course_key=course.key,
+            stage="readiness_review",
         )
         decision = ReadinessReviewDecision.model_validate(result.output)
         updated = apply_readiness_review(

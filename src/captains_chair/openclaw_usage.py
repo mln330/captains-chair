@@ -26,6 +26,7 @@ def sync_openclaw_sessions(
     runner: CommandRunner = run_command,
     session_filter: str | None = None,
     expected_models: Mapping[str, str] | None = None,
+    session_context: Mapping[str, Mapping[str, str]] | None = None,
     session_limit: int = DEFAULT_SESSION_LIMIT,
 ) -> dict[str, Any]:
     """Import OpenClaw's metadata-only session usage into portable CAPTAINS_CHAIR state."""
@@ -56,11 +57,18 @@ def sync_openclaw_sessions(
         external_id = str(row.get("key") or row.get("sessionKey") or "").strip()
         if not external_id:
             continue
+        card_id = _worker_card_id(external_id, session_context)
+        context: Mapping[str, str] = (
+            session_context.get(card_id, {})
+            if session_context is not None and card_id
+            else {}
+        )
         haystack = external_id.lower()
         if (session_filter and session_filter.lower() not in haystack) or (
             not session_filter
             and repo_token not in haystack
             and external_id.rsplit(":", 1)[-1] not in direct_session_ids
+            and not context
         ):
             continue
         agent = str(row.get("agentId") or "unknown")
@@ -76,18 +84,26 @@ def sync_openclaw_sessions(
             and bool(observed_model)
             and not models_match(str(expected_model), str(observed_model))
         )
-        record = {
+        record: dict[str, Any] = {
             "source": "openclaw-session",
             "external_id": external_id,
             "repo": repo,
             "role": role,
+            "course_key": context.get("course_key"),
+            "work_package_key": context.get("work_package_key"),
+            "stage": context.get("stage") or role,
+            "card_id": card_id,
             "provider": row.get("modelProvider"),
             "model": observed_model,
+            "status": row.get("status"),
             "expected_model": expected_model,
             "model_mismatch_count": model_mismatch,
             "input_tokens": _integer(row.get("inputTokens", row.get("input_tokens"))),
             "cached_input_tokens": _integer(
                 row.get("cachedInputTokens", row.get("cached_input_tokens"))
+            ),
+            "cache_write_tokens": _integer(
+                row.get("cacheWriteTokens", row.get("cache_write_tokens"))
             ),
             "reasoning_tokens": _integer(
                 row.get("reasoningTokens", row.get("reasoning_tokens"))
@@ -133,6 +149,28 @@ def _integer(value: Any) -> int | None:
 
 def _boolean(value: Any) -> bool | None:
     return value if isinstance(value, bool) else None
+
+
+def _worker_card_id(
+    external_id: str,
+    session_context: Mapping[str, Mapping[str, str]] | None = None,
+) -> str | None:
+    """Extract the Workboard card ID from a managed OpenClaw session key."""
+    parts = external_id.split(":")
+    try:
+        index = parts.index("worker")
+    except ValueError:
+        index = -1
+    if index >= 0 and index + 1 < len(parts):
+        return parts[index + 1]
+    # OpenClaw's native Workboard dispatcher uses
+    # agent:<agent>:subagent:workboard-<board>-<card-id>. Match against the
+    # durable card inventory instead of trying to split an arbitrary board ID.
+    if session_context:
+        matches = [card_id for card_id in session_context if external_id.endswith(card_id)]
+        if len(matches) == 1:
+            return matches[0]
+    return None
 
 
 def _parse_json(text: str) -> Any:

@@ -9,6 +9,7 @@ import captains_chair.orchestration as orchestration
 from captains_chair.models import (
     ActionKind,
     CompletionPolicy,
+    DirectOrchestratorConfig,
     OpenClawWorkboardConfig,
     OperationMode,
     PlanDecision,
@@ -39,6 +40,7 @@ _has_valid_proof = orchestration._has_valid_proof  # pyright: ignore[reportPriva
 _passed_proof = orchestration._passed_proof  # pyright: ignore[reportPrivateUsage]
 _retry_depth = orchestration._retry_depth  # pyright: ignore[reportPrivateUsage]
 _retry_limit = orchestration._retry_limit  # pyright: ignore[reportPrivateUsage]
+_is_retry_descendant = orchestration._is_retry_descendant  # pyright: ignore[reportPrivateUsage]
 
 
 def worker_config() -> OpenClawWorkboardConfig:
@@ -137,10 +139,50 @@ def test_autonomous_workflow_is_role_separated_and_dependency_gated(tmp_path: Pa
     assert test.parents == (implementation.key,)
     assert set(final.parents) == {review.key, test.key}
     assert merge.parents == (final.key,)
+    assert merge.agent_id is None
+    assert merge.metadata["workerRole"] == "deterministic_merge"
+    assert merge.metadata["expectedModel"] == "deterministic/no-model"
+    assert implementation.metadata["expectedModel"] == "codex/gpt-5.3-codex-spark"
     assert verify.parents == (merge.key,)
     assert "Never merge your own work" in implementation.notes
     assert "USER_SECRET:" in final.notes
+    assert "Configured completion policy: auto_merge." in final.notes
+    assert "Required final-review marker: AUTO_MERGE_ALLOWED:<head-sha>." in final.notes
     assert all("OpenClaw" not in (card.notes or "") for card in workflow.stages)
+
+
+def test_direct_orchestrator_keeps_declared_merge_worker(tmp_path: Path) -> None:
+    repo = repo_config(
+        tmp_path,
+        mode=OperationMode.AUTONOMOUS,
+        completion=CompletionPolicy.AUTO_MERGE,
+    )
+    config = DirectOrchestratorConfig(
+        database_path=tmp_path / "direct.db",
+        workers=worker_config().workers,
+    )
+
+    workflow = build_workflow(repo, implementation_decision(), "direct-merge", config)
+    merge = next(card for card in workflow.stages if "stage:merge" in card.labels)
+
+    assert merge.agent_id == "github-merge"
+    assert merge.metadata["workerRole"] == "merger"
+    assert merge.metadata["expectedModel"] == "codex/gpt-5.6-terra"
+
+
+def test_workflow_propagates_course_and_package_context(tmp_path: Path) -> None:
+    decision = implementation_decision().model_copy(
+        update={"course_key": "course-1", "work_package_key": "package-1"}
+    )
+
+    workflow = build_workflow(repo_config(tmp_path), decision, "context", worker_config())
+
+    assert workflow.root.metadata == {
+        "courseKey": "course-1",
+        "workPackageKey": "package-1",
+    }
+    assert all(card.metadata["courseKey"] == "course-1" for card in workflow.stages)
+    assert all(card.metadata["workPackageKey"] == "package-1" for card in workflow.stages)
 
 
 def test_completed_workflow_cleans_shared_workspace_without_touching_branch_metadata(
@@ -324,6 +366,22 @@ def test_orchestration_card_helpers_fail_closed_and_preserve_latest_evidence(tmp
     assert not _has_passed_proof(bare)
     assert not _has_valid_proof(repo, bare)
     assert _completion_summary(passed) == "Recovered completed review card from runtime review status."
+
+
+def test_passed_proof_handoff_uses_only_latest_record() -> None:
+    card = QueueCard(
+        id="proof-1",
+        title="Proof",
+        status=QueueStatus.DONE,
+        metadata={
+            "proof": [
+                {"status": "passed", "note": "old"},
+                {"status": "passed", "note": "latest"},
+            ]
+        },
+    )
+
+    assert _passed_proof(card) == ({"status": "passed", "note": "latest"},)
 
 
 def test_final_completion_proof_requires_current_head_marker_for_each_policy(tmp_path: Path) -> None:
@@ -1074,6 +1132,295 @@ def test_fresh_retry_proof_completes_original_stage_card(tmp_path: Path) -> None
 
     assert result.protocol_retries == ()
     assert queue.completed == [("review-1", ())]
+
+
+def test_valid_final_retry_reopens_blocked_merge_card(tmp_path: Path) -> None:
+    repo = repo_config(
+        tmp_path,
+        mode=OperationMode.AUTONOMOUS,
+        completion=CompletionPolicy.AUTO_MERGE,
+    )
+    queue = MemoryQueue()
+    queue.cards["final"] = QueueCard(
+        id="final-1",
+        title="Final review",
+        status=QueueStatus.DONE,
+        labels=("captains_chair", "workflow:flow-1", "stage:final_review"),
+        metadata={
+            "proof": [{"status": "passed", "note": "AUTO_MERGE_ALLOWED:abcdef1"}]
+        },
+    )
+    queue.cards["merge"] = QueueCard(
+        id="merge-1",
+        title="Merge",
+        status=QueueStatus.BLOCKED,
+        labels=("captains_chair", "workflow:flow-1", "stage:merge"),
+        metadata={
+            "links": [{"type": "parent", "targetCardId": "final-1"}],
+            "workerProtocol": {"detail": "TECHNICAL: stale final review handoff"},
+            "failureCount": 1,
+        },
+    )
+
+    result = WorkflowOrchestrator(queue, worker_config()).reconcile(repo)
+
+    assert result.protocol_retries == ("card-3",)
+    assert queue.reclaimed == []
+    assert "final-1" in queue.specs[-1].notes
+
+
+def test_stale_final_block_retries_review_instead_of_creating_coder_repair(
+    tmp_path: Path,
+) -> None:
+    repo = repo_config(
+        tmp_path,
+        mode=OperationMode.AUTONOMOUS,
+        completion=CompletionPolicy.AUTO_MERGE,
+    )
+    queue = MemoryQueue()
+    queue.cards["review"] = QueueCard(
+        id="review-1",
+        title="Independent review",
+        status=QueueStatus.DONE,
+        labels=("captains_chair", "workflow:flow-1", "stage:review"),
+        metadata={"proof": [{"status": "passed", "note": "reviewed abcdef1"}]},
+    )
+    queue.cards["qa"] = QueueCard(
+        id="qa-1",
+        title="CLI QA",
+        status=QueueStatus.DONE,
+        labels=("captains_chair", "workflow:flow-1", "stage:test"),
+        metadata={"proof": [{"status": "passed", "note": "QA_PASSED:cli:abcdef1"}]},
+    )
+    queue.cards["final"] = QueueCard(
+        id="final-1",
+        title="Final review",
+        status=QueueStatus.BLOCKED,
+        labels=("captains_chair", "workflow:flow-1", "stage:final_review"),
+        metadata={
+            "links": [
+                {"type": "parent", "targetCardId": "review-1"},
+                {"type": "parent", "targetCardId": "qa-1"},
+            ],
+            "failureCount": 1,
+        },
+    )
+    queue.cards["repair"] = QueueCard(
+        id="repair-1",
+        title="Repair findings from Final review",
+        status=QueueStatus.READY,
+        labels=("captains_chair", "workflow:flow-1", "stage:repair", "repair:final-1"),
+    )
+
+    result = WorkflowOrchestrator(queue, worker_config()).reconcile(
+        repo,
+        dispatch=False,
+        dispatch_reason="test",
+    )
+
+    assert len(result.protocol_retries) == 1
+    assert result.repairs_created == ()
+    assert queue.reclaimed == ["repair-1"]
+    retry = queue.specs[-1]
+    assert retry.agent_id == "github-final"
+    assert "stage:final_review" in retry.labels
+    assert "retry-for:final-1" in retry.labels
+
+
+def test_nested_final_retry_promotes_blocked_original_for_downstream_merge(
+    tmp_path: Path,
+) -> None:
+    repo = repo_config(
+        tmp_path,
+        mode=OperationMode.AUTONOMOUS,
+        completion=CompletionPolicy.AUTO_MERGE,
+    )
+    queue = MemoryQueue()
+    queue.cards["final"] = QueueCard(
+        id="final-1",
+        title="Final review",
+        status=QueueStatus.BLOCKED,
+        labels=("captains_chair", "workflow:flow-1", "stage:final_review"),
+        metadata={
+            "workerProtocol": {"detail": "TECHNICAL: stale final review handoff"},
+        },
+    )
+    queue.cards["first-retry"] = QueueCard(
+        id="first-retry-1",
+        title="Retry final review",
+        status=QueueStatus.BLOCKED,
+        labels=(
+            "captains_chair",
+            "workflow:flow-1",
+            "stage:final_review",
+            "retry-for:final-1",
+        ),
+        metadata={"workerProtocol": {"detail": "TECHNICAL: worker timeout"}},
+    )
+    queue.cards["nested-retry"] = QueueCard(
+        id="nested-retry-1",
+        title="Nested retry final review",
+        status=QueueStatus.DONE,
+        labels=(
+            "captains_chair",
+            "workflow:flow-1",
+            "stage:final_review",
+            "retry-for:first-retry-1",
+        ),
+        metadata={
+            "proof": [
+                {"status": "passed", "note": "AUTO_MERGE_ALLOWED:abcdef1"}
+            ]
+        },
+    )
+    queue.cards["merge"] = QueueCard(
+        id="merge-1",
+        title="Merge",
+        status=QueueStatus.TODO,
+        labels=("captains_chair", "workflow:flow-1", "stage:merge"),
+        metadata={"links": [{"type": "parent", "targetCardId": "final-1"}]},
+    )
+
+    WorkflowOrchestrator(queue, worker_config()).reconcile(repo, dispatch=False)
+
+    assert ("final-1", ()) in queue.completed
+    assert queue.specs == []
+
+
+def test_recovered_control_plane_card_is_cancelled_without_dispatch(tmp_path: Path) -> None:
+    repo = repo_config(tmp_path)
+    queue = MemoryQueue()
+    queue.cards["target"] = QueueCard(
+        id="target-1",
+        title="Review",
+        status=QueueStatus.DONE,
+        labels=("captains_chair", "stage:review"),
+        metadata={"proof": [{"status": "passed", "note": "reviewed abcdef1"}]},
+    )
+    queue.cards["recovery"] = QueueCard(
+        id="recovery-1",
+        title="Recovery",
+        status=QueueStatus.READY,
+        labels=(
+            "captains_chair",
+            "stage:control_plane_action",
+            "control-plane-recovery:target-1",
+        ),
+    )
+
+    WorkflowOrchestrator(queue, worker_config()).reconcile(repo)
+
+    assert queue.reclaimed == ["recovery-1"]
+
+
+def test_exhausted_merge_ready_card_resets_before_dispatch(tmp_path: Path) -> None:
+    repo = repo_config(
+        tmp_path,
+        mode=OperationMode.AUTONOMOUS,
+        completion=CompletionPolicy.AUTO_MERGE,
+    )
+    queue = MemoryQueue()
+    queue.cards["final"] = QueueCard(
+        id="final-1",
+        title="Final review",
+        status=QueueStatus.DONE,
+        labels=("captains_chair", "workflow:flow-1", "stage:final_review"),
+        metadata={
+            "proof": [{"status": "passed", "note": "AUTO_MERGE_ALLOWED:abcdef1"}]
+        },
+    )
+    queue.cards["merge"] = QueueCard(
+        id="merge-1",
+        title="Merge",
+        status=QueueStatus.READY,
+        labels=("captains_chair", "workflow:flow-1", "stage:merge"),
+        metadata={
+            "links": [{"type": "parent", "targetCardId": "final-1"}],
+            "failureCount": 3,
+            "automation": {"maxRetries": 2},
+        },
+    )
+
+    result = WorkflowOrchestrator(queue, worker_config()).reconcile(repo)
+
+    assert result.protocol_retries == ("card-3",)
+    assert queue.reassigned == []
+    assert "final-1" in queue.specs[-1].notes
+
+
+def test_repair_for_cancelled_target_is_not_dispatched(tmp_path: Path) -> None:
+    repo = repo_config(tmp_path)
+    queue = MemoryQueue()
+    queue.cards["target"] = QueueCard(
+        id="target-1",
+        title="Final review",
+        status=QueueStatus.BLOCKED,
+        labels=("captains_chair", "stage:final_review"),
+        metadata={"comments": [{"body": "CANCELLED: superseded"}]},
+    )
+    queue.cards["repair"] = QueueCard(
+        id="repair-1",
+        title="Repair",
+        status=QueueStatus.READY,
+        labels=("captains_chair", "stage:repair", "repair:target-1"),
+    )
+
+    WorkflowOrchestrator(queue, worker_config()).reconcile(repo)
+
+    assert queue.reclaimed == ["repair-1"]
+
+
+def test_nested_retry_proof_completes_original_without_another_retry(tmp_path: Path) -> None:
+    repo = repo_config(
+        tmp_path,
+        mode=OperationMode.AUTONOMOUS,
+        completion=CompletionPolicy.AUTO_MERGE,
+    )
+    queue = MemoryQueue()
+    queue.cards["original"] = QueueCard(
+        id="review-1",
+        title="Implementation",
+        status=QueueStatus.DONE,
+        labels=("captains_chair", "stage:final_review"),
+        agent_id="github-reviewer",
+        metadata={"proof": []},
+    )
+    queue.cards["first-retry"] = QueueCard(
+        id="retry-1",
+        title="Retry review",
+        status=QueueStatus.READY,
+        labels=("captains_chair", "stage:final_review", "retry-for:review-1"),
+        agent_id="github-reviewer",
+    )
+    queue.cards["nested-retry"] = QueueCard(
+        id="retry-2",
+        title="Nested retry review",
+        status=QueueStatus.DONE,
+        labels=("captains_chair", "stage:final_review", "retry-for:retry-1"),
+        agent_id="github-reviewer",
+        metadata={
+            "proof": [
+                {
+                    "status": "passed",
+                    "note": "reviewed abcdef1 AUTO_MERGE_ALLOWED:abcdef1",
+                }
+            ]
+        },
+    )
+    queue.cards["newer-retry"] = QueueCard(
+        id="retry-3",
+        title="Newer nested retry review",
+        status=QueueStatus.READY,
+        labels=("captains_chair", "stage:final_review", "retry-for:retry-2"),
+        agent_id="github-reviewer",
+    )
+
+    assert _is_retry_descendant(queue.cards["nested-retry"], "review-1", list(queue.cards.values()))
+    result = WorkflowOrchestrator(queue, worker_config()).reconcile(repo)
+
+    assert result.protocol_retries == ()
+    assert queue.completed == [("review-1", ())]
+    assert "retry-3" in queue.reclaimed
 
 
 def test_fresh_retry_uses_workboard_safe_compact_label_for_uuid_card(tmp_path: Path) -> None:

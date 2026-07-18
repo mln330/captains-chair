@@ -477,6 +477,7 @@ def _sync_openclaw_sessions_for_portfolio(
             repo=managed.full_name,
             executable=_openclaw_executable_for_repo(config, managed, fallback_executable),
             expected_models=_expected_worker_models(config, managed.full_name),
+            session_context=state.openclaw_session_context(managed.full_name),
             session_limit=_openclaw_session_limit(config, managed.full_name),
         )
         for managed in config.repos

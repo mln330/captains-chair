@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from hashlib import sha256
 from pathlib import Path
-from typing import Any, Protocol, cast, runtime_checkable
+from typing import Any, Literal, Protocol, cast, runtime_checkable
 
 from pydantic import Field
 
@@ -21,6 +21,7 @@ from captains_chair.models import (
     RepoConfig,
     StrictModel,
     WorkerAssignments,
+    WorkerModelAssignments,
 )
 from captains_chair.qa import QASelection, select_qa
 
@@ -351,9 +352,11 @@ class OrchestrationPolicy(Protocol):
 
     board_prefix: str
     workers: WorkerAssignments
+    worker_models: WorkerModelAssignments
     max_runtime_seconds: int
     max_retries: int
     require_live_completion_validation: bool
+    merge_execution: Literal["worker", "deterministic"]
 
 
 class WorkflowOrchestrator:
@@ -477,10 +480,68 @@ class WorkflowOrchestrator:
         unblocked: list[str] = []
         user_blockers: list[str] = []
 
+        # A passed nested retry supersedes any newer retry card for the same
+        # stage. Cancel those duplicates before dispatch so a recovered proof
+        # cannot trigger another expensive reviewer session.
+        for card in cards:
+            if (
+                card.status in {QueueStatus.READY, QueueStatus.TODO}
+                and _retry_for(card) is not None
+                and self._has_valid_retry_ancestor(repo, card, cards)
+            ):
+                self.adapter.reclaim_card(
+                    card.id,
+                    status=QueueStatus.BLOCKED,
+                    reason="CANCELLED: superseded by a passed retry for this stage",
+                )
+
+        # Recovery cards are control-plane work, not project work. Once their
+        # target has recovered, leaving them READY would dispatch another
+        # Captain session and recreate the same context at additional cost.
+        for card in cards:
+            if (
+                card.status in {QueueStatus.READY, QueueStatus.TODO}
+                and _card_stage(card) == WorkStage.CONTROL_PLANE_ACTION
+                and self._control_recovery_is_obsolete(repo, card, cards)
+            ):
+                self.adapter.reclaim_card(
+                    card.id,
+                    status=QueueStatus.BLOCKED,
+                    reason="CANCELLED: recovery target already has durable completion evidence",
+                )
+        for card in cards:
+            if (
+                card.status in {QueueStatus.READY, QueueStatus.TODO}
+                and _card_stage(card) == WorkStage.REPAIR
+                and self._repair_is_obsolete(repo, card, cards)
+            ):
+                self.adapter.reclaim_card(
+                    card.id,
+                    status=QueueStatus.BLOCKED,
+                    reason="CANCELLED: repair target already recovered or was superseded",
+                )
+
         for card in cards:
             if card.metadata.get("archivedAt"):
                 continue
             stage = _card_stage(card)
+            if stage == WorkStage.REPAIR and self._repair_is_obsolete(repo, card, cards):
+                continue
+            if (
+                stage == WorkStage.MERGE
+                and _has_failure_evidence(card)
+                and _retry_for(card) is None
+                and self._has_valid_merge_predecessor(repo, card, cards)
+            ):
+                retry = self._create_fresh_retry(repo, card, cards)
+                protocol_retries.append(retry.id)
+                continue
+            if (
+                card.status in {QueueStatus.READY, QueueStatus.TODO}
+                and _failure_count(card) > _retry_limit(card, self.config.max_retries)
+            ):
+                self._recover_card(card, retried, control_plane_recoveries)
+                continue
             retry_with_proof = self._retry_with_passed_completion(repo, cards, card.id)
             if (
                 card.status == QueueStatus.REVIEW
@@ -498,7 +559,7 @@ class WorkflowOrchestrator:
                     retry = next(
                         item
                         for item in cards
-                        if _is_retry_for(item, card.id) and self._has_valid_completion(repo, item, cards)
+                        if _is_retry_descendant(item, card.id, cards) and _has_valid_proof(repo, item)
                     )
                     self.adapter.complete_card(
                         card.id,
@@ -526,7 +587,23 @@ class WorkflowOrchestrator:
                 and not self._has_valid_completion(repo, card, cards)
             ):
                 proof_retries.append(card.id)
-                if not retry_with_proof:
+                if retry_with_proof:
+                    # A worker may have completed the stage while the durable
+                    # proof handoff was interrupted. Promote the freshest
+                    # passed descendant onto the original stage card so
+                    # downstream gates can use the stable card identity.
+                    retry = next(
+                        item
+                        for item in cards
+                        if _is_retry_descendant(item, card.id, cards)
+                        and _has_valid_proof(repo, item)
+                    )
+                    self.adapter.complete_card(
+                        card.id,
+                        summary=_completion_summary(retry),
+                        proof=_passed_proof(retry),
+                    )
+                else:
                     retry = _active_retry(cards, card.id)
                     if retry is not None:
                         if _protocol_retry_exhausted(retry, cards, self.config.max_retries):
@@ -547,7 +624,29 @@ class WorkflowOrchestrator:
             if classify_blocker(reason) != BlockerKind.TECHNICAL:
                 user_blockers.append(card.id)
                 continue
+            if _is_cancelled_card(card):
+                continue
             stage = _card_stage(card)
+            if retry_with_proof:
+                # Downstream cards reference the stable original stage card.
+                # Promote durable proof from any successful retry descendant
+                # before handling the original block or its repair cards.
+                retry = next(
+                    item
+                    for item in cards
+                    if _is_retry_descendant(item, card.id, cards)
+                    and _has_valid_proof(repo, item)
+                )
+                self.adapter.complete_card(
+                    card.id,
+                    summary=_completion_summary(retry),
+                    proof=_passed_proof(retry),
+                )
+                continue
+            if stage == WorkStage.MERGE and self._has_valid_merge_predecessor(repo, card, cards):
+                retry = self._create_fresh_retry(repo, card, cards)
+                protocol_retries.append(retry.id)
+                continue
             if stage in {
                 WorkStage.REVIEW,
                 WorkStage.TEST,
@@ -556,6 +655,29 @@ class WorkflowOrchestrator:
             }:
                 repair_label = _repair_label(card.id)
                 repairs = [item for item in cards if _is_repair_for(item, card.id)]
+                # A final reviewer can race the last QA handoff and observe an
+                # incomplete dependency snapshot. Once every predecessor has
+                # durable current evidence, retry the reviewer directly. Do not
+                # spend a coding session repairing a PR that has no finding.
+                if (
+                    stage == WorkStage.FINAL_REVIEW
+                    and _is_stale_gate_block(reason)
+                    and self._has_valid_predecessors(repo, card, cards)
+                ):
+                    for repair in repairs:
+                        if repair.status in {
+                            QueueStatus.READY,
+                            QueueStatus.TODO,
+                            QueueStatus.BLOCKED,
+                        }:
+                            self.adapter.reclaim_card(
+                                repair.id,
+                                status=QueueStatus.BLOCKED,
+                                reason="CANCELLED: final-review gate evidence is current; retry reviewer directly",
+                            )
+                    retry = self._create_fresh_retry(repo, card, cards)
+                    protocol_retries.append(retry.id)
+                    continue
                 completed = next(
                     (
                         item
@@ -570,7 +692,7 @@ class WorkflowOrchestrator:
                         retry = next(
                             item
                             for item in cards
-                            if _is_retry_for(item, card.id) and self._has_valid_completion(repo, item, cards)
+                            if _is_retry_descendant(item, card.id, cards) and _has_valid_proof(repo, item)
                         )
                         self.adapter.complete_card(
                             card.id,
@@ -714,6 +836,15 @@ class WorkflowOrchestrator:
                 for card in workflow_cards
                 if card.metadata.get("qaProfile")
             }
+            # OpenClaw Workboard versions in the field may omit arbitrary
+            # metadata on a read-back. The bounded qa:<profile> label is the
+            # durable identity for idempotent QA materialization.
+            existing.update(
+                label.split(":", 1)[1]
+                for card in workflow_cards
+                for label in card.labels
+                if label.startswith("qa:")
+            )
             workspace = next(
                 (card.workspace for card in workflow_cards if card.workspace is not None),
                 None,
@@ -850,8 +981,112 @@ class WorkflowOrchestrator:
         card_id: str,
     ) -> bool:
         return any(
-            _is_retry_for(item, card_id) and self._has_valid_completion(repo, item, cards)
+            _is_retry_descendant(item, card_id, cards) and _has_valid_proof(repo, item)
             for item in cards
+        )
+
+    def _has_valid_retry_ancestor(
+        self,
+        repo: RepoConfig,
+        card: QueueCard,
+        cards: list[QueueCard],
+    ) -> bool:
+        current = card
+        seen: set[str] = set()
+        while True:
+            parent_id = _retry_for(current)
+            if parent_id is None or current.id in seen:
+                return False
+            seen.add(current.id)
+            parent = next(
+                (item for item in cards if item.id == parent_id or item.id.startswith(parent_id)),
+                None,
+            )
+            if parent is None:
+                return False
+            # Retry deduplication must be deterministic. A passed durable
+            # proof already contains the policy marker required for this
+            # stage; invoking a live validator here can consume a model call
+            # and reject a proof for unrelated stale context.
+            if _has_valid_proof(repo, parent):
+                return True
+            current = parent
+
+    def _control_recovery_is_obsolete(
+        self,
+        repo: RepoConfig,
+        recovery_card: QueueCard,
+        cards: list[QueueCard],
+    ) -> bool:
+        token = next(
+            (
+                label.split(":", 1)[1]
+                for label in recovery_card.labels
+                if label.startswith("control-plane-recovery:")
+                or label.startswith("control-plane-recovery-for:")
+            ),
+            None,
+        )
+        if not token:
+            return False
+        target = next(
+            (item for item in cards if item.id == token or item.id.startswith(token)),
+            None,
+        )
+        if target is None:
+            return False
+        if _card_stage(target) == WorkStage.MERGE:
+            return self._has_valid_merge_predecessor(repo, target, cards)
+        if target.status == QueueStatus.DONE:
+            return _has_valid_proof(repo, target) or self._retry_with_passed_completion(
+                repo, cards, target.id
+            )
+        if target.status != QueueStatus.BLOCKED:
+            return False
+        comments = target.metadata.get("comments")
+        return isinstance(comments, list) and any(
+            isinstance(item, dict)
+            and str(cast(dict[str, object], item).get("body") or "")
+            .upper()
+            .startswith("CANCELLED:")
+            for item in cast(list[object], comments)
+        )
+
+    def _repair_is_obsolete(
+        self,
+        repo: RepoConfig,
+        repair_card: QueueCard,
+        cards: list[QueueCard],
+    ) -> bool:
+        token = next(
+            (
+                label.split(":", 1)[1]
+                for label in repair_card.labels
+                if label.startswith("repair:") or label.startswith("repair-for:")
+            ),
+            None,
+        )
+        if not token:
+            return False
+        target = next(
+            (item for item in cards if item.id == token or item.id.startswith(token)),
+            None,
+        )
+        if target is None:
+            return False
+        if target.status == QueueStatus.DONE:
+            return _has_valid_proof(repo, target) or self._retry_with_passed_completion(
+                repo, cards, target.id
+            )
+        if target.status != QueueStatus.BLOCKED:
+            return False
+        comments = target.metadata.get("comments")
+        return isinstance(comments, list) and any(
+            isinstance(item, dict)
+            and str(cast(dict[str, object], item).get("body") or "")
+            .upper()
+            .startswith("CANCELLED:")
+            for item in cast(list[object], comments)
         )
 
     def _workflow_has_passed_completion(
@@ -863,6 +1098,70 @@ class WorkflowOrchestrator:
             card.status == QueueStatus.DONE
             and self._has_valid_completion(repo, card, cards)
             for card in cards
+        )
+
+    def _has_valid_merge_predecessor(
+        self,
+        repo: RepoConfig,
+        merge_card: QueueCard,
+        cards: list[QueueCard],
+    ) -> bool:
+        """Find a passed final-review card, including any retry descendant."""
+        return bool(self._valid_merge_final_review_ids(repo, merge_card, cards))
+
+    def _has_valid_predecessors(
+        self,
+        repo: RepoConfig,
+        card: QueueCard,
+        cards: list[QueueCard],
+    ) -> bool:
+        """Return whether every direct dependency has current completion proof."""
+        parents = _parent_ids(card)
+        if not parents:
+            return False
+        for parent_id in parents:
+            if not any(
+                candidate.status == QueueStatus.DONE
+                and self._has_valid_completion(repo, candidate, cards)
+                and (
+                    candidate.id == parent_id
+                    or candidate.id.startswith(parent_id)
+                    or _is_retry_descendant(candidate, parent_id, cards)
+                )
+                for candidate in cards
+            ):
+                return False
+        return True
+
+    def _valid_merge_final_review_ids(
+        self,
+        repo: RepoConfig,
+        merge_card: QueueCard,
+        cards: list[QueueCard],
+    ) -> tuple[str, ...]:
+        workflow = _card_workflow_label(merge_card)
+        parents = _parent_ids(merge_card)
+        candidates = [
+            card
+            for card in cards
+            if card.status == QueueStatus.DONE
+            and _card_stage(card) == WorkStage.FINAL_REVIEW
+            and (workflow is None or _card_workflow_label(card) == workflow)
+            and _has_valid_proof(repo, card)
+        ]
+        if not candidates:
+            return ()
+        if not parents:
+            return tuple(candidate.id for candidate in candidates)
+        return tuple(
+            candidate.id
+            for candidate in candidates
+            if any(
+                candidate.id == parent_id
+                or candidate.id.startswith(parent_id)
+                or _is_retry_descendant(candidate, parent_id, cards)
+                for parent_id in parents
+            )
         )
 
     def _create_fresh_retry(
@@ -896,6 +1195,14 @@ class WorkflowOrchestrator:
             if validation_reason is not None and not validation_reason.allowed
             else ""
         )
+        final_review_note = ""
+        if stage == WorkStage.MERGE:
+            final_review_ids = self._valid_merge_final_review_ids(repo, card, cards)
+            if final_review_ids:
+                final_review_note = (
+                    "\nExact final-review Workboard card ID(s) for merge-gate evaluation: "
+                    f"{', '.join(final_review_ids)}\n"
+                )
         retry = self.adapter.create_card(
             repo.orchestration_board
             or f"{self.config.board_prefix}-{repo.full_name.replace('/', '-').lower()}",
@@ -906,14 +1213,18 @@ class WorkflowOrchestrator:
                     f"Repository: {repo.full_name}\n"
                     f"Original Workboard card: {card.id}\n"
                     f"Original notes:\n{card.notes or '(none)'}\n\n"
-                    f"{validation_note}"
+                    f"{validation_note}{final_review_note}"
                     "This is a fresh-context retry. Use this card's own runtime session and do not rely on a prior chat. "
                     "Complete only through the CAPTAINS_CHAIR worker lifecycle helper with current-head evidence."
                 ),
                 status=QueueStatus.READY,
                 priority="high",
                 labels=tuple(_bounded_label(label) for label in (*card.labels, retry_label)),
-                agent_id=card.agent_id or _worker_for(stage, self.config),
+                agent_id=(
+                    None
+                    if stage == WorkStage.MERGE and _uses_deterministic_merge(self.config)
+                    else card.agent_id or _worker_for(stage, self.config)
+                ),
                 source_url=card.source_url,
                 parents=_parent_ids(card),
                 workspace=card.workspace,
@@ -1110,7 +1421,11 @@ def build_workflow(
         key = f"{action_id}:{suffix}"
         stage_workspace = None if stage in {WorkStage.MERGE, WorkStage.POST_MERGE} else workspace
         parents = tuple(root_key if parent is None else f"{action_id}:{parent}" for parent in dependencies)
-        metadata: dict[str, Any] = _course_metadata(decision)
+        metadata: dict[str, Any] = {
+            **_course_metadata(decision),
+            "workerRole": _role_for(stage, config),
+            "expectedModel": _model_for(stage, config),
+        }
         if qa_profile is not None:
             metadata.update(_qa_metadata(qa_profile, decision.changed_paths))
         qa_labels = (_bounded_label(f"qa:{qa_profile.key}"),) if qa_profile is not None else ()
@@ -1131,7 +1446,14 @@ def build_workflow(
                     qa_profile=qa_profile,
                 ),
                 labels=(*common_labels, *qa_labels, f"stage:{stage.value}"),
-                agent_id=_worker_for(stage, config),
+                # A deterministic merge adapter owns the mutation and leaves
+                # no model worker assigned. Other adapters retain their
+                # declared merger worker behind the portable config contract.
+                agent_id=(
+                    None
+                    if stage == WorkStage.MERGE and _uses_deterministic_merge(config)
+                    else _worker_for(stage, config)
+                ),
                 source_url=source_url,
                 parents=parents,
                 workspace=stage_workspace,
@@ -1241,6 +1563,33 @@ def _worker_for(stage: WorkStage, config: OrchestrationPolicy) -> str:
         WorkStage.MERGE: config.workers.merger,
         WorkStage.POST_MERGE: config.workers.verifier,
     }[stage]
+
+
+def _role_for(stage: WorkStage, config: OrchestrationPolicy) -> str:
+    role = {
+        WorkStage.CONTROL_PLANE_ACTION: "captain",
+        WorkStage.IMPLEMENTATION: "coder",
+        WorkStage.REPAIR: "coder",
+        WorkStage.REVIEW: "reviewer",
+        WorkStage.TEST: "tester",
+        WorkStage.UX_REVIEW: "ux_reviewer",
+        WorkStage.FINAL_REVIEW: "final_reviewer",
+        WorkStage.MERGE: "merger",
+        WorkStage.POST_MERGE: "verifier",
+    }[stage]
+    if stage == WorkStage.MERGE and _uses_deterministic_merge(config):
+        return "deterministic_merge"
+    return role
+
+
+def _model_for(stage: WorkStage, config: OrchestrationPolicy) -> str:
+    if stage == WorkStage.MERGE and _uses_deterministic_merge(config):
+        return "deterministic/no-model"
+    return str(getattr(config.worker_models, _role_for(stage, config)))
+
+
+def _uses_deterministic_merge(config: OrchestrationPolicy) -> bool:
+    return config.merge_execution == "deterministic"
 
 
 def _source_url(repo: RepoConfig, decision: PlanDecision) -> str:
@@ -1409,6 +1758,19 @@ def _stage_notes(
             f"`QA_PASSED:{qa_profile.key}:<head-sha>`, non-empty `model`, `provider`, and `evidence` fields."
             f"{ui_evidence}\n"
         )
+    completion_policy_note = ""
+    if stage == WorkStage.FINAL_REVIEW:
+        marker = {
+            CompletionPolicy.OWNER_APPROVAL: "READY_FOR_OWNER:<head-sha>",
+            CompletionPolicy.CONTROL_PLANE_COMPLETE: "CONTROL_PLANE_COMPLETE:<head-sha>",
+            CompletionPolicy.AUTO_MERGE: "AUTO_MERGE_ALLOWED:<head-sha>",
+        }[repo.completion_policy]
+        completion_policy_note = (
+            f"Configured completion policy: {repo.completion_policy.value}.\n"
+            f"Required final-review marker: {marker}.\n"
+            f"Autonomous merge enabled: {str(repo.allow_autonomous_merge).lower()}.\n"
+            "A different marker is invalid proof and cannot authorize the next stage.\n"
+        )
     return (
         f"Repository: {repo.full_name}\n"
         f"CAPTAINS_CHAIR workflow: {action_id}\n"
@@ -1416,6 +1778,7 @@ def _stage_notes(
         f"Goal: {decision.summary}\n"
         f"Reason: {decision.reason}\n\n"
         + _workspace_notes(workspace)
+        + completion_policy_note
         + f"Stage contract: {contracts[stage]}{qa_note}\n"
         f"Worker protocol: claim the card through the configured orchestrator, heartbeat during long work, "
         f"and complete it with a concise summary and proof or block it with a specific reason. {blocker_rules}"
@@ -1454,6 +1817,28 @@ def _block_reason(card: QueueCard) -> str:
                 if attempt_row.get("error"):
                     return str(attempt_row["error"])
     return "TECHNICAL: worker blocked without structured failure evidence"
+
+
+def _is_stale_gate_block(reason: str) -> bool:
+    """Recognize a dependency-snapshot failure without masking real findings."""
+    normalized = reason.lower()
+    return (
+        "without structured failure evidence" in normalized
+        or "stale" in normalized
+        or "remain ready" in normalized
+        or "not recorded" in normalized
+    )
+
+
+def _is_cancelled_card(card: QueueCard) -> bool:
+    comments = card.metadata.get("comments")
+    return isinstance(comments, list) and any(
+        isinstance(item, dict)
+        and str(cast(dict[str, object], item).get("body") or "")
+        .upper()
+        .startswith("CANCELLED:")
+        for item in cast(list[object], comments)
+    )
 
 
 def _failure_count(card: QueueCard) -> int:
@@ -1557,11 +1942,30 @@ def _passed_proof(card: QueueCard) -> tuple[dict[str, Any], ...]:
     value = card.metadata.get("proof")
     if not isinstance(value, list):
         return ()
-    return tuple(
-        cast(dict[str, Any], item)
-        for item in cast(list[Any], value)
-        if isinstance(item, dict)
-        and str(cast(dict[str, object], item).get("status") or "").lower() == "passed"
+    latest = next(
+        (
+            cast(dict[str, Any], item)
+            for item in reversed(cast(list[Any], value))
+            if isinstance(item, dict)
+            and str(cast(dict[str, object], item).get("status") or "").lower() == "passed"
+        ),
+        None,
+    )
+    return (latest,) if latest is not None else ()
+
+
+def _has_failure_evidence(card: QueueCard) -> bool:
+    """Distinguish a fresh card from one carrying a failed merge attempt."""
+    if card.status == QueueStatus.BLOCKED:
+        return True
+    value = card.metadata.get("failureCount")
+    if isinstance(value, int) and value > 0:
+        return True
+    attempts = card.metadata.get("attempts")
+    return isinstance(attempts, list) and any(
+        isinstance(item, dict)
+        and cast(dict[str, object], item).get("status") in {"failed", "blocked", "stopped"}
+        for item in cast(list[object], attempts)
     )
 
 
@@ -1684,6 +2088,25 @@ def _is_repair_for(card: QueueCard, parent_id: str) -> bool:
 def _is_retry_for(card: QueueCard, parent_id: str) -> bool:
     token = _retry_for(card)
     return token == parent_id or (token is not None and parent_id.startswith(token))
+
+
+def _is_retry_descendant(card: QueueCard, ancestor_id: str, cards: list[QueueCard]) -> bool:
+    """Match a retry at any depth, including retries created after a lost handoff."""
+    current = card
+    seen: set[str] = set()
+    while True:
+        parent_id = _retry_for(current)
+        if parent_id is None or current.id in seen:
+            return False
+        if parent_id == ancestor_id or ancestor_id.startswith(parent_id):
+            return True
+        seen.add(current.id)
+        current = next(
+            (item for item in cards if item.id == parent_id or item.id.startswith(parent_id)),
+            None,
+        )
+        if current is None:
+            return False
 
 
 def _parent_ids(card: QueueCard) -> tuple[str, ...]:

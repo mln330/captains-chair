@@ -378,14 +378,16 @@ class WorkerAssignments(StrictModel):
 
 
 class WorkerModelAssignments(StrictModel):
-    captain: str = "codex/gpt-5.5"
+    # Control-plane recovery is a Terra route in the documented capability
+    # matrix. Sol is reserved for course strategy and final verification.
+    captain: str = "codex/gpt-5.6-terra"
     coder: str = "codex/gpt-5.3-codex-spark"
-    reviewer: str = "codex/gpt-5.5"
-    tester: str = "codex/gpt-5.3-codex-spark"
-    ux_reviewer: str = "codex/gpt-5.3-codex-spark"
-    final_reviewer: str = "codex/gpt-5.5"
-    merger: str = "codex/gpt-5.5"
-    verifier: str = "codex/gpt-5.5"
+    reviewer: str = "codex/gpt-5.6-terra"
+    tester: str = "codex/gpt-5.6-luna"
+    ux_reviewer: str = "codex/gpt-5.6-terra"
+    final_reviewer: str = "codex/gpt-5.6-sol"
+    merger: str = "codex/gpt-5.6-terra"
+    verifier: str = "codex/gpt-5.6-terra"
 
 
 class WorkerOrchestrationConfig(StrictModel):
@@ -397,10 +399,12 @@ class WorkerOrchestrationConfig(StrictModel):
     max_runtime_seconds: int = Field(default=3600, ge=60, le=14400)
     max_retries: int = Field(default=2, ge=0, le=10)
     require_live_completion_validation: bool = True
+    merge_execution: Literal["worker", "deterministic"] = "worker"
 
 
 class OpenClawWorkboardConfig(WorkerOrchestrationConfig):
     kind: Literal["openclaw_workboard"] = "openclaw_workboard"
+    merge_execution: Literal["worker", "deterministic"] = "deterministic"
     executable: str = "openclaw"
     captains_chair_command: tuple[str, ...] = ("captains_chair",)
     auth_source_agent: str | None = None
@@ -413,6 +417,8 @@ class OpenClawWorkboardConfig(WorkerOrchestrationConfig):
     def command_must_not_be_empty(self) -> OpenClawWorkboardConfig:
         if not self.captains_chair_command or any(not item.strip() for item in self.captains_chair_command):
             raise ValueError("captains_chair_command must contain non-empty argv items")
+        if self.merge_execution != "deterministic":
+            raise ValueError("OpenClaw Workboard requires deterministic merge execution")
         return self
 
 
@@ -1029,6 +1035,7 @@ class ModelAttempt(StrictModel):
     error: str | None = None
     input_tokens: int | None = Field(default=None, ge=0)
     cached_input_tokens: int | None = Field(default=None, ge=0)
+    cache_write_tokens: int | None = Field(default=None, ge=0)
     reasoning_tokens: int | None = Field(default=None, ge=0)
     output_tokens: int | None = Field(default=None, ge=0)
     total_tokens: int | None = Field(default=None, ge=0)
@@ -1041,6 +1048,7 @@ class ModelUsage(StrictModel):
     reported_model: str | None = None
     input_tokens: int | None = Field(default=None, ge=0)
     cached_input_tokens: int | None = Field(default=None, ge=0)
+    cache_write_tokens: int | None = Field(default=None, ge=0)
     reasoning_tokens: int | None = Field(default=None, ge=0)
     output_tokens: int | None = Field(default=None, ge=0)
     total_tokens: int | None = Field(default=None, ge=0)

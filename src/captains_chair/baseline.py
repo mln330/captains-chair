@@ -263,13 +263,14 @@ class DeepBaselineCollector:
         role: str,
         root: Path,
     ) -> Any:
+        baseline_models = self.models.for_role("baseline")
         if self.model_invoker is not None:
             return self.model_invoker(
                 repo,
                 fingerprint[:16],
                 role,
                 prompt,
-                models=self.models.baseline,
+                models=baseline_models,
                 output_model=BaselineAnalysis,
                 cwd=root,
                 writable=False,
@@ -279,7 +280,7 @@ class DeepBaselineCollector:
         try:
             result = harness.run(
                 prompt=prompt,
-                models=self.models.baseline,
+                models=baseline_models,
                 role=role,
                 output_model=BaselineAnalysis,
                 cwd=root,
@@ -400,15 +401,27 @@ class DeepBaselineCollector:
         results: list[dict[str, Any]] = []
         for check in checks:
             command = shlex.split(check, posix=True)
-            result = self.runner(command, cwd=root, timeout=1800)
-            results.append(
-                {
-                    "command": check,
-                    "returncode": result.returncode,
-                    "stdout_tail": result.stdout[-4000:],
-                    "stderr_tail": result.stderr[-4000:],
-                }
-            )
+            try:
+                result = self.runner(command, cwd=root, timeout=1800)
+            except (OSError, TimeoutError) as exc:
+                results.append(
+                    {
+                        "command": check,
+                        "returncode": None,
+                        "stdout_tail": "",
+                        "stderr_tail": str(exc)[:4000],
+                        "execution_error": type(exc).__name__,
+                    }
+                )
+            else:
+                results.append(
+                    {
+                        "command": check,
+                        "returncode": result.returncode,
+                        "stdout_tail": result.stdout[-4000:],
+                        "stderr_tail": result.stderr[-4000:],
+                    }
+                )
         return results
 
 

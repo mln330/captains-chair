@@ -10,12 +10,15 @@ import pytest
 from pydantic import BaseModel
 
 import captains_chair.openclaw_usage as openclaw_usage
+import captains_chair.state as state_module
 from captains_chair.command import CommandResult
 from captains_chair.harness import CodexAdapter
 from captains_chair.models import HarnessConfig, ModelTarget, RoleModels, UsageConfig
 from captains_chair.openclaw_usage import sync_openclaw_sessions
 from captains_chair.state import StateStore
 from captains_chair.usage import build_usage_report, dispatch_budget, usage_summary_text
+
+_usage_attempt_index = state_module._usage_attempt_index  # pyright: ignore[reportPrivateUsage]
 
 
 def test_codex_usage_is_recorded_without_retaining_response_content(tmp_path: Path) -> None:
@@ -32,7 +35,7 @@ def test_codex_usage_is_recorded_without_retaining_response_content(tmp_path: Pa
         return CommandResult(
             0,
             '{"type":"turn.completed","model":"gpt-5.3-codex-spark",'
-            '"usage":{"input_tokens":100,"cached_input_tokens":20,'
+            '"usage":{"input_tokens":100,"cached_input_tokens":20,"cache_write_tokens":7,'
             '"output_tokens_details":{"reasoning_tokens":8},'
             '"output_tokens":30,"total_tokens":130}}',
             "",
@@ -51,6 +54,7 @@ def test_codex_usage_is_recorded_without_retaining_response_content(tmp_path: Pa
     attempt = result.attempts[0]
     assert attempt.input_tokens == 100
     assert attempt.cached_input_tokens == 20
+    assert attempt.cache_write_tokens == 7
     assert attempt.reasoning_tokens == 8
     assert attempt.output_tokens == 30
     assert attempt.total_tokens == 130
@@ -134,6 +138,134 @@ def test_openclaw_usage_accepts_codex_openai_route_alias(tmp_path: Path) -> None
     assert state.usage_summary(repo="NewmanZone/PrintHub")["external_sessions"][
         "model_mismatch_attempts"
     ] == 0
+
+
+def test_openclaw_worker_usage_uses_card_context_for_stage_and_model_dimensions(
+    tmp_path: Path,
+) -> None:
+    output = (
+        '{"sessions":[{"key":"agent:github-coder:captains-chair:worker:card-123:attempt-1",'
+        '"agentId":"github-coder","model":"gpt-5.6-terra","modelProvider":"codex",'
+        '"inputTokens":100,"cachedInputTokens":20,"cacheWriteTokens":7,"outputTokens":30,"totalTokens":150}]}'
+    )
+
+    def runner(command: Sequence[str], *, timeout: int = 60, **_: object) -> CommandResult:
+        del command, timeout
+        return CommandResult(0, output, "")
+
+    state = StateStore(tmp_path / "state.db")
+    result = sync_openclaw_sessions(
+        state,
+        repo="mln330/captains-chair-e2e-canary-20260717",
+        runner=runner,
+        expected_models={"coder": "codex/gpt-5.6-terra"},
+        session_context={
+            "card-123": {
+                "course_key": "hello-cli",
+                "work_package_key": "hello-implementation",
+                "stage": "implementation",
+            }
+        },
+    )
+
+    assert result["sessions_imported"] == 1
+    group = state.usage_summary(repo="mln330/captains-chair-e2e-canary-20260717")[
+        "external_groups"
+    ][0]
+    assert group["course_key"] == "hello-cli"
+    assert group["work_package_key"] == "hello-implementation"
+    assert group["stage"] == "implementation"
+    assert state.usage_dimensions("mln330/captains-chair-e2e-canary-20260717") == [
+        {
+            "date": group["date"],
+            "course_key": "hello-cli",
+            "work_package_key": "hello-implementation",
+            "stage": "implementation",
+                "model": "codex/gpt-5.6-terra",
+                "calls": 1,
+                "input_tokens": 100,
+                "cached_input_tokens": 20,
+                "cache_write_tokens": 7,
+                "reasoning_tokens": None,
+                "output_tokens": 30,
+                "total_tokens": 150,
+                "tokens": 150,
+        }
+    ]
+
+
+def test_openclaw_native_workboard_session_uses_durable_card_context(tmp_path: Path) -> None:
+    card_id = "039ef01a-7bc3-4fc9-9834-eaad70f8cf9e"
+    output = json.dumps(
+        {
+            "sessions": [
+                {
+                    "key": (
+                        "agent:github-coder:subagent:"
+                        f"workboard-captains-chair-canary-{card_id}"
+                    ),
+                    "agentId": "github-coder",
+                    "model": "gpt-5.3-codex-spark",
+                    "modelProvider": "codex",
+                    "inputTokens": 80,
+                    "outputTokens": 20,
+                    "totalTokens": 100,
+                }
+            ]
+        }
+    )
+
+    def runner(command: Sequence[str], *, timeout: int = 60, **_: object) -> CommandResult:
+        del command, timeout
+        return CommandResult(0, output, "")
+
+    state = StateStore(tmp_path / "state.db")
+    result = sync_openclaw_sessions(
+        state,
+        repo="mln330/captains-chair-canary",
+        runner=runner,
+        expected_models={"github-coder": "codex/gpt-5.3-codex-spark"},
+        session_context={
+            card_id: {
+                "course_key": "health-cli",
+                "work_package_key": "implementation",
+                "stage": "implementation",
+            }
+        },
+    )
+
+    assert result["sessions_imported"] == 1
+    group = state.usage_summary(repo="mln330/captains-chair-canary")["external_groups"][0]
+    assert group["stage"] == "implementation"
+    assert group["model"] == "gpt-5.3-codex-spark"
+    assert group["total_tokens"] == 100
+
+
+def test_failed_openclaw_session_without_model_usage_is_not_counted_as_unknown(
+    tmp_path: Path,
+) -> None:
+    output = (
+        '{"sessions":[{"key":"agent:github-coder:captains-chair:worker:card-failed:attempt-1",'
+        '"agentId":"github-coder","model":"gpt-5.6-terra","modelProvider":"codex",'
+        '"status":"failed","totalTokens":null,"totalTokensFresh":false}]}'
+    )
+
+    def runner(command: Sequence[str], *, timeout: int = 60, **_: object) -> CommandResult:
+        del command, timeout
+        return CommandResult(0, output, "")
+
+    state = StateStore(tmp_path / "state.db")
+    sync_openclaw_sessions(
+        state,
+        repo="repo/project",
+        runner=runner,
+        session_context={"card-failed": {"stage": "implementation"}},
+    )
+
+    summary = state.usage_summary(repo="repo/project")
+    assert summary["external_sessions"]["unknown_sessions"] == 0
+    assert summary["external_sessions"]["failed_sessions"] == 1
+    assert build_usage_report(summary, UsageConfig())["telemetry"]["status"] == "complete"
 
 
 def test_openclaw_session_import_uses_a_bounded_limit(tmp_path: Path) -> None:
@@ -471,6 +603,112 @@ def test_usage_report_quantifies_failed_fallback_attempt_tokens(tmp_path: Path) 
     assert report["failure_hotspots"][0]["accounted_tokens"] == 1_000_100
 
 
+def test_usage_tracks_fallback_tokens_by_stage_and_actual_model(tmp_path: Path) -> None:
+    state = StateStore(tmp_path / "state.db")
+    state.record_model_call(
+        "repo/project",
+        "run-1",
+        "coder",
+        "gpt-5.3-codex-spark",
+        [
+            {
+                "model": "gpt-5.6-terra",
+                "success": False,
+                "input_tokens": 100,
+                "output_tokens": 10,
+                "error": "provider unavailable",
+            },
+            {
+                "model": "gpt-5.3-codex-spark",
+                "success": True,
+                "input_tokens": 50,
+                "output_tokens": 5,
+            },
+        ],
+        runtime="codex",
+        course_key="course-1",
+        work_package_key="package-1",
+        stage="implementation",
+    )
+
+    report = build_usage_report(state.usage_summary(repo="repo/project"), UsageConfig())
+    totals = {item["model"]: item["accounted_tokens"] for item in report["model_totals"]}
+
+    assert report["token_totals"]["accounted_tokens"] == 165
+    assert totals == {
+        "codex/gpt-5.6-terra": 110,
+        "codex/gpt-5.3-codex-spark": 55,
+    }
+    dimensions = state.usage_dimensions("repo/project")
+    assert {(item["stage"], item["model"], item["tokens"]) for item in dimensions} == {
+        ("implementation", "codex/gpt-5.6-terra", 110),
+        ("implementation", "codex/gpt-5.3-codex-spark", 55),
+    }
+
+
+def test_usage_dimensions_keep_identical_model_routes_separate_by_date(tmp_path: Path) -> None:
+    path = tmp_path / "state.db"
+    state = StateStore(path)
+    for run_id, tokens in (("run-1", 10), ("run-2", 20)):
+        state.record_model_call(
+            "repo/project",
+            run_id,
+            "coder",
+            "gpt-5.6-terra",
+            [{"model": "gpt-5.6-terra", "total_tokens": tokens, "success": True}],
+            runtime="codex",
+            stage="implementation",
+        )
+    with closing(sqlite3.connect(path)) as connection, connection:
+        connection.execute(
+            "UPDATE model_calls SET created_at='2026-07-16T10:00:00+00:00' WHERE run_id='run-1'"
+        )
+        connection.execute(
+            "UPDATE model_calls SET created_at='2026-07-17T10:00:00+00:00' WHERE run_id='run-2'"
+        )
+
+    dimensions = state.usage_dimensions("repo/project")
+
+    assert {(item["date"], item["tokens"]) for item in dimensions} == {
+        ("2026-07-16", 10),
+        ("2026-07-17", 20),
+    }
+
+
+def test_usage_summary_ignores_corrupt_attempt_envelopes(tmp_path: Path) -> None:
+    path = tmp_path / "state.db"
+    state = StateStore(path)
+    with closing(sqlite3.connect(path)) as connection, connection:
+        connection.executemany(
+            "INSERT INTO model_calls(repo,run_id,runtime,role,attempts_json,created_at) "
+            "VALUES('repo/project',?,'codex','coder',?,'2026-07-17T10:00:00+00:00')",
+            (
+                ("invalid-json", "{"),
+                ("object-envelope", '{"model":"gpt-5.6-terra"}'),
+                ("scalar-attempt", '["not-an-attempt"]'),
+            ),
+        )
+
+    summary = state.usage_summary(repo="repo/project")
+
+    assert summary["direct_calls"]["calls"] == 3
+    assert summary["direct_attempt_groups"] == []
+
+
+def test_usage_attempt_index_fails_closed_for_stale_or_ambiguous_sessions() -> None:
+    assert (
+        _usage_attempt_index(
+            [{"session_id": "attempt-1:root"}],
+            "agent:worker:attempt-2:root",
+            "root",
+        )
+        is None
+    )
+    assert _usage_attempt_index(["malformed", {}], None, "root") == 1
+    assert _usage_attempt_index(["malformed"], None, "root") == 0
+    assert _usage_attempt_index(["first", "second"], None, "root") is None
+
+
 def test_usage_report_ranks_external_token_hotspots_and_marks_partial_telemetry() -> None:
     report = build_usage_report(
         {
@@ -503,6 +741,25 @@ def test_usage_report_ranks_external_token_hotspots_and_marks_partial_telemetry(
     assert [item["role"] for item in report["token_hotspots"]] == ["coder", "reviewer"]
     assert report["token_hotspots"][0]["telemetry_status"] == "partial"
     assert report["token_hotspots"][0]["accounted_tokens"] == 2_000_000
+    assert {item["model"] for item in report["model_totals"]} == {"codex/gpt-5.3-codex-spark"}
+
+
+def test_usage_report_keeps_openai_and_codex_model_totals_separate() -> None:
+    report = build_usage_report(
+        {
+            "direct_calls": {"calls": 0},
+            "direct_groups": [],
+            "external_sessions": {"calls": 2, "unknown_sessions": 0},
+            "external_groups": [
+                {"provider": "openai", "model": "gpt-5.5", "calls": 1, "total_tokens": 3_500_000},
+                {"provider": "codex", "model": "gpt-5.5", "calls": 1, "total_tokens": 108_660},
+            ],
+        },
+        UsageConfig(),
+    )
+
+    totals = {item["model"]: item["accounted_tokens"] for item in report["model_totals"]}
+    assert totals == {"openai/gpt-5.5": 3_500_000, "codex/gpt-5.5": 108_660}
 
 
 def test_usage_report_surfaces_fallbacks_and_large_prompt_groups() -> None:

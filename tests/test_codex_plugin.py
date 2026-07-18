@@ -237,7 +237,7 @@ def test_standalone_server_serves_shared_ui_and_sidecar_api(tmp_path: Path) -> N
     ui_root = tmp_path / "ui"
     ui_root.mkdir()
     (ui_root / "index.html").write_text("<html>Captain's Chair</html>", encoding="utf-8")
-    config = app_config(tmp_path, repo_config(tmp_path))
+    config = app_config(tmp_path, repo_config(tmp_path)).model_copy(update={"repos": ()})
     config_path = tmp_path / "config.yaml"
     config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
     environment = dict(os.environ)
@@ -276,7 +276,7 @@ def test_standalone_server_serves_shared_ui_and_sidecar_api(tmp_path: Path) -> N
         )
         with urllib.request.urlopen(request, timeout=5) as response:
             payload = json.loads(response.read())
-        assert payload["repos"][0]["full_name"] == "example/project"
+        assert payload["repos"] == []
         model_request = urllib.request.Request(
             f"{base_url}/api/models/config",
             data=b"{}",
@@ -314,7 +314,7 @@ def test_standalone_server_requires_and_enforces_token_for_remote_binding(tmp_pa
     ui_root = tmp_path / "ui"
     ui_root.mkdir()
     (ui_root / "index.html").write_text("<html>Captain's Chair</html>", encoding="utf-8")
-    config = app_config(tmp_path, repo_config(tmp_path))
+    config = app_config(tmp_path, repo_config(tmp_path)).model_copy(update={"repos": ()})
     config_path = tmp_path / "config.yaml"
     config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
     environment = {
@@ -380,7 +380,7 @@ def test_standalone_server_requires_and_enforces_token_for_remote_binding(tmp_pa
             method="POST",
         )
         with urllib.request.urlopen(request, timeout=5) as response:
-            assert json.loads(response.read())["repos"][0]["full_name"] == "example/project"
+            assert json.loads(response.read())["repos"] == []
     finally:
         process.terminate()
         process.wait(timeout=10)

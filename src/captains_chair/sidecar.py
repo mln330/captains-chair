@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -41,6 +42,7 @@ from captains_chair.models import (
     ModelPolicy,
     ModelProfile,
     NotificationConfig,
+    OpenClawWorkboardConfig,
     OperationMode,
     ProjectManifest,
     RepoConfig,
@@ -49,12 +51,266 @@ from captains_chair.models import (
     ScheduleConfig,
     UsageConfig,
 )
+from captains_chair.openclaw_usage import sync_openclaw_sessions
+from captains_chair.orchestration import QueueCard, QueueStatus
+from captains_chair.runtime import build_work_queue_adapter
 from captains_chair.state import StateStore
 from captains_chair.usage import build_usage_report
 
 
 class SidecarError(RuntimeError):
     """A request failed with an operator-actionable error."""
+
+
+_WORKBOARD_ACTIVE_STATUSES = frozenset(
+    {
+        QueueStatus.TODO,
+        QueueStatus.READY,
+        QueueStatus.RUNNING,
+        QueueStatus.REVIEW,
+    }
+)
+
+
+def _workflow_label(card: QueueCard) -> str | None:
+    return next((label for label in card.labels if label.startswith("workflow:")), None)
+
+
+def _workflow_stage(card: QueueCard) -> str | None:
+    return next((label.split(":", 1)[1] for label in card.labels if label.startswith("stage:")), None)
+
+
+def _card_activity_timestamp(card: QueueCard) -> int:
+    """Return the newest Workboard timestamp available in normalized metadata."""
+    timestamps: list[int] = []
+    metadata = card.metadata
+    automation = metadata.get("automation")
+    if isinstance(automation, dict):
+        automation = cast(dict[str, Any], automation)
+        for key in ("createdAt", "lastDispatchAt"):
+            value = automation.get(key)
+            if isinstance(value, (int, float)):
+                timestamps.append(int(value))
+    for key in ("attempts", "comments", "notifications", "proof", "workerLogs"):
+        values = metadata.get(key)
+        if not isinstance(values, list):
+            continue
+        for raw_item in cast(list[object], values):
+            if not isinstance(raw_item, dict):
+                continue
+            item = cast(dict[str, Any], raw_item)
+            for timestamp_key in ("createdAt", "startedAt", "endedAt"):
+                value = item.get(timestamp_key)
+                if isinstance(value, (int, float)):
+                    timestamps.append(int(value))
+    return max(timestamps, default=0)
+
+
+def _card_activity_time(card: QueueCard) -> str | None:
+    timestamp = _card_activity_timestamp(card)
+    if timestamp <= 0:
+        return None
+    return datetime.fromtimestamp(timestamp / 1000, UTC).isoformat()
+
+
+def _card_summary(card: QueueCard) -> str:
+    automation = card.metadata.get("automation")
+    if isinstance(automation, dict):
+        value = cast(dict[str, Any], automation).get("summary")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    comments = card.metadata.get("comments")
+    if isinstance(comments, list):
+        for raw_comment in reversed(cast(list[object], comments)):
+            if isinstance(raw_comment, dict):
+                body = cast(dict[str, Any], raw_comment).get("body")
+                if isinstance(body, str) and body.strip():
+                    return body.strip()
+    return card.title
+
+
+def _attempt_count(card: QueueCard) -> int:
+    attempts = card.metadata.get("attempts")
+    return len(cast(list[Any], attempts)) if isinstance(attempts, list) else 0
+
+
+def _card_context_rows(cards: list[QueueCard]) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": card.id,
+            "title": card.title,
+            "status": card.status.value,
+            "labels": list(card.labels),
+            "agent_id": card.agent_id,
+            "source_url": card.source_url,
+            "metadata": card.metadata,
+        }
+        for card in cards
+    ]
+
+
+def _expected_worker_models(configured: OpenClawWorkboardConfig) -> dict[str, str]:
+    roles = ("captain", "coder", "reviewer", "tester", "ux_reviewer", "final_reviewer", "merger", "verifier")
+    return {
+        str(getattr(configured.workers, role)): str(getattr(configured.worker_models, role))
+        for role in roles
+    }
+
+
+def _summarize_workboard(
+    cards: list[QueueCard],
+    board_id: str,
+    *,
+    usage_sync: dict[str, Any] | None = None,
+    repo_full_name: str | None = None,
+) -> dict[str, Any]:
+    """Project Workboard cards into a read-only dashboard status.
+
+    Blocked retry artifacts are deliberately ignored for terminal detection. A
+    workflow is complete only when its merge and post-merge stages are done and
+    no active stage card remains.
+    """
+    workflows: dict[str, list[QueueCard]] = {}
+    for card in cards:
+        if card.metadata.get("archivedAt"):
+            continue
+        label = _workflow_label(card)
+        if label is not None:
+            workflows.setdefault(label, []).append(card)
+
+    if not workflows:
+        return {
+            "status": "unknown",
+            "board": board_id,
+            "cards": 0,
+            "counts": {},
+        }
+
+    latest_label, latest_cards = max(
+        workflows.items(),
+        key=lambda item: (
+            max((_card_activity_timestamp(card) for card in item[1]), default=0),
+            int(any(card.status in _WORKBOARD_ACTIVE_STATUSES for card in item[1])),
+        ),
+    )
+    counts: dict[str, int] = {}
+    for card in latest_cards:
+        counts[card.status.value] = counts.get(card.status.value, 0) + 1
+    active_cards = [card for card in latest_cards if card.status in _WORKBOARD_ACTIVE_STATUSES]
+    done_stages = {
+        stage
+        for card in latest_cards
+        if card.status == QueueStatus.DONE
+        for stage in (_workflow_stage(card),)
+        if stage is not None
+    }
+    terminal = not active_cards and {"merge", "post_merge"}.issubset(done_stages)
+    status = "completed" if terminal else "in_progress" if active_cards else "blocked"
+    stage_names = (
+        "orchestration",
+        "implementation",
+        "repair",
+        "review",
+        "test",
+        "ux_review",
+        "final_review",
+        "merge",
+        "post_merge",
+    )
+    stage_rows: list[dict[str, Any]] = []
+    for stage_name in stage_names:
+        stage_cards = [card for card in latest_cards if _workflow_stage(card) == stage_name]
+        if not stage_cards:
+            continue
+        stage_rows.append(
+            {
+                "stage": stage_name,
+                "total": len(stage_cards),
+                "done": sum(card.status == QueueStatus.DONE for card in stage_cards),
+                "active": sum(card.status in _WORKBOARD_ACTIVE_STATUSES for card in stage_cards),
+                "blocked": sum(card.status == QueueStatus.BLOCKED for card in stage_cards),
+                "loops": sum(
+                    stage_name == "repair"
+                    or any(label.startswith("retry:") for label in card.labels)
+                    or _attempt_count(card) > 1
+                    for card in stage_cards
+                ),
+            }
+        )
+    timeline = sorted(
+        (
+            {
+                "stage": _workflow_stage(card) or "unknown",
+                "status": card.status.value,
+                "title": card.title,
+                "summary": _card_summary(card),
+                "agent": card.agent_id,
+                "pr_url": card.source_url if "/pull/" in str(card.source_url or "") else None,
+                "updated_at": _card_activity_time(card),
+                "loop": (
+                    _workflow_stage(card) == "repair"
+                    or any(label.startswith("retry:") for label in card.labels)
+                    or _attempt_count(card) > 1
+                ),
+            }
+            for card in latest_cards
+        ),
+        key=lambda item: str(item["updated_at"] or ""),
+    )[-16:]
+    loop_count = sum(int(bool(item["loop"])) for item in timeline)
+    current_stage = next(
+        (
+            _workflow_stage(card) or "unknown"
+            for card in sorted(latest_cards, key=_card_activity_timestamp, reverse=True)
+            if card.status in _WORKBOARD_ACTIVE_STATUSES
+        ),
+        timeline[-1]["stage"] if timeline else None,
+    )
+    pr_numbers: set[int] = set()
+    explicit_pr_numbers: set[int] = set()
+    pr_urls_set: set[str] = set()
+    for card in latest_cards:
+        source_url = str(card.source_url or "")
+        source_match = re.search(r"https?://[^\s]+/pull/(\d+)", source_url)
+        if source_match:
+            pr_urls_set.add(source_url)
+            number = int(source_match.group(1))
+            pr_numbers.add(number)
+            explicit_pr_numbers.add(number)
+        text = f"{card.title} {_card_summary(card)}"
+        pr_numbers.update(int(value) for value in re.findall(r"\bPR\s*#?\s*(\d+)\b", text, re.IGNORECASE))
+    pr_urls = sorted(
+        pr_urls_set
+        | (
+            {
+                f"https://github.com/{repo_full_name}/pull/{number}"
+                for number in pr_numbers - explicit_pr_numbers
+            }
+            if repo_full_name
+            else set()
+        )
+    )
+    summary: dict[str, Any] = {
+        "status": status,
+        "board": board_id,
+        "workflow": latest_label.removeprefix("workflow:"),
+        "cards": len(latest_cards),
+        "counts": counts,
+        "active_cards": len(active_cards),
+        "terminal_stages": sorted(done_stages & {"merge", "post_merge"}),
+        "current_stage": current_stage,
+        "stages": stage_rows,
+        "timeline": timeline,
+        "loop_count": loop_count,
+        "pr_count": max(len(pr_numbers), len(pr_urls)),
+        "pr_numbers": sorted(pr_numbers),
+        "pr_urls": pr_urls,
+    }
+    if usage_sync is not None:
+        summary["usage_sync"] = usage_sync
+    if terminal:
+        summary["message"] = "Workboard merge and post-merge verification completed."
+    return summary
 
 
 class SidecarServer:
@@ -69,6 +325,85 @@ class SidecarServer:
         self.state = StateStore(self.config.state_dir / "state.db")
         self.interaction = interaction or NativeInteractionAdapter()
         self.github = github or GhGitHubProvider()
+
+    def _workboard_status(self, repo: RepoConfig) -> dict[str, Any] | None:
+        """Read Workboard progress and reconcile worker telemetry for the dashboard."""
+        if not repo.orchestrator or not repo.orchestration_board:
+            return None
+        configured = self.config.orchestrators.get(repo.orchestrator)
+        if not isinstance(configured, OpenClawWorkboardConfig):
+            return None
+        try:
+            adapter = build_work_queue_adapter(configured)
+            cards = adapter.list_cards(repo.orchestration_board)
+            self.state.sync_orchestration_cards(repo.full_name, _card_context_rows(cards))
+            try:
+                usage_sync = {
+                    "status": "ok",
+                    **sync_openclaw_sessions(
+                        self.state,
+                        repo=repo.full_name,
+                        executable=configured.executable,
+                        expected_models=_expected_worker_models(configured),
+                        session_context=self.state.openclaw_session_context(repo.full_name),
+                        session_limit=configured.session_limit,
+                    ),
+                }
+            except Exception as exc:
+                usage_sync = {"status": "unavailable", "error": str(exc)[:500]}
+            return _summarize_workboard(
+                cards,
+                repo.orchestration_board,
+                usage_sync=usage_sync,
+                repo_full_name=repo.full_name,
+            )
+        except Exception as exc:
+            return {
+                "status": "unavailable",
+                "board": repo.orchestration_board,
+                "error": str(exc)[:500],
+            }
+
+    def _github_status(self, repo: RepoConfig) -> dict[str, Any]:
+        """Collect the small GitHub slice needed for a portfolio card."""
+        try:
+            snapshot = self.github.snapshot(repo)
+            runs = snapshot.workflow_runs
+            failed_conclusions = {"failure", "cancelled", "timed_out", "action_required", "stale"}
+            failed_runs = sum(
+                str(run.get("conclusion") or "").lower() in failed_conclusions for run in runs
+            )
+            pending_runs = sum(str(run.get("status") or "").lower() != "completed" for run in runs)
+            return {
+                "status": "available",
+                "open_prs": len(snapshot.pull_requests),
+                "open_issues": len(snapshot.issues),
+                "branches": len(snapshot.branches),
+                "checks": {
+                    "recent": len(runs),
+                    "failed": failed_runs,
+                    "pending": pending_runs,
+                    "passed": max(0, len(runs) - failed_runs - pending_runs),
+                },
+                "prs": [
+                    {
+                        key: item.get(key)
+                        for key in (
+                            "number",
+                            "title",
+                            "url",
+                            "headRefName",
+                            "isDraft",
+                            "mergeStateStatus",
+                            "reviewDecision",
+                            "updatedAt",
+                        )
+                    }
+                    for item in snapshot.pull_requests[:8]
+                ],
+            }
+        except Exception as exc:
+            return {"status": "unavailable", "error": str(exc)[:500]}
 
     def request(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         payload = params or {}
@@ -136,8 +471,13 @@ class SidecarServer:
         raise SidecarError(f"unknown sidecar method: {method}")
 
     def _repo_status(self, repo: RepoConfig) -> dict[str, Any]:
+        workboard = self._workboard_status(repo)
         summary = self.state.usage_summary(repo=repo.full_name)
         usage = build_usage_report(summary, self.config.usage)
+        github = self._github_status(repo)
+        state = self.state.current_state(repo.full_name).value
+        if workboard is not None and workboard.get("status") == "completed":
+            state = "merged"
         events = [
             event.model_dump(mode="json")
             for event in self.state.recent_events(repo.full_name, limit=12)
@@ -164,7 +504,10 @@ class SidecarServer:
             "default_branch": repo.default_branch,
             "operation_mode": repo.operation_mode.value,
             "completion_policy": repo.completion_policy.value,
-            "state": self.state.current_state(repo.full_name).value,
+            "state": state,
+            "state_source": "workboard" if workboard is not None else "state_store",
+            "workboard_status": workboard,
+            "github_status": github,
             "orchestrator": repo.orchestrator or "direct",
             "orchestration_board": repo.orchestration_board,
             "schedule_enabled": repo.schedule_enabled,
@@ -238,6 +581,10 @@ class SidecarServer:
         visibility = str(payload.get("visibility") or "private")
         if visibility not in {"private", "public"}:
             raise SidecarError("repo.create visibility must be private or public")
+        configured_orchestrator = str(payload.get("orchestrator") or "").strip()
+        default_orchestrator = (
+            "openclaw-workers" if "openclaw-workers" in self.config.orchestrators else None
+        )
         repo = RepoConfig(
             full_name=full_name,
             local_path=local_path,
@@ -247,6 +594,10 @@ class SidecarServer:
             checks=tuple(str(item) for item in _list_value(payload.get("checks"))),
             docs_checks=tuple(str(item) for item in _list_value(payload.get("docs_checks"))),
             surfaces=frozenset(ApplicationSurface(str(item)) for item in _list_value(payload.get("surfaces"))),
+            orchestrator=configured_orchestrator or default_orchestrator,
+            orchestration_board=(
+                str(payload.get("orchestration_board") or "").strip() or None
+            ),
             require_project_manifest=True,
             provisioning=RepositoryProvisioningConfig(
                 enabled=True,

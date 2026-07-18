@@ -169,11 +169,27 @@ class GhGitHubProvider:
             "collection_errors": {},
         }
 
+        # A greenfield course is reviewed before its approval-gated repository
+        # exists. Capture the capability to provision it separately from the
+        # snapshot that is only available after approval.
+        evidence["repository_lifecycle"] = {
+            "provisioning_enabled": repo.provisioning.enabled,
+            "visibility": repo.provisioning.visibility,
+            "remote_creation_is_approval_gated": repo.provisioning.enabled,
+            "snapshot_expected_before_approval": not repo.provisioning.enabled,
+        }
+
         def collect(key: str, operation: Any) -> None:
             try:
                 evidence[key] = operation()
             except (GitHubProviderError, KeyError, TypeError, ValueError) as exc:
                 cast(dict[str, str], evidence["collection_errors"])[key] = str(exc)[:1000]
+
+        def collect_authentication() -> dict[str, Any]:
+            result = self.runner(["gh", "auth", "status"], cwd=self.cwd, timeout=30)
+            if result.returncode:
+                raise GitHubProviderError((result.stderr or result.stdout).strip()[:1000])
+            return {"authenticated": True}
 
         snapshot_holder: dict[str, RepositorySnapshot] = {}
 
@@ -200,6 +216,7 @@ class GhGitHubProvider:
                 "recent_workflow_runs": snapshot.workflow_runs[:20],
             }
 
+        collect("github_auth", collect_authentication)
         collect("snapshot", collect_snapshot)
         collect("default_branch_sha", lambda: self.default_branch_sha(repo))
         collect("required_checks", lambda: sorted(self.required_check_names(repo)))
@@ -323,6 +340,15 @@ class GhGitHubProvider:
             detail = (result.stderr or result.stdout).strip()
             if "404" in detail or "not found" in detail.lower():
                 return set()
+            if (
+                "upgrade to github pro" in detail.lower()
+                and "enable this feature" in detail.lower()
+            ):
+                # GitHub Free private repositories return this product-limit
+                # response for a branch-protection endpoint even when the
+                # caller can read and administer the repository. No required
+                # checks can be configured in that state.
+                return set()
             raise GitHubProviderError(f"required check query failed: {detail[:3000]}")
         try:
             payload = cast(object, json.loads(result.stdout))
@@ -362,10 +388,26 @@ class GhGitHubProvider:
                     url=cast(Any, item.get("detailsUrl") or item.get("url")),
                 )
             )
-        checks_green = bool(check_rows) and all(
-            check.status == "COMPLETED"
-            and (check.conclusion or "").upper() in {"SUCCESS", "NEUTRAL", "SKIPPED"}
-            for check in check_rows
+        observed_names = {check.name for check in check_rows}
+        for missing_name in sorted(required_names - observed_names):
+            check_rows.append(
+                CheckResult(
+                    name=missing_name,
+                    status="MISSING",
+                    conclusion=None,
+                    url=None,
+                )
+            )
+        # An empty rollup is acceptable when the branch has no required
+        # checks. Otherwise every required check must be present, complete,
+        # and successful; missing, pending, or failed checks remain fail-closed.
+        checks_green = (not required_names and not check_rows) or (
+            bool(check_rows)
+            and all(
+                check.status == "COMPLETED"
+                and (check.conclusion or "").upper() in {"SUCCESS", "NEUTRAL", "SKIPPED"}
+                for check in check_rows
+            )
         )
         active_threads = [
             thread

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any, cast
 
+from captains_chair.model_policy import models_match
 from captains_chair.models import UsageConfig
 
 TOKEN_FIELDS = (
@@ -26,9 +27,12 @@ def build_usage_report(summary: dict[str, Any], config: UsageConfig) -> dict[str
     direct = dict(summary.get("direct_calls", {}))
     external = dict(summary.get("external_sessions", {}))
     direct_groups = [_decorate_group(group) for group in summary.get("direct_groups", [])]
+    direct_attempt_groups = [
+        _decorate_group(group) for group in summary.get("direct_attempt_groups", [])
+    ]
     external_groups = [_decorate_group(group) for group in summary.get("external_groups", [])]
     repeated_prompts = [_decorate_group(group) for group in summary.get("repeated_prompts", [])]
-    groups = [*direct_groups, *external_groups]
+    groups = [*(direct_attempt_groups or direct_groups), *external_groups]
 
     token_totals = _token_totals(direct, external, groups)
     model_totals = _model_totals(groups)
@@ -80,6 +84,7 @@ def build_usage_report(summary: dict[str, Any], config: UsageConfig) -> dict[str
         "direct_calls": direct,
         "external_sessions": external,
         "direct_groups": direct_groups,
+        "direct_attempt_groups": direct_attempt_groups,
         "external_groups": external_groups,
         "token_totals": token_totals,
         "model_totals": model_totals,
@@ -192,6 +197,7 @@ def usage_summary_text(
             f"Tokens: {_number(tokens.get('accounted_tokens'))} accounted "
             f"({_number(tokens.get('input_tokens'))} input, "
             f"{_number(tokens.get('cached_input_tokens'))} cached input, "
+            f"{_number(tokens.get('cache_write_tokens'))} cache write, "
             f"{_number(tokens.get('reasoning_tokens'))} reasoning, "
             f"{_number(tokens.get('output_tokens'))} output)"
         ),
@@ -256,7 +262,7 @@ def _token_totals(
 def _model_totals(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
     totals: dict[str, dict[str, Any]] = {}
     for group in groups:
-        model = str(group.get("model") or "unknown")
+        model = _qualified_model(group)
         item = totals.setdefault(
             model,
             {
@@ -264,6 +270,7 @@ def _model_totals(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "calls": 0,
                 "input_tokens": 0,
                 "cached_input_tokens": 0,
+                "cache_write_tokens": 0,
                 "reasoning_tokens": 0,
                 "output_tokens": 0,
                 "accounted_tokens": 0,
@@ -274,6 +281,7 @@ def _model_totals(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
         for field in (
             "input_tokens",
             "cached_input_tokens",
+            "cache_write_tokens",
             "reasoning_tokens",
             "output_tokens",
             "accounted_tokens",
@@ -283,6 +291,19 @@ def _model_totals(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
             group.get("unknown_sessions")
         )
     return sorted(totals.values(), key=lambda item: item["accounted_tokens"], reverse=True)
+
+
+def _qualified_model(group: dict[str, Any]) -> str:
+    """Keep provider identity visible when aggregating heterogeneous runtimes."""
+    model = str(group.get("model") or "unknown")
+    if "/" in model:
+        return model
+    provider = str(group.get("provider") or "").strip()
+    if provider:
+        return f"{provider}/{model}"
+    if str(group.get("runtime") or "").strip().lower() == "codex":
+        return f"codex/{model}"
+    return model
 
 
 def _failure_hotspots(records: Any) -> list[dict[str, Any]]:
@@ -318,6 +339,7 @@ def _failure_hotspots(records: Any) -> list[dict[str, Any]]:
                     "unknown_failed_attempts": 0,
                     "input_tokens": 0,
                     "cached_input_tokens": 0,
+                    "cache_write_tokens": 0,
                     "reasoning_tokens": 0,
                     "output_tokens": 0,
                     "accounted_tokens": 0,
@@ -330,6 +352,7 @@ def _failure_hotspots(records: Any) -> list[dict[str, Any]]:
             for field in (
                 "input_tokens",
                 "cached_input_tokens",
+                "cache_write_tokens",
                 "reasoning_tokens",
                 "output_tokens",
             ):
@@ -522,13 +545,7 @@ def _group_identity(group: dict[str, Any], metric: str) -> dict[str, Any]:
 
 
 def _model_matches(actual: str, configured: str) -> bool:
-    actual_names = {actual, actual.removeprefix("codex/"), actual.removeprefix("openai/")}
-    configured_names = {
-        configured,
-        configured.removeprefix("codex/"),
-        configured.removeprefix("openai/"),
-    }
-    return bool(actual_names & configured_names)
+    return models_match(actual, configured)
 
 
 def _number(value: Any) -> int:

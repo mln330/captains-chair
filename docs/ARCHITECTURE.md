@@ -127,6 +127,12 @@ the exact action is explicitly approved or a validated repository whitelist
 authorizes it. Routine autonomous implementation and repair do not require
 approval merely because they eventually produce a PR.
 
+An autonomous merge is never assigned to a model worker. Its Workboard card is
+unassigned and the OpenClaw adapter executes it through the deterministic merge
+gate. The gate requires current-head `AUTO_MERGE_ALLOWED` proof, green required
+checks, clean mergeability, resolved blocking threads, autonomous repository
+mode, and an explicit `auto_merge` policy before it calls GitHub.
+
 The direct Captain final-review contract also has an `owner_blocker` field. It must use
 one of those prefixes to move an autonomous PR to `blocked`; an unclassified final
 review blocker is treated as technical repair work instead of silently paging the

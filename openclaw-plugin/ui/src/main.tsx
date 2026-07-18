@@ -16,7 +16,44 @@ type UsageDetail = {
   efficiency: { repeated_prompt_tokens?: number; failed_attempt_tokens?: number; fallback_attempts?: number };
   failed_attempts?: number;
   warnings: string[];
-  dimensions?: Array<{ date?: string; course_key?: string | null; work_package_key?: string | null; stage?: string; model?: string; tokens?: number; calls?: number }>;
+  dimensions?: Array<{ date?: string; course_key?: string | null; work_package_key?: string | null; stage?: string; model?: string; tokens?: number; calls?: number; input_tokens?: number; cached_input_tokens?: number; cache_write_tokens?: number; reasoning_tokens?: number; output_tokens?: number; total_tokens?: number }>;
+};
+type WorkflowTimelineItem = {
+  stage?: string;
+  status?: string;
+  title?: string;
+  summary?: string;
+  agent?: string | null;
+  pr_url?: string | null;
+  updated_at?: string | null;
+  loop?: boolean;
+};
+type WorkboardStatus = {
+  status?: string;
+  board?: string;
+  workflow?: string;
+  cards?: number;
+  counts?: Record<string, number>;
+  active_cards?: number;
+  current_stage?: string | null;
+  stages?: Array<{ stage?: string; total?: number; done?: number; active?: number; blocked?: number; loops?: number }>;
+  timeline?: WorkflowTimelineItem[];
+  loop_count?: number;
+  pr_count?: number;
+  pr_numbers?: number[];
+  pr_urls?: string[];
+  usage_sync?: { status?: string; sessions_seen?: number; sessions_imported?: number; sessions_with_usage?: number; error?: string };
+  message?: string;
+  error?: string;
+};
+type GitHubStatus = {
+  status?: string;
+  open_prs?: number;
+  open_issues?: number;
+  branches?: number;
+  checks?: { recent?: number; failed?: number; pending?: number; passed?: number };
+  prs?: Array<{ number?: number; title?: string; url?: string; headRefName?: string; isDraft?: boolean; mergeStateStatus?: string; reviewDecision?: string; updatedAt?: string }>;
+  error?: string;
 };
 type Repo = {
   full_name: string;
@@ -37,6 +74,9 @@ type Repo = {
   tokens: { total_tokens?: number; accounted_tokens?: number };
   usage_detail?: UsageDetail;
   active_work?: Record<string, unknown> | null;
+  workboard_status?: WorkboardStatus | null;
+  github_status?: GitHubStatus;
+  telemetry?: { status?: string; measured_records?: number; total_records?: number };
   events?: EventRecord[];
   warnings: string[];
 };
@@ -96,41 +136,48 @@ type ScheduleStatus = { status: string; jobs: ScheduleJob[] };
 type UpdatePayload = Record<string, unknown>;
 type ModelPreset = "economy" | "balanced" | "maximum_quality" | "local_first";
 
+const CONTROL_UI_TOKEN = document
+  .querySelector<HTMLMetaElement>('meta[name="captains-chair-control-token"]')
+  ?.content ?? "";
+
 const ROUTE_DEFAULTS = [
-  { role: "strategist", label: "Course strategist", model: "codex/gpt-5.5", effort: "high" },
-  { role: "course_verifier", label: "Course verifier", model: "codex/gpt-5.5", effort: "high" },
-  { role: "baseline", label: "Baseline analyst", model: "codex/gpt-5.5", effort: "high" },
-  { role: "baseline_analyst", label: "Baseline gap analyst", model: "codex/gpt-5.5", effort: "high" },
-  { role: "planner", label: "Planning", model: "codex/gpt-5.5", effort: "high" },
-  { role: "readiness_reviewer", label: "Readiness review", model: "codex/gpt-5.5", effort: "high" },
-  { role: "decomposer", label: "Work decomposition", model: "codex/gpt-5.5", effort: "medium" },
-  { role: "package_planner", label: "Package planning", model: "codex/gpt-5.5", effort: "medium" },
-  { role: "subsystem_analyst", label: "Subsystem analysis", model: "codex/gpt-5.5", effort: "medium" },
+  { role: "strategist", label: "Course strategist", model: "codex/gpt-5.6-sol", effort: "high" },
+  { role: "course_verifier", label: "Course verifier", model: "codex/gpt-5.6-sol", effort: "high" },
+  { role: "baseline", label: "Baseline analyst", model: "codex/gpt-5.6-terra", effort: "high" },
+  { role: "baseline_analyst", label: "Baseline gap analyst", model: "codex/gpt-5.6-terra", effort: "high" },
+  { role: "planner", label: "Planning", model: "codex/gpt-5.6-terra", effort: "medium" },
+  { role: "readiness_reviewer", label: "Readiness review", model: "codex/gpt-5.6-terra", effort: "high" },
+  { role: "decomposer", label: "Work decomposition", model: "codex/gpt-5.6-terra", effort: "medium" },
+  { role: "package_planner", label: "Package planning", model: "codex/gpt-5.6-terra", effort: "medium" },
+  { role: "subsystem_analyst", label: "Subsystem analysis", model: "codex/gpt-5.6-luna", effort: "medium" },
   { role: "coder", label: "Coding", model: "codex/gpt-5.3-codex-spark", effort: "medium" },
   { role: "fast_coder", label: "Fast coding", model: "codex/gpt-5.3-codex-spark", effort: "medium" },
   { role: "focused_coder", label: "Focused coding", model: "codex/gpt-5.3-codex-spark", effort: "medium" },
-  { role: "complex_coder", label: "Complex coding", model: "codex/gpt-5.5", effort: "high" },
+  { role: "complex_coder", label: "Complex coding", model: "codex/gpt-5.6-sol", effort: "high" },
   { role: "local_coder", label: "Local coding", model: "ollama/qualified-local", effort: "medium" },
-  { role: "tester", label: "Testing", model: "codex/gpt-5.3-codex-spark", effort: "medium" },
-  { role: "qa_assistant", label: "QA assistant", model: "codex/gpt-5.3-codex-spark", effort: "medium" },
-  { role: "reviewer", label: "Independent review", model: "codex/gpt-5.5", effort: "high" },
-  { role: "code_reviewer", label: "Code review", model: "codex/gpt-5.5", effort: "high" },
-  { role: "comment_adjudicator", label: "Comment adjudication", model: "codex/gpt-5.5", effort: "high" },
-  { role: "security_reviewer", label: "Security review", model: "codex/gpt-5.5", effort: "high" },
-  { role: "ux_reviewer", label: "UX review", model: "codex/gpt-5.3-codex-spark", effort: "medium" },
-  { role: "ui_qa_reviewer", label: "UI QA", model: "codex/gpt-5.5", effort: "medium" },
-  { role: "final_reviewer", label: "Final review", model: "codex/gpt-5.5", effort: "high" },
-  { role: "merger", label: "Merge gate", model: "codex/gpt-5.5", effort: "high" },
-  { role: "recovery_planner", label: "Recovery planning", model: "codex/gpt-5.5", effort: "high" },
-  { role: "summarizer", label: "Summaries", model: "codex/gpt-5.3-codex-spark", effort: "low" },
-  { role: "verifier", label: "Post-merge verification", model: "codex/gpt-5.5", effort: "high" },
+  { role: "tester", label: "Testing", model: "codex/gpt-5.6-luna", effort: "medium" },
+  { role: "qa_assistant", label: "QA assistant", model: "codex/gpt-5.6-luna", effort: "medium" },
+  { role: "reviewer", label: "Independent review", model: "codex/gpt-5.6-terra", effort: "high" },
+  { role: "code_reviewer", label: "Code review", model: "codex/gpt-5.6-terra", effort: "high" },
+  { role: "comment_adjudicator", label: "Comment adjudication", model: "codex/gpt-5.6-terra", effort: "high" },
+  { role: "security_reviewer", label: "Security review", model: "codex/gpt-5.6-terra", effort: "high" },
+  { role: "ux_reviewer", label: "UX review", model: "codex/gpt-5.6-terra", effort: "medium" },
+  { role: "ui_qa_reviewer", label: "UI QA", model: "codex/gpt-5.6-terra", effort: "medium" },
+  { role: "final_reviewer", label: "Final review", model: "codex/gpt-5.6-sol", effort: "high" },
+  { role: "merger", label: "Merge gate", model: "codex/gpt-5.6-terra", effort: "high" },
+  { role: "recovery_planner", label: "Recovery planning", model: "codex/gpt-5.6-terra", effort: "high" },
+  { role: "summarizer", label: "Summaries", model: "codex/gpt-5.6-luna", effort: "low" },
+  { role: "verifier", label: "Post-merge verification", model: "codex/gpt-5.6-terra", effort: "high" },
 ] as const;
 type EditableRoute = { model: string; effort: string };
 
 function callGateway<T>(path: string, params: Record<string, unknown> = {}): Promise<T> {
   return fetch(`/captains-chair/api/${path}`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      "x-captains-chair-control-token": CONTROL_UI_TOKEN,
+    },
     body: JSON.stringify(params),
   }).then(async (response) => {
     if (!response.ok) throw new Error(`Gateway request failed: ${response.status}`);
@@ -153,6 +200,25 @@ function Flow({ state }: { state: string }) {
   </div>;
 }
 
+function stageLabel(stage?: string | null): string {
+  return (stage || "unknown").split("_").join(" ");
+}
+
+function ExecutionPath({ repo }: { repo: Repo }) {
+  const workboard = repo.workboard_status;
+  if (!workboard || workboard.status === "unknown" || workboard.status === "unavailable") return null;
+  const timeline = (workboard.timeline ?? []).slice(-12);
+  const dimensions = (repo.usage_detail?.dimensions ?? []).slice(0, 5);
+  return <section className="execution-panel" aria-label={`Execution evidence for ${repo.full_name}`}>
+    <div className="execution-heading"><div><h4>Execution path</h4><span>{workboard.current_stage ? `Current: ${stageLabel(workboard.current_stage)}` : "No active stage"}</span></div><strong>{workboard.loop_count ?? 0} retry/repair loops</strong></div>
+    {timeline.length ? <div className="execution-path" role="list">{timeline.map((item, index) => <div className={`path-step ${item.status ?? "unknown"} ${item.loop ? "loop" : ""}`} role="listitem" key={`${item.stage}-${item.updated_at}-${index}`}>
+      <span className="path-dot" aria-hidden="true" /><div><strong>{stageLabel(item.stage)}</strong><span>{item.status ?? "unknown"}</span><small title={item.summary ?? item.title}>{item.summary ?? item.title ?? "Workboard transition"}</small>{item.pr_url && <a href={item.pr_url} target="_blank" rel="noreferrer">PR</a>}</div>
+    </div>)}</div> : <p className="muted">No stage transitions recorded yet.</p>}
+    {workboard.stages?.length ? <div className="stage-summary">{workboard.stages.map((stage) => <span key={stage.stage}><strong>{stageLabel(stage.stage)}</strong><small>{stage.done ?? 0}/{stage.total ?? 0} done{stage.blocked ? ` | ${stage.blocked} blocked` : ""}</small></span>)}</div> : null}
+    {dimensions.length ? <div className="token-breakdown"><h5>Usage by stage and model</h5>{dimensions.map((row, index) => <div key={`${row.date}-${row.stage}-${row.model}-${index}`}><span>{stageLabel(row.stage)} | {row.model ?? "model unknown"}</span><strong>{(row.tokens ?? 0).toLocaleString()}</strong></div>)}</div> : <p className="muted usage-note">No correlated provider usage recorded for this repository yet.</p>}
+  </section>;
+}
+
 function routeValue(repo: Repo, role: string, fallbackModel: string, fallbackEffort: string) {
   const route = repo.model_profiles?.[role]?.primary;
   return { model: route?.model ?? fallbackModel, effort: route?.thinking ?? fallbackEffort };
@@ -165,8 +231,27 @@ function initialRoutesFromProfiles(profiles?: Record<string, ModelRoute>): Recor
   }));
 }
 
-function initialStageRoute(profile?: ModelRoute): EditableRoute {
-  return { model: profile?.primary?.model ?? "codex/gpt-5.3-codex-spark", effort: profile?.primary?.thinking ?? "medium" };
+const STAGE_ROUTE_DEFAULTS: Record<string, EditableRoute> = {
+  baseline: { model: "codex/gpt-5.6-terra", effort: "high" },
+  planning: { model: "codex/gpt-5.6-terra", effort: "medium" },
+  decomposition: { model: "codex/gpt-5.6-terra", effort: "medium" },
+  // The OpenClaw plugin runs through the gateway. Its ChatGPT-account Codex
+  // route rejects Spark, so bounded coding uses Terra here; direct Codex
+  // keeps Spark through the portable runtime mapping.
+  implementation: { model: "codex/gpt-5.6-terra", effort: "medium" },
+  repair: { model: "codex/gpt-5.6-terra", effort: "medium" },
+  review: { model: "codex/gpt-5.6-terra", effort: "high" },
+  comment_adjudication: { model: "codex/gpt-5.6-terra", effort: "high" },
+  test: { model: "codex/gpt-5.6-luna", effort: "medium" },
+  ux_review: { model: "codex/gpt-5.6-terra", effort: "medium" },
+  final_review: { model: "codex/gpt-5.6-sol", effort: "high" },
+  merge: { model: "codex/gpt-5.6-terra", effort: "medium" },
+  post_merge: { model: "codex/gpt-5.6-terra", effort: "high" },
+};
+
+function initialStageRoute(profile?: ModelRoute, stageName = "implementation"): EditableRoute {
+  const fallback = STAGE_ROUTE_DEFAULTS[stageName] ?? STAGE_ROUTE_DEFAULTS.implementation;
+  return { model: profile?.primary?.model ?? fallback.model, effort: profile?.primary?.thinking ?? fallback.effort };
 }
 
 function effectiveRoute(repo: Repo | undefined, course: Course, workPackage: WorkPackage | undefined, role: string, fallbackModel: string, fallbackEffort: string, stageName = "implementation") {
@@ -216,9 +301,9 @@ function presetRoutes(preset: ModelPreset): Record<string, EditableRoute> {
   const localRoles = new Set(["coder", "fast_coder", "focused_coder", "local_coder", "tester", "qa_assistant", "ux_reviewer", "summarizer"]);
   return Object.fromEntries(ROUTE_DEFAULTS.map(({ role, model, effort }) => {
     if (preset === "balanced") return [role, { model, effort }];
-    if (preset === "maximum_quality") return [role, { model: "codex/gpt-5.5", effort: "high" }];
+    if (preset === "maximum_quality") return [role, { model: "codex/gpt-5.6-sol", effort: "high" }];
     if (preset === "local_first") return [role, { model: localRoles.has(role) ? "ollama/qualified-local" : model, effort: localRoles.has(role) ? "medium" : effort }];
-    return [role, { model: expensiveRoles.has(role) ? "codex/gpt-5.5" : "codex/gpt-5.3-codex-spark", effort: expensiveRoles.has(role) ? "medium" : "low" }];
+    return [role, { model: expensiveRoles.has(role) ? "codex/gpt-5.6-sol" : "codex/gpt-5.3-codex-spark", effort: expensiveRoles.has(role) ? "medium" : "low" }];
   }));
 }
 
@@ -266,10 +351,21 @@ function RepoPanel({ repo, onSave }: { repo: Repo; onSave: (name: string, payloa
       if (validation.warnings?.length) window.alert("Routes saved. Run a harness route test before autonomous use.");
     } finally { setSaving(false); }
   };
+  const recordedTokens = repo.tokens.accounted_tokens ?? repo.tokens.total_tokens ?? 0;
+  const usageSync = repo.workboard_status?.usage_sync;
+  const usagePending = recordedTokens === 0 && usageSync?.status !== "ok" && (usageSync?.sessions_with_usage ?? 0) === 0;
+  const usageLabel = usagePending ? "Usage not correlated" : `${recordedTokens.toLocaleString()} tokens recorded`;
+  const github = repo.github_status;
+  const trackedPrs = repo.workboard_status?.pr_count ?? repo.workboard_status?.pr_urls?.length ?? 0;
   return <article className="repo-panel">
     <div className="repo-heading"><div><h3>{repo.full_name}</h3><p>{repo.local_path}</p></div><span className={`mode ${repo.operation_mode}`}>{repo.operation_mode}</span></div>
     <Flow state={repo.state} />
-    <div className="repo-meta"><span>{repo.state.split("_").join(" ")}</span><span>{(repo.tokens.total_tokens ?? repo.tokens.accounted_tokens ?? 0).toLocaleString()} tokens</span><span>{repo.dirty ? "Uncommitted changes" : "Clean checkout"}</span>{repo.orchestrator === "openclaw" && repo.orchestration_board && <span>Workboard: {repo.orchestration_board}</span>}</div>
+    <div className="repo-meta"><span>{repo.state.split("_").join(" ")}</span><span className={usagePending ? "usage-pending" : ""}>{usageLabel}</span><span>{repo.dirty ? "Uncommitted changes" : "Clean checkout"}</span></div>
+    <div className="repo-stats" aria-label={`Repository facts for ${repo.full_name}`}>
+      <span><strong>{github?.open_prs ?? "-"}</strong> open PRs</span><span><strong>{trackedPrs}</strong> PRs in run</span><span><strong>{github?.open_issues ?? "-"}</strong> issues</span><span><strong>{github?.branches ?? "-"}</strong> branches</span><span><strong>{github?.checks?.failed ?? 0}</strong> failed checks</span><span><strong>{repo.workboard_status?.cards ?? 0}</strong> work cards</span>
+    </div>
+    <ExecutionPath repo={repo} />
+    {github?.prs?.length ? <div className="pr-list"><h4>Open pull requests</h4>{github.prs.slice(0, 4).map((pr) => <a href={pr.url} target="_blank" rel="noreferrer" key={pr.number}><strong>#{pr.number}</strong><span>{pr.title ?? "Untitled PR"}</span><small>{pr.isDraft ? "draft" : pr.reviewDecision ?? pr.mergeStateStatus ?? "open"}</small></a>)}</div> : null}
     {repo.warnings[0] && <p className="warning">{repo.warnings[0]}</p>}
     <details className="settings"><summary>Repository controls</summary>
       <div className="settings-grid">
@@ -459,14 +555,14 @@ function CourseModelSettings({ repository, repo, course, onSaved }: { repository
   const [packageKey, setPackageKey] = useState(course.work_packages[0]?.key ?? "");
   const [preset, setPreset] = useState<ModelPreset>("balanced");
   const [routes, setRoutes] = useState<Record<string, EditableRoute>>(() => initialRoutesFromProfiles(course.model_profiles));
-  const [stageRoute, setStageRoute] = useState<EditableRoute>(() => initialStageRoute(course.model_profiles?.["stage:implementation"]));
+  const [stageRoute, setStageRoute] = useState<EditableRoute>(() => initialStageRoute(course.model_profiles?.["stage:implementation"], stageName));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const selectedPackage = course.work_packages.find((item) => item.key === packageKey);
   const selectedProfiles = layer === "course" ? course.model_profiles : selectedPackage?.model_profiles;
   const stageProfiles = stageScope === "course" ? course.model_profiles : selectedPackage?.model_profiles;
   useEffect(() => {
-    if (layer === "stage") setStageRoute(initialStageRoute(stageProfiles?.[`stage:${stageName}`]));
+    if (layer === "stage") setStageRoute(initialStageRoute(stageProfiles?.[`stage:${stageName}`], stageName));
     else setRoutes(initialRoutesFromProfiles(selectedProfiles));
     setPreset("balanced");
     setError(null);

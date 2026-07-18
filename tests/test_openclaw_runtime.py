@@ -94,6 +94,9 @@ def test_runtime_install_creates_agents_and_role_protocols(tmp_path: Path) -> No
     assert "USER_SECRET:" in coder
     assert "captains_chair worker-protocol complete" in coder
     assert "Never call `heartbeat_respond`" in coder
+    final = (tmp_path / "github-final" / "AGENTS.md").read_text(encoding="utf-8")
+    assert "Never call session-inventory tools" in final
+    assert "bounded set of checks" in final
     merger = (tmp_path / "github-merge" / "AGENTS.md").read_text(encoding="utf-8")
     assert "merge-gate --repo <owner/repo>" in merger
     assert "Never invoke `gh pr merge` directly" in merger
@@ -367,14 +370,14 @@ def test_runtime_plan_accepts_codex_openai_model_route_alias(tmp_path: Path) -> 
             0,
             json.dumps(
                 [
-                    {"id": "captains-chair", "model": "openai/gpt-5.5"},
+                    {"id": "captains-chair", "model": "openai/gpt-5.6-terra"},
                     {"id": "github-coder", "model": "openai/gpt-5.3-codex-spark"},
-                    {"id": "github-reviewer", "model": "openai/gpt-5.5"},
-                    {"id": "github-tester", "model": "openai/gpt-5.3-codex-spark"},
-                    {"id": "github-ux", "model": "openai/gpt-5.3-codex-spark"},
-                    {"id": "github-final", "model": "openai/gpt-5.5"},
-                    {"id": "github-merge", "model": "openai/gpt-5.5"},
-                    {"id": "github-verify", "model": "openai/gpt-5.5"},
+                    {"id": "github-reviewer", "model": "openai/gpt-5.6-terra"},
+                    {"id": "github-tester", "model": "openai/gpt-5.6-luna"},
+                    {"id": "github-ux", "model": "openai/gpt-5.6-terra"},
+                    {"id": "github-final", "model": "openai/gpt-5.6-sol"},
+                    {"id": "github-merge", "model": "openai/gpt-5.6-terra"},
+                    {"id": "github-verify", "model": "openai/gpt-5.6-terra"},
                 ]
             ),
             "",

@@ -11,7 +11,11 @@ import pytest
 
 from captains_chair.command import CommandResult
 from captains_chair.direct_orchestrator import DirectOrchestrator
-from captains_chair.direct_workers import CommandWorkerExecutor, WorkerExecutionResult
+from captains_chair.direct_workers import (
+    CommandWorkerExecutor,
+    WorkerExecutionResult,
+    _worker_prompt,  # pyright: ignore[reportPrivateUsage]
+)
 from captains_chair.models import (
     ActionKind,
     CompletionPolicy,
@@ -19,9 +23,11 @@ from captains_chair.models import (
     OperationMode,
     PlanDecision,
     WorkerAssignments,
+    WorkerModelAssignments,
 )
 from captains_chair.orchestration import (
     BlockerKind,
+    QueueCard,
     QueueCardSpec,
     QueueStatus,
     WorkspaceRef,
@@ -143,6 +149,67 @@ def test_direct_runtime_completes_workflow_without_workboard(
         assert "gpt-5.3-codex-spark" in routed_models
     else:
         assert all(command[1:3] == ["agent", "--agent"] for command in runner.commands)
+
+
+def test_direct_process_routes_documented_models_by_stage(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    runner = StructuredWorkerRunner()
+    config = DirectOrchestratorConfig(
+        database_path=tmp_path / "documented-models.db",
+        worker_runtime="codex",
+        executable="codex",
+        max_dispatch_workers=10,
+        require_live_completion_validation=False,
+        workers=WORKERS,
+        worker_models=WorkerModelAssignments(),
+    )
+    orchestrator = build_work_queue_orchestrator(config, runner)
+    repo = repo_config(
+        workspace,
+        mode=OperationMode.AUTONOMOUS,
+        completion=CompletionPolicy.OWNER_APPROVAL,
+    )
+    workflow = orchestrator.enqueue(
+        repo,
+        _decision(),
+        "documented-models-direct-e2e",
+        workspace=WorkspaceRef(kind="worktree", path=workspace, branch="fixture"),
+    )
+
+    for _ in range(8):
+        orchestrator.reconcile(repo)
+        cards = orchestrator.adapter.list_cards(workflow.board_id)
+        if cards and all(card.status == QueueStatus.DONE for card in cards):
+            break
+
+    observed: dict[str, str] = {}
+    for command, prompt in zip(runner.commands, runner.prompts, strict=True):
+        stage = next(line.split(": ", 1)[1] for line in prompt.splitlines() if line.startswith("Stage: "))
+        observed[stage] = command[command.index("--model") + 1]
+
+    assert observed == {
+        "implementation": "gpt-5.3-codex-spark",
+        "review": "gpt-5.6-terra",
+        "test": "gpt-5.6-luna",
+        "final_review": "gpt-5.6-sol",
+    }
+
+
+def test_merge_worker_prompt_allows_only_explicit_merge_stage_action(tmp_path: Path) -> None:
+    card = QueueCard(
+        id="merge-1",
+        title="Merge the reviewed change",
+        status=QueueStatus.READY,
+        labels=("captains_chair", "stage:merge"),
+        notes="Run the merge gate and merge the PR when allowed.",
+    )
+
+    prompt = _worker_prompt(card, attempt_id="attempt-1", workspace=tmp_path)
+
+    assert "explicitly assigned merge-stage card" in prompt
+    assert "Do not release, deploy, expose secrets, force-push, or delete branches." in prompt
+    assert "Do not merge, release, deploy, expose secrets" not in prompt
 
 
 def test_direct_claims_are_atomic_under_overlapping_workers(tmp_path: Path) -> None:

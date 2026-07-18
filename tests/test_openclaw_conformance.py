@@ -34,6 +34,7 @@ from captains_chair.models import (
     PlanDecision,
     PullRequestGate,
     WorkerAssignments,
+    WorkerModelAssignments,
 )
 from captains_chair.openclaw_workboard import OpenClawWorkboardAdapter
 from captains_chair.orchestration import WorkflowOrchestrator
@@ -58,7 +59,7 @@ class FakeGateway:
         self.idempotency: dict[str, str] = {}
         self.ended_sessions: set[str] = set()
         self.session_inspection_error: str | None = None
-        self.coder_model = "codex/gpt-5.3-codex-spark"
+        self.coder_model = WorkerModelAssignments().coder
         self.next_id = 1
 
     def runner(
@@ -71,6 +72,19 @@ class FakeGateway:
     ) -> CommandResult:
         del cwd, input_text, timeout
         values = list(command)
+        if values and values[0] == "captains_chair":
+            return CommandResult(
+                0,
+                json.dumps(
+                    {
+                        "allowed": True,
+                        "merged": True,
+                        "reason": "all deterministic merge gates passed",
+                        "current_head": "bcdef12",
+                    }
+                ),
+                "",
+            )
         if "sessions" in values:
             session_key = values[values.index("--session-key") + 1]
             if self.session_inspection_error:
@@ -82,14 +96,14 @@ class FakeGateway:
                 0,
                 json.dumps(
                     [
-                        {"id": "captains-chair", "model": "codex/gpt-5.5"},
+                        {"id": "captains-chair", "model": WorkerModelAssignments().captain},
                         {"id": "github-coder", "model": self.coder_model},
-                        {"id": "github-reviewer", "model": "codex/gpt-5.5"},
-                        {"id": "github-tester", "model": "codex/gpt-5.3-codex-spark"},
-                        {"id": "github-ux", "model": "codex/gpt-5.3-codex-spark"},
-                        {"id": "github-final", "model": "codex/gpt-5.5"},
-                        {"id": "github-merge", "model": "codex/gpt-5.5"},
-                        {"id": "github-verify", "model": "codex/gpt-5.5"},
+                        {"id": "github-reviewer", "model": WorkerModelAssignments().reviewer},
+                        {"id": "github-tester", "model": WorkerModelAssignments().tester},
+                        {"id": "github-ux", "model": WorkerModelAssignments().ux_reviewer},
+                        {"id": "github-final", "model": WorkerModelAssignments().final_reviewer},
+                        {"id": "github-merge", "model": WorkerModelAssignments().merger},
+                        {"id": "github-verify", "model": WorkerModelAssignments().verifier},
                     ]
                 ),
                 "",
@@ -171,6 +185,19 @@ class FakeGateway:
             "automation": {
                 **card.get("metadata", {}).get("automation", {}),
                 "summary": params.get("summary", ""),
+            },
+        }
+        return {"card": card}
+
+    def _workboard_cards_claim(self, params: dict[str, Any]) -> dict[str, Any]:
+        card = self.cards[params["id"]]
+        card["status"] = "running"
+        card["metadata"] = {
+            **card.get("metadata", {}),
+            "claim": {
+                "ownerId": params["ownerId"],
+                "token": params["token"],
+                "attemptId": params.get("attemptId"),
             },
         }
         return {"card": card}

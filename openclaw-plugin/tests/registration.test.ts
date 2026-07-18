@@ -91,13 +91,24 @@ describe("Captain's Chair OpenClaw registration", () => {
     expect(registrations.routes).toContain("/captains-chair/api/models/config");
     expect(registrations.routes).toContain("/captains-chair/api/models/update");
     expect(registrations.routes).toContain("/captains-chair/api/usage/update");
-    expect(Object.values(registrations.routeAuth)).not.toContain("plugin");
-    expect(registrations.routeAuth["/captains-chair/api/repos/create"]).toBe("gateway");
+    expect(registrations.routeAuth["/captains-chair/"]).toBe("plugin");
+    expect(registrations.routeAuth["/captains-chair/assets/index.js"]).toBe("plugin");
+    expect(registrations.routeAuth["/captains-chair/api/repos/create"]).toBe("plugin");
+    expect(registrations.routeAuth["/captains-chair/api/schedule/install"]).toBe("plugin");
+    expect(registrations.routeAuth["/captains-chair/api/schedule/status"]).toBe("plugin");
     expect(registrations.services).toEqual(["captains-chair"]);
     expect(registrations.cli).toBe(1);
     expect(registrations.commands).toEqual(["captains-chair"]);
     await expect(registrations.commandDefinitions[0].handler({ args: "approve example/project feature", senderIsOwner: false, gatewayClientScopes: ["operator.read"] })).resolves.toEqual({
       text: "Captain's Chair refused that mutation: owner or operator.write scope is required.",
     });
+  });
+
+  it("marks embedded UI assets as CORS-enabled for the sandboxed plugin frame", () => {
+    const source = readFileSync(resolve(process.cwd(), "src/index.ts"), "utf8");
+    expect(source).toContain('<link rel="stylesheet" crossorigin="anonymous"');
+    expect(source).toContain('<script crossorigin="anonymous"');
+    expect(source).toContain('content-security-policy", "frame-ancestors \'self\'');
+    expect(source).toContain('captains-chair-control-token');
   });
 });

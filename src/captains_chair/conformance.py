@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import cast
 
 from captains_chair.models import PlanDecision, RepoConfig
 from captains_chair.orchestration import (
@@ -168,16 +169,34 @@ def run_full_autonomous_workflow(
 
     merge_ready = orchestrator.reconcile(repo)
     merge_card = stage_card(adapter, workflow.board_id, "merge", workflow_id=workflow.workflow_id)
-    _expect(merge_card.id in merge_ready.dispatch["promoted"], "merge was not promoted after final proof")
-    complete(
-        merge_card.id,
-        "Merged",
-        ({"status": "passed", "note": "Merge feed123"},),
-    )
+    if merge_card.status != QueueStatus.DONE:
+        _expect(
+            merge_card.id in merge_ready.dispatch["promoted"],
+            "merge was neither deterministically completed nor promoted after final proof",
+        )
+        complete(
+            merge_card.id,
+            "Merged",
+            ({"status": "passed", "note": "Merge feed123"},),
+        )
+    else:
+        deterministic_raw = cast(object, merge_ready.dispatch.get("deterministic_merge"))
+        deterministic_status: object | None = None
+        if isinstance(deterministic_raw, dict):
+            deterministic = cast(dict[str, object], deterministic_raw)
+            deterministic_status = deterministic.get("status")
+        _expect(
+            isinstance(deterministic_status, str) and deterministic_status == "completed",
+            "completed merge lacks deterministic gate evidence",
+        )
 
     verify_ready = orchestrator.reconcile(repo)
     verify_card = stage_card(adapter, workflow.board_id, "post_merge", workflow_id=workflow.workflow_id)
-    _expect(verify_card.id in verify_ready.dispatch["promoted"], "post-merge verification was not promoted")
+    _expect(
+        verify_card.id in verify_ready.dispatch["promoted"]
+        or verify_card.status in {QueueStatus.READY, QueueStatus.RUNNING},
+        "post-merge verification was not promoted",
+    )
     complete(
         verify_card.id,
         "Verified",

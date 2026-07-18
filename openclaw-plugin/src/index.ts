@@ -1,8 +1,10 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { readFile } from "node:fs/promises";
 import { SidecarSupervisor, withSidecarShutdown, type RpcResult } from "./sidecar.js";
+import { rejectNonControlUiRequest } from "./control-ui-auth.js";
 import {
   buildCronAddArgs,
   buildCronEditArgs,
@@ -107,6 +109,7 @@ export default definePluginEntry({
     );
     const request = async (method: string, params?: Record<string, unknown>): Promise<RpcResult> =>
       sidecar.request(method, params);
+    const controlUiToken = randomBytes(32).toString("base64url");
 
     api.session?.controls?.registerControlUiDescriptor?.({
       surface: "tab",
@@ -123,17 +126,22 @@ export default definePluginEntry({
     const uiRoot = join(api.rootDir ?? process.cwd(), "dist", "ui");
     api.registerHttpRoute?.({
       path: "/captains-chair/",
-      auth: "gateway",
-      handler: async (_req, res) => {
+      auth: "plugin",
+      handler: async (req, res) => {
+        if (rejectNonControlUiRequest(req, res, { cors: false })) return;
         res.statusCode = 200;
         res.setHeader("content-type", "text/html; charset=utf-8");
-        res.end("<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Captain's Chair</title><link rel=\"stylesheet\" href=\"/captains-chair/assets/index.css\"></head><body><div id=\"root\"></div><script type=\"module\" src=\"/captains-chair/assets/index.js\"></script></body></html>");
+        res.setHeader("cache-control", "no-store");
+        res.setHeader("content-security-policy", "frame-ancestors 'self'");
+        res.setHeader("x-content-type-options", "nosniff");
+        res.end(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="captains-chair-control-token" content="${controlUiToken}"><title>Captain's Chair</title><link rel="stylesheet" crossorigin="anonymous" href="/captains-chair/assets/index.css"></head><body><div id="root"></div><script crossorigin="anonymous" src="/captains-chair/assets/index.js"></script></body></html>`);
       },
     });
     api.registerHttpRoute?.({
       path: "/captains-chair/assets/index.css",
-      auth: "gateway",
-      handler: async (_req, res) => {
+      auth: "plugin",
+      handler: async (req, res) => {
+        if (rejectNonControlUiRequest(req, res)) return;
         try {
           const body = await readFile(join(uiRoot, "assets", "index.css"));
           res.statusCode = 200;
@@ -147,8 +155,9 @@ export default definePluginEntry({
     });
     api.registerHttpRoute?.({
       path: "/captains-chair/assets/index.js",
-      auth: "gateway",
-      handler: async (_req, res) => {
+      auth: "plugin",
+      handler: async (req, res) => {
+        if (rejectNonControlUiRequest(req, res)) return;
         try {
           const body = await readFile(join(uiRoot, "assets", "index.js"));
           res.statusCode = 200;
@@ -164,9 +173,9 @@ export default definePluginEntry({
     const apiRoute = (path: string, method: string) => {
       api.registerHttpRoute?.({
         path,
-        auth: "gateway",
-        gatewayRuntimeScopeSurface: "trusted-operator",
+        auth: "plugin",
         handler: async (req, res) => {
+          if (rejectNonControlUiRequest(req, res, { token: controlUiToken })) return;
           try {
             const params = req?.body && typeof req.body === "object" ? req.body : {};
             const result = await request(method, params);
@@ -434,9 +443,9 @@ export default definePluginEntry({
 
     api.registerHttpRoute?.({
       path: "/captains-chair/api/schedule/install",
-      auth: "gateway",
-      gatewayRuntimeScopeSurface: "trusted-operator",
-      handler: async (_req, res) => {
+      auth: "plugin",
+      handler: async (req, res) => {
+        if (rejectNonControlUiRequest(req, res, { token: controlUiToken })) return;
         try {
           const result = await reconcileSchedules();
           res.statusCode = 200;
@@ -452,9 +461,9 @@ export default definePluginEntry({
     const scheduleRoute = (path: string, operation: (params: Record<string, unknown>) => Promise<unknown>) => {
       api.registerHttpRoute?.({
         path,
-        auth: "gateway",
-        gatewayRuntimeScopeSurface: "trusted-operator",
+        auth: "plugin",
         handler: async (req, res) => {
+          if (rejectNonControlUiRequest(req, res, { token: controlUiToken })) return;
           try {
             const params = req?.body && typeof req.body === "object" ? req.body : {};
             const result = await operation(params);

@@ -9,13 +9,17 @@ import yaml
 
 import captains_chair.sidecar as sidecar_module
 from captains_chair.config import load_config
+from captains_chair.github import GitHubProvider, RepositorySnapshot
 from captains_chair.models import (
     CourseKind,
     HarnessConfig,
+    OpenClawWorkboardConfig,
     OperationMode,
     RepoConfig,
     RepositoryProvisioningConfig,
+    WorkerAssignments,
 )
+from captains_chair.orchestration import QueueCard, QueueStatus
 from captains_chair.sidecar import SidecarError, SidecarServer
 from tests.helpers import app_config, repo_config
 from tests.test_courses import ready_course, rebind_readiness_review
@@ -32,6 +36,232 @@ class GreenfieldProvider:
             "nameWithOwner": repo.full_name,
             "url": f"https://github.test/{repo.full_name}",
         }
+
+
+def _workboard_card(stage: str, status: QueueStatus, timestamp: int) -> QueueCard:
+    return QueueCard(
+        id=f"{stage}-{status.value}",
+        title=f"{stage} card",
+        status=status,
+        labels=("workflow:test-workflow", f"stage:{stage}"),
+        metadata={"comments": [{"createdAt": timestamp}]},
+    )
+
+
+def test_sidecar_projects_terminal_workboard_proof_into_completed_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = repo_config(tmp_path).model_copy(
+        update={"orchestrator": "openclaw", "orchestration_board": "test-board"}
+    )
+    workers = WorkerAssignments(
+        captain="captain",
+        coder="coder",
+        reviewer="reviewer",
+        tester="tester",
+        ux_reviewer="ux",
+        final_reviewer="final",
+        merger="merger",
+        verifier="verifier",
+    )
+    orchestrator = OpenClawWorkboardConfig(
+        workers=workers,
+        require_live_completion_validation=False,
+    )
+    config = app_config(tmp_path, repo_config(tmp_path)).model_copy(
+        update={"repos": (repo,), "orchestrators": {"openclaw": orchestrator}}
+    )
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+
+    cards = [
+        _workboard_card("review", QueueStatus.DONE, 1),
+        _workboard_card("merge", QueueStatus.DONE, 2),
+        _workboard_card("post_merge", QueueStatus.DONE, 3),
+        _workboard_card("repair", QueueStatus.BLOCKED, 4),
+    ]
+
+    class Adapter:
+        def list_cards(self, board_id: str) -> list[QueueCard]:
+            assert board_id == "test-board"
+            return cards
+
+    def build_adapter(_config: object) -> Adapter:
+        return Adapter()
+
+    monkeypatch.setattr(sidecar_module, "build_work_queue_adapter", build_adapter)
+    server = SidecarServer(config_path)
+
+    result = server.request("portfolio.status")["repos"][0]
+
+    assert result["state"] == "merged"
+    assert result["state_source"] == "workboard"
+    assert result["workboard_status"]["status"] == "completed"
+    assert result["workboard_status"]["active_cards"] == 0
+
+
+def test_sidecar_does_not_mark_workboard_with_active_cards_completed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = repo_config(tmp_path).model_copy(
+        update={"orchestrator": "openclaw", "orchestration_board": "test-board"}
+    )
+    workers = WorkerAssignments(
+        captain="captain",
+        coder="coder",
+        reviewer="reviewer",
+        tester="tester",
+        ux_reviewer="ux",
+        final_reviewer="final",
+        merger="merger",
+        verifier="verifier",
+    )
+    orchestrator = OpenClawWorkboardConfig(
+        workers=workers,
+        require_live_completion_validation=False,
+    )
+    config = app_config(tmp_path, repo_config(tmp_path)).model_copy(
+        update={"repos": (repo,), "orchestrators": {"openclaw": orchestrator}}
+    )
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+
+    cards = [
+        _workboard_card("merge", QueueStatus.RUNNING, 2),
+        _workboard_card("post_merge", QueueStatus.TODO, 3),
+    ]
+
+    class Adapter:
+        def list_cards(self, board_id: str) -> list[QueueCard]:
+            assert board_id == "test-board"
+            return cards
+
+    def build_adapter(_config: object) -> Adapter:
+        return Adapter()
+
+    monkeypatch.setattr(sidecar_module, "build_work_queue_adapter", build_adapter)
+    server = SidecarServer(config_path)
+
+    result = server.request("portfolio.status")["repos"][0]
+
+    assert result["state"] == "unbaselined"
+    assert result["workboard_status"]["status"] == "in_progress"
+    assert result["workboard_status"]["active_cards"] == 2
+
+
+def test_sidecar_correlates_workboard_sessions_and_reports_execution_facts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = repo_config(tmp_path).model_copy(
+        update={"orchestrator": "openclaw", "orchestration_board": "test-board"}
+    )
+    workers = WorkerAssignments(
+        captain="captain",
+        coder="coder",
+        reviewer="reviewer",
+        tester="tester",
+        ux_reviewer="ux",
+        final_reviewer="final",
+        merger="merger",
+        verifier="verifier",
+    )
+    orchestrator = OpenClawWorkboardConfig(
+        workers=workers,
+        require_live_completion_validation=False,
+    )
+    config = app_config(tmp_path, repo_config(tmp_path)).model_copy(
+        update={"repos": (repo,), "orchestrators": {"openclaw": orchestrator}}
+    )
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+
+    cards = [
+        QueueCard(
+            id="merge-done",
+            title="Merge implementation PR",
+            status=QueueStatus.DONE,
+            labels=("workflow:routing-canary", "stage:merge"),
+            agent_id="merger",
+            source_url="https://github.com/mln330/captains-chair/pull/42",
+            metadata={"comments": [{"createdAt": 2, "body": "Merged after green gates."}]},
+        ),
+        QueueCard(
+            id="post-merge-done",
+            title="Verify merged change",
+            status=QueueStatus.DONE,
+            labels=("workflow:routing-canary", "stage:post_merge"),
+            agent_id="verifier",
+            metadata={"comments": [{"createdAt": 3, "body": "Post-merge check passed."}]},
+        ),
+    ]
+
+    class Adapter:
+        def list_cards(self, board_id: str) -> list[QueueCard]:
+            assert board_id == "test-board"
+            return cards
+
+    class Github:
+        def snapshot(self, _repo: RepoConfig) -> RepositorySnapshot:
+            return RepositorySnapshot(
+                repo={},
+                issues=[{"number": 7}],
+                pull_requests=[
+                    {
+                        "number": 42,
+                        "title": "Routing canary",
+                        "url": "https://github.com/mln330/captains-chair/pull/42",
+                        "isDraft": False,
+                        "reviewDecision": "APPROVED",
+                    }
+                ],
+                branches=["main", "feature/routing"],
+                workflow_runs=[{"status": "completed", "conclusion": "success"}],
+            )
+
+    def sync(state: Any, **kwargs: Any) -> dict[str, Any]:
+        assert "merge-done" in kwargs["session_context"]
+        state.record_external_usage(
+            {
+                "source": "openclaw-session",
+                "external_id": "agent:github-merge:captains-chair:worker:merge-done:managed:1",
+                "repo": kwargs["repo"],
+                "role": "merger",
+                "stage": "merge",
+                "provider": "codex",
+                "model": "codex/gpt-5.6-terra",
+                "input_tokens": 20,
+                "output_tokens": 7,
+                "total_tokens": 27,
+                "total_tokens_fresh": True,
+            }
+        )
+        return {
+            "repo": kwargs["repo"],
+            "source": "openclaw-session",
+            "sessions_seen": 1,
+            "sessions_imported": 1,
+            "sessions_with_usage": 1,
+        }
+
+    def build_adapter(_config: object) -> Adapter:
+        return Adapter()
+
+    monkeypatch.setattr(sidecar_module, "build_work_queue_adapter", build_adapter)
+    monkeypatch.setattr(sidecar_module, "sync_openclaw_sessions", sync)
+    server = SidecarServer(config_path, github=cast(GitHubProvider, Github()))
+
+    result = server.request("portfolio.status")["repos"][0]
+
+    assert result["tokens"]["accounted_tokens"] == 27
+    assert result["workboard_status"]["usage_sync"]["status"] == "ok"
+    assert result["workboard_status"]["loop_count"] == 0
+    assert result["workboard_status"]["pr_count"] == 1
+    assert result["workboard_status"]["pr_numbers"] == [42]
+    assert result["workboard_status"]["pr_urls"] == [
+        "https://github.com/mln330/captains-chair/pull/42"
+    ]
+    assert result["github_status"]["open_prs"] == 1
+    assert result["github_status"]["checks"] == {"recent": 1, "failed": 0, "pending": 0, "passed": 1}
 
 
 def test_sidecar_reports_health_portfolio_and_schedule_contract(tmp_path: Path) -> None:
@@ -298,6 +528,52 @@ def test_greenfield_repo_creation_waits_for_course_approval_and_seeds_durable_fi
     assert (local_path / "docs" / "IMPLEMENTATION_PLAN.md").is_file()
     assert (local_path / ".captains-chair" / "project.yaml").is_file()
     assert load_config(config_path).repo("example/new-project").provisioning.enabled is True
+
+
+def test_greenfield_repo_creation_defaults_to_configured_openclaw_orchestrator(
+    tmp_path: Path,
+) -> None:
+    workers = WorkerAssignments(
+        captain="captain",
+        coder="coder",
+        reviewer="reviewer",
+        tester="tester",
+        ux_reviewer="ux",
+        final_reviewer="final",
+        merger="merger",
+        verifier="verifier",
+    )
+    root_config = app_config(tmp_path, repo_config(tmp_path))
+    config = root_config.model_copy(
+        update={
+            "orchestrators": {
+                "openclaw-workers": OpenClawWorkboardConfig(workers=workers)
+            }
+        }
+    )
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+    server = SidecarServer(config_path, github=cast(Any, GreenfieldProvider()))
+    course = rebind_readiness_review(
+        ready_course().model_copy(
+            update={
+                "key": "openclaw-course",
+                "repository": "example/openclaw-project",
+                "kind": CourseKind.GREENFIELD,
+            }
+        )
+    ).model_dump(mode="json")
+
+    server.request(
+        "repo.create",
+        {
+            "full_name": "example/openclaw-project",
+            "local_path": str(tmp_path / "openclaw-project"),
+            "course": course,
+        },
+    )
+
+    assert load_config(config_path).repo("example/openclaw-project").orchestrator == "openclaw-workers"
 
 
 @pytest.mark.parametrize("kind", tuple(CourseKind))
