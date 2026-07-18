@@ -51,6 +51,24 @@ class WorkerExecutionTelemetry(StrictModel):
     usage: ModelUsage = Field(default_factory=ModelUsage)
 
 
+def _worker_output_schema() -> dict[str, Any]:
+    """Return the closed structured-output contract accepted by Codex."""
+    schema = strict_output_schema(WorkerExecutionResult)
+    properties = cast(dict[str, Any], schema["properties"])
+    proof = cast(dict[str, Any], properties["proof"])
+    proof["items"] = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "status": {"type": "string", "enum": ["passed", "failed"]},
+            "note": {"type": "string", "minLength": 1},
+            "url": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        },
+        "required": ["note", "status", "url"],
+    }
+    return schema
+
+
 @runtime_checkable
 class WorkerExecutorAdapter(Protocol):
     """Launch one fresh host worker for a claimed direct-orchestrator card."""
@@ -123,7 +141,7 @@ class CommandWorkerExecutor:
             schema_path = Path(temp_dir) / "schema.json"
             output_path = Path(temp_dir) / "result.json"
             schema_path.write_text(
-                json.dumps(strict_output_schema(WorkerExecutionResult), indent=2),
+                json.dumps(_worker_output_schema(), indent=2),
                 encoding="utf-8",
             )
             command = [
@@ -226,7 +244,7 @@ class CommandWorkerExecutor:
 
 
 def _worker_prompt(card: QueueCard, *, attempt_id: str, workspace: Path) -> str:
-    schema = json.dumps(strict_output_schema(WorkerExecutionResult), separators=(",", ":"))
+    schema = json.dumps(_worker_output_schema(), separators=(",", ":"))
     merge_rule = (
         "This is an explicitly assigned merge-stage card: you may merge only after the configured merge gate "
         "passes and its completion policy allows it. Do not release, deploy, expose secrets, force-push, or "

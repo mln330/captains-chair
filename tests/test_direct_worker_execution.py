@@ -14,6 +14,7 @@ from make_it_so.direct_orchestrator import DirectOrchestrator
 from make_it_so.direct_workers import (
     CommandWorkerExecutor,
     WorkerExecutionResult,
+    _worker_output_schema,  # pyright: ignore[reportPrivateUsage]
     _worker_prompt,  # pyright: ignore[reportPrivateUsage]
 )
 from make_it_so.models import (
@@ -250,6 +251,15 @@ def test_codex_worker_captures_provider_usage_for_workboard_audit(tmp_path: Path
     assert result.telemetry.usage.cached_input_tokens == 40
     assert result.telemetry.usage.reasoning_tokens == 3
     assert result.telemetry.usage.output_tokens == 12
+
+
+def test_codex_worker_uses_a_closed_proof_schema() -> None:
+    schema = _worker_output_schema()
+    proof = schema["properties"]["proof"]["items"]
+
+    assert proof["additionalProperties"] is False
+    assert proof["required"] == ["note", "status", "url"]
+    assert set(proof["properties"]) == {"note", "status", "url"}
 
 
 def test_direct_claims_are_atomic_under_overlapping_workers(tmp_path: Path) -> None:

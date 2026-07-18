@@ -464,7 +464,7 @@ class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
                     claimed.id,
                     owner_id=owner_id,
                     token=token,
-                    reason=f"TECHNICAL: managed OpenClaw worker execution failed: {str(exc)[:1500]}",
+                    reason=f"TECHNICAL: managed {runtime} worker execution failed: {str(exc)[:1500]}",
                 )
             blocked = True
         finally:
