@@ -7,7 +7,7 @@ mapping and registers builders at the relevant boundaries.
 
 ## Core Ownership
 
-Keep these decisions in Captain's Chair core:
+Keep these decisions in Make It So core:
 
 - modes, approvals, checkpoints, blocker classification, and high-risk actions
 - workflow topology, retries, recovery transitions, and idempotency keys
@@ -27,7 +27,7 @@ and never becomes the source of policy or completion truth.
    class to the core package.
 2. Implement `WorkerOrchestratorAdapter` and `WorkerLifecycleAdapter` operations.
 3. Implement `WorkTrackerAdapter` only when external task mirroring is desired.
-4. Register builders through `captains_chair.runtime_adapters` or the appropriate
+4. Register builders through `make_it_so.runtime_adapters` or the appropriate
    harness, notifier, scheduler, telemetry, or interaction entry-point group.
 5. Preserve `QueueCardSpec.key` as the idempotency key across process restarts.
 6. Round-trip `WorkspaceRef.path`, `branch`, and `push_branch` on retries and repairs.

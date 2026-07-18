@@ -6,11 +6,11 @@ from typing import Any, cast
 
 import pytest
 
-from captains_chair.courses import CourseError, CourseStore, approve_course
-from captains_chair.engine import ControlPlaneEngine, ModelCallSuppressedError
-from captains_chair.github import RepositorySnapshot
-from captains_chair.harness import HarnessExecutionError
-from captains_chair.models import (
+from make_it_so.courses import CourseError, CourseStore, approve_course
+from make_it_so.engine import ControlPlaneEngine, ModelCallSuppressedError
+from make_it_so.github import RepositorySnapshot
+from make_it_so.harness import HarnessExecutionError
+from make_it_so.models import (
     ActionKind,
     CourseStatus,
     EventRecord,
@@ -28,9 +28,9 @@ from captains_chair.models import (
     WorkerResult,
     WorkPackageStatus,
 )
-from captains_chair.readiness import REQUIRED_READINESS_CATEGORIES
-from captains_chair.state import StateStore
-from captains_chair.worktrees import Worktree
+from make_it_so.readiness import REQUIRED_READINESS_CATEGORIES
+from make_it_so.state import StateStore
+from make_it_so.worktrees import Worktree
 from tests.helpers import app_config, model_policy, repo_config
 from tests.test_courses import course, ready_course, rebind_readiness_review
 
@@ -127,7 +127,7 @@ class ActivePrGitHub(SnapshotGitHub):
         del repo
         return {
             "number": number,
-            "headRefName": "captains_chair/work/42",
+            "headRefName": "make_it_so/work/42",
             "headRefOid": "head-42",
             "url": "https://github.com/example/project/pull/42",
         }
@@ -420,7 +420,7 @@ def test_course_context_fails_closed_when_course_is_required_but_missing(tmp_pat
 
 def test_course_context_returns_invalid_state_blocker(tmp_path: Path) -> None:
     engine, _ = make_engine(tmp_path)
-    courses = tmp_path / ".captains-chair" / "courses"
+    courses = tmp_path / ".make-it-so" / "courses"
     courses.mkdir(parents=True)
     (courses / "broken.yaml").write_text("status: [not valid", encoding="utf-8")
 
@@ -501,7 +501,7 @@ def test_watch_reports_active_pr_status_in_shadow_mode(tmp_path: Path) -> None:
         repo.full_name,
         action_id="active-42",
         pr_number=42,
-        branch="captains_chair/work/42",
+        branch="make_it_so/work/42",
         head_sha="old-head",
         status="pr_open",
         decision=decision.model_dump(mode="json"),
@@ -597,7 +597,7 @@ def test_engine_resolves_course_package_and_stage_model_layers(tmp_path: Path) -
 
 def test_engine_model_resolution_falls_back_when_course_storage_is_invalid(tmp_path: Path) -> None:
     engine, _ = make_engine(tmp_path)
-    courses = tmp_path / ".captains-chair" / "courses"
+    courses = tmp_path / ".make-it-so" / "courses"
     courses.mkdir(parents=True)
     (courses / "broken.yaml").write_text("status: [not valid", encoding="utf-8")
 
@@ -683,7 +683,7 @@ def test_worker_blocker_result_preserves_owner_and_technical_semantics(
         repo.full_name,
         action_id="action-1",
         pr_number=42,
-        branch="captains_chair/work/42",
+        branch="make_it_so/work/42",
         head_sha="head-1",
         status="pr_open",
         decision=decision.model_dump(mode="json"),
@@ -885,9 +885,9 @@ def test_implement_uses_isolated_worktree_and_opens_a_draft_pr(tmp_path: Path) -
     (worktree_path / "src" / "app.py").write_text("print('changed')\n", encoding="utf-8")
     worktree = Worktree(
         path=worktree_path,
-        branch="captains_chair/work/19",
+        branch="make_it_so/work/19",
         base="origin/main",
-        push_branch="captains_chair/work/19",
+        push_branch="make_it_so/work/19",
     )
 
     def create_worktree(*args: Any, **kwargs: Any) -> Worktree:
@@ -930,4 +930,4 @@ def test_implement_uses_isolated_worktree_and_opens_a_draft_pr(tmp_path: Path) -
     active = state.active_work(repo.full_name)
     assert active is not None
     assert active["pr_number"] == 19
-    assert active["branch"] == "captains_chair/work/19"
+    assert active["branch"] == "make_it_so/work/19"

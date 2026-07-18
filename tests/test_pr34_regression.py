@@ -3,10 +3,10 @@ from typing import Any, cast
 
 from pydantic import BaseModel
 
-from captains_chair.engine import ControlPlaneEngine
-from captains_chair.github import GhGitHubProvider, RepositorySnapshot
-from captains_chair.harness import HarnessAdapter
-from captains_chair.models import (
+from make_it_so.engine import ControlPlaneEngine
+from make_it_so.github import GhGitHubProvider, RepositorySnapshot
+from make_it_so.harness import HarnessAdapter
+from make_it_so.models import (
     ActionKind,
     ActionScope,
     EventRecord,
@@ -16,8 +16,8 @@ from captains_chair.models import (
     PlanDecision,
     RunState,
 )
-from captains_chair.notifications import Notifier
-from captains_chair.state import StateStore
+from make_it_so.notifications import Notifier
+from make_it_so.state import StateStore
 from tests.helpers import app_config, model_policy, repo_config
 
 
@@ -37,12 +37,12 @@ class PR34GitHub:
                 {
                     "number": 34,
                     "title": "Update execution plan",
-                    "headRefName": "captains-chair/docs/printhub-plan-sync",
+                    "headRefName": "make-it-so/docs/printhub-plan-sync",
                     "headRefOid": "stale-head",
                     "body": "stale planning text",
                 }
             ],
-            branches=["main", "captains-chair/docs/printhub-plan-sync"],
+            branches=["main", "make-it-so/docs/printhub-plan-sync"],
             workflow_runs=[],
         )
 

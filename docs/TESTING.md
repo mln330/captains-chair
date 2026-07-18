@@ -1,6 +1,6 @@
 # Testing Strategy
 
-CAPTAINS_CHAIR tests are organized around evidence, not implementation shape.
+MAKE_IT_SO tests are organized around evidence, not implementation shape.
 
 ## Unit Tests
 
@@ -50,7 +50,7 @@ CAPTAINS_CHAIR tests are organized around evidence, not implementation shape.
 - pending and failing CI
 - autonomous merge and post-merge verification
 - notification delivery failure, provenance preservation, and degraded scheduler exit
-- restart with persisted CAPTAINS_CHAIR state and runtime queue state; a fresh orchestrator must
+- restart with persisted MAKE_IT_SO state and runtime queue state; a fresh orchestrator must
   promote completed work's dependent gates without creating duplicate cards
 - negative runtime conformance: an adapter that promotes dependent cards before
   their parent completes must fail the shared contract scenario
@@ -108,8 +108,8 @@ is treated as validated.
 PrintHub may use the Workboard runtime only after:
 
 - all unit and static checks pass
-- `captains_chair orchestrate preflight` reports ready without starting a model or worker
-- `captains_chair orchestrate canary --run` dispatches a no-op Workboard card, and `--check` verifies claim/completion proof
+- `make_it_so orchestrate preflight` reports ready without starting a model or worker
+- `make_it_so orchestrate canary --run` dispatches a no-op Workboard card, and `--check` verifies claim/completion proof
 - a supervised code card opens a valid PR
 - independent review and repair are visibly separate workers
 - one bounded autonomous PR merges and passes post-merge verification

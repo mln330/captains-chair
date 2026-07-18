@@ -1,6 +1,6 @@
 # Runtime Adapter Guide
 
-CAPTAINS_CHAIR has explicit extension surfaces. A runtime may implement the harness and queue
+MAKE_IT_SO has explicit extension surfaces. A runtime may implement the harness and queue
 surfaces, while GitHub, notifications, and scheduling remain independently replaceable.
 The typed configuration accepts extension-owned kinds and a small `settings` envelope;
 the corresponding registry still validates the adapter before any live operation.
@@ -110,7 +110,7 @@ Final-review cards must include a passed marker anchored to the reviewed head:
 `AUTO_MERGE_ALLOWED:<head-sha>` according to repository policy. Generic
 successful prose is not completion proof. The workflow must also carry the exact
 GitHub PR URL in implementation or repair proof. Runtime configurations require
-a `CompletionValidator` by default. CAPTAINS_CHAIR re-reads the live PR before treating
+a `CompletionValidator` by default. MAKE_IT_SO re-reads the live PR before treating
 the workflow as complete: the head, checks, mergeability, and unresolved review
 threads must still match the final-review evidence. A portable adapter may
 explicitly set `require_live_completion_validation: false` for deterministic
@@ -135,9 +135,9 @@ the built-in Workboard Gateway RPC. The P1 Codex adapter may use SQLite rows plu
 disposable `codex exec` sessions. A future runtime may provide either or both
 boundaries. Neither adapter may move merge policy,
 blocker classification, workflow topology, GitHub gates, or proof validation
-out of CAPTAINS_CHAIR core.
+out of MAKE_IT_SO core.
 
-Construction is centralized in `captains_chair.runtime` and the runtime-neutral
+Construction is centralized in `make_it_so.runtime` and the runtime-neutral
 registry. The default OpenClaw path can select Workboard-backed dispatch, while
 `DirectOrchestrator` is the board-free fallback. Codex and future integrations
 register builders without changing the workflow engine or policy code. The
@@ -147,15 +147,15 @@ orchestrator must implement the `WorkerOrchestratorAdapter` and
 workflow starts. Conformance fixtures remain runtime-neutral.
 
 Packaged adapters may expose a callable registrar through the entry-point groups
-`captains_chair.runtime_adapters`, `captains_chair.harness_adapters`, and
-`captains_chair.scheduler_adapters`. The registrar receives the
-corresponding registry and calls `register(...)`; CAPTAINS_CHAIR discovers these plugins
+`make_it_so.runtime_adapters`, `make_it_so.harness_adapters`, and
+`make_it_so.scheduler_adapters`. The registrar receives the
+corresponding registry and calls `register(...)`; MAKE_IT_SO discovers these plugins
 only when building the default registry, loads each plugin once, and fails closed
 if loading or registration fails. OpenClaw remains built in, so the core package
 does not require any future runtime package to be installed.
 
 Notifier packages use the same boundary through `NotifierAdapterRegistry` and the
-`captains_chair.notifier_adapters` entry-point group. Built-in `stdout`, OpenClaw Discord,
+`make_it_so.notifier_adapters` entry-point group. Built-in `stdout`, OpenClaw Discord,
 and Discord webhook delivery remain unchanged. An extension may use
 `NotificationConfig.settings` for its own validated options; an unregistered
 notification kind fails closed instead of being guessed as a webhook.
@@ -169,7 +169,7 @@ implementations without changing course or policy logic; the deterministic nativ
 implementations remain the default.
 
 Schedulers use the same registry boundary through `SchedulerAdapterRegistry` and
-the `captains_chair.scheduler_adapters` entry-point group. OpenClaw cron, system cron,
+the `make_it_so.scheduler_adapters` entry-point group. OpenClaw cron, system cron,
 systemd, and Windows Task Scheduler remain built in. A future hosted runtime can
 register its own kind and reuse the same `ScheduleSpec`; the
 CLI no longer needs a new hard-coded branch for that runtime. Render-only
@@ -180,22 +180,22 @@ requested enabled state.
 For example, a future adapter package can publish these entry points:
 
 ```toml
-[project.entry-points."captains_chair.runtime_adapters"]
-future_runtime = "captains_chair_future_runtime:register_runtime"
+[project.entry-points."make_it_so.runtime_adapters"]
+future_runtime = "make_it_so_future_runtime:register_runtime"
 
-[project.entry-points."captains_chair.harness_adapters"]
-future_runtime = "captains_chair_future_runtime:register_harness"
+[project.entry-points."make_it_so.harness_adapters"]
+future_runtime = "make_it_so_future_runtime:register_harness"
 
-[project.entry-points."captains_chair.notifier_adapters"]
-future_runtime = "captains_chair_future_runtime:register_notifier"
+[project.entry-points."make_it_so.notifier_adapters"]
+future_runtime = "make_it_so_future_runtime:register_notifier"
 
-[project.entry-points."captains_chair.scheduler_adapters"]
-future_runtime = "captains_chair_future_runtime:register_scheduler"
+[project.entry-points."make_it_so.scheduler_adapters"]
+future_runtime = "make_it_so_future_runtime:register_scheduler"
 ```
 
 Each registrar receives its registry and registers only the adapter builder;
 the shared `WorkflowOrchestrator`, policy engine, GitHub provider, and proof
-validators remain in CAPTAINS_CHAIR.
+validators remain in MAKE_IT_SO.
 
 ## GitHub Provider
 
@@ -232,7 +232,7 @@ adapters, not alternate policy engines. The MCP bridge delegates to the
 installed CLI, and the standalone UI delegates to the same sidecar methods used
 by the OpenClaw dashboard.
 
-The installed `captains_chair.conformance` module exposes the runtime-neutral workflow
+The installed `make_it_so.conformance` module exposes the runtime-neutral workflow
 scenario. Each new production adapter should provide its queue factory plus a
 claimed-card blocker hook, call `run_runtime_conformance` against its adapter,
 pass the runtime-supplied `WorkspaceRef` when the adapter materializes a

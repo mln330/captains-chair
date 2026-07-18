@@ -1,8 +1,8 @@
 from pathlib import Path
 from typing import Any
 
-from captains_chair.completion_gate import GitHubCompletionValidator
-from captains_chair.models import (
+from make_it_so.completion_gate import GitHubCompletionValidator
+from make_it_so.models import (
     ActionKind,
     CompletionPolicy,
     OpenClawWorkboardConfig,
@@ -11,8 +11,8 @@ from captains_chair.models import (
     PullRequestGate,
     WorkerAssignments,
 )
-from captains_chair.orchestration import QueueStatus, WorkflowOrchestrator, build_workflow
-from captains_chair.qa import select_qa
+from make_it_so.orchestration import QueueStatus, WorkflowOrchestrator, build_workflow
+from make_it_so.qa import select_qa
 from tests.fakes import InMemoryWorkQueue
 from tests.helpers import repo_config
 

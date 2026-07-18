@@ -10,9 +10,9 @@ from typing import Any
 import pytest
 import yaml
 
-import captains_chair.sidecar as sidecar
-from captains_chair.models import CourseKind, RepositoryProvisioningConfig
-from captains_chair.sidecar import SidecarError
+import make_it_so.sidecar as sidecar
+from make_it_so.models import CourseKind, RepositoryProvisioningConfig
+from make_it_so.sidecar import SidecarError
 from tests.helpers import app_config, repo_config
 from tests.test_courses import ready_course, rebind_readiness_review
 from tests.test_sidecar import _sidecar  # pyright: ignore[reportPrivateUsage]
@@ -148,7 +148,7 @@ def test_sidecar_readiness_review_normalizes_process_failures(
         def run(*_args: Any, **_kwargs: Any) -> subprocess.CompletedProcess[str]:
             return subprocess.CompletedProcess([], returncode, stdout, stderr)
 
-        monkeypatch.setattr("captains_chair.sidecar.subprocess.run", run)
+        monkeypatch.setattr("make_it_so.sidecar.subprocess.run", run)
 
     process(2, "", "review failed")
     with pytest.raises(SidecarError, match="review failed"):
@@ -218,7 +218,7 @@ def test_sidecar_main_handles_blank_invalid_and_valid_stdio_requests(
     config = app_config(tmp_path, repo_config(tmp_path))
     config_path = tmp_path / "config.yaml"
     config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
-    monkeypatch.setattr(sys, "argv", ["captains-chair-sidecar", "--config", str(config_path)])
+    monkeypatch.setattr(sys, "argv", ["make-it-so-sidecar", "--config", str(config_path)])
     monkeypatch.setattr(
         sys,
         "stdin",
@@ -252,6 +252,6 @@ def test_sidecar_main_once_propagates_run_health(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["captains-chair-sidecar", "--config", str(tmp_path / "config.yaml"), "--once", "review"],
+        ["make-it-so-sidecar", "--config", str(tmp_path / "config.yaml"), "--once", "review"],
     )
     assert sidecar.main() == expected

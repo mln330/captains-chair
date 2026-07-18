@@ -3,7 +3,7 @@ from typing import Any
 
 import pytest
 
-from captains_chair.plugins import PluginDiscoveryError, load_entrypoint_plugins
+from make_it_so.plugins import PluginDiscoveryError, load_entrypoint_plugins
 
 
 class EntryPoint:
@@ -22,10 +22,10 @@ def test_plugin_loader_supports_legacy_mapping_and_deduplicates() -> None:
     def register(target: Any) -> None:
         calls.append(target)
 
-    entry_point = EntryPoint("one", "captains_chair.example", register)
+    entry_point = EntryPoint("one", "make_it_so.example", register)
     loaded: set[str] = set()
-    assert load_entrypoint_plugins("registry", group="captains_chair.example", provider=lambda: {"captains_chair.example": [entry_point]}, loaded=loaded) == ("one",)
-    assert load_entrypoint_plugins("registry", group="captains_chair.example", provider=lambda: [entry_point], loaded=loaded) == ()
+    assert load_entrypoint_plugins("registry", group="make_it_so.example", provider=lambda: {"make_it_so.example": [entry_point]}, loaded=loaded) == ("one",)
+    assert load_entrypoint_plugins("registry", group="make_it_so.example", provider=lambda: [entry_point], loaded=loaded) == ()
     assert calls == ["registry"]
 
 
@@ -34,4 +34,4 @@ def test_plugin_loader_rejects_provider_failure() -> None:
         raise RuntimeError("entry point index unavailable")
 
     with pytest.raises(PluginDiscoveryError, match="could not inspect"):
-        load_entrypoint_plugins("registry", group="captains_chair.example", provider=provider)
+        load_entrypoint_plugins("registry", group="make_it_so.example", provider=provider)

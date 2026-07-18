@@ -5,17 +5,17 @@ from typing import Any
 
 import pytest
 
-from captains_chair.adapters import (
+from make_it_so.adapters import (
     CallbackUsageTelemetryAdapter,
     InteractionAdapter,
     NativeInteractionAdapter,
     UsageTelemetryAdapter,
 )
-from captains_chair.courses import CourseError
-from captains_chair.models import CheckpointStatus, RepoConfig, RequirementStatus
-from captains_chair.notifications import NotifierAdapter, StdoutNotifier
-from captains_chair.scheduler import InstalledSchedule, SchedulerAdapter, ScheduleSpec
-from captains_chair.state import StateStore
+from make_it_so.courses import CourseError
+from make_it_so.models import CheckpointStatus, RepoConfig, RequirementStatus
+from make_it_so.notifications import NotifierAdapter, StdoutNotifier
+from make_it_so.scheduler import InstalledSchedule, SchedulerAdapter, ScheduleSpec
+from make_it_so.state import StateStore
 from tests.test_courses import course, ready_course
 
 

@@ -5,9 +5,9 @@ from typing import Any, TypeVar, cast
 import pytest
 from pydantic import BaseModel
 
-import captains_chair.harness as harness_module
-from captains_chair.command import CommandResult, CommandRunner
-from captains_chair.harness import (
+import make_it_so.harness as harness_module
+from make_it_so.command import CommandResult, CommandRunner
+from make_it_so.harness import (
     CodexAdapter,
     HarnessAdapter,
     HarnessAdapterContractError,
@@ -17,7 +17,7 @@ from captains_chair.harness import (
     build_harness,
     strict_output_schema,
 )
-from captains_chair.models import (
+from make_it_so.models import (
     HarnessConfig,
     HarnessInvocation,
     ModelTarget,
@@ -26,7 +26,7 @@ from captains_chair.models import (
     RoleModels,
     WorkerResult,
 )
-from captains_chair.plugins import PluginDiscoveryError
+from make_it_so.plugins import PluginDiscoveryError
 
 
 class Output(BaseModel):
@@ -558,7 +558,7 @@ def test_future_harness_can_discover_a_packaged_entrypoint() -> None:
 
     class EntryPoint:
         name = "hermes"
-        group = "captains_chair.harness_adapters"
+        group = "make_it_so.harness_adapters"
 
         def load(self) -> Any:
             def register(target: HarnessAdapterRegistry) -> None:
@@ -591,7 +591,7 @@ def test_harness_plugin_discovery_rejects_noncallable_registrar() -> None:
 
     class EntryPoint:
         name = "invalid"
-        group = "captains_chair.harness_adapters"
+        group = "make_it_so.harness_adapters"
 
         def load(self) -> str:
             return "not callable"

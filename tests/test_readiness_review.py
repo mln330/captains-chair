@@ -2,8 +2,8 @@ from datetime import UTC, datetime
 
 import pytest
 
-from captains_chair.courses import readiness_report
-from captains_chair.models import (
+from make_it_so.courses import readiness_report
+from make_it_so.models import (
     CourseKind,
     HarnessResult,
     ModelProfile,
@@ -11,7 +11,7 @@ from captains_chair.models import (
     ReasoningEffort,
     RequirementStatus,
 )
-from captains_chair.readiness import (
+from make_it_so.readiness import (
     REQUIRED_READINESS_CATEGORIES,
     ReadinessReviewDecision,
     apply_readiness_review,

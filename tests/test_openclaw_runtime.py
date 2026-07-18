@@ -8,16 +8,16 @@ from pathlib import Path
 
 import pytest
 
-from captains_chair.command import CommandResult
-from captains_chair.models import OpenClawWorkboardConfig, WorkerAssignments
-from captains_chair.openclaw_runtime import OpenClawRuntimeInstaller, sync_openclaw_auth_profiles
-from captains_chair.openclaw_workboard import OpenClawWorkboardError
+from make_it_so.command import CommandResult
+from make_it_so.models import OpenClawWorkboardConfig, WorkerAssignments
+from make_it_so.openclaw_runtime import OpenClawRuntimeInstaller, sync_openclaw_auth_profiles
+from make_it_so.openclaw_workboard import OpenClawWorkboardError
 
 
 def runtime_config() -> OpenClawWorkboardConfig:
     return OpenClawWorkboardConfig(
         workers=WorkerAssignments(
-            captain="captains-chair",
+            captain="make-it-so",
             coder="github-coder",
             reviewer="github-reviewer",
             tester="github-tester",
@@ -92,7 +92,7 @@ def test_runtime_install_creates_agents_and_role_protocols(tmp_path: Path) -> No
     assert "Never review, approve, or merge your own work" in coder
     assert "Do not edit files" in reviewer
     assert "USER_SECRET:" in coder
-    assert "captains_chair worker-protocol complete" in coder
+    assert "make_it_so worker-protocol complete" in coder
     assert "Never call `heartbeat_respond`" in coder
     final = (tmp_path / "github-final" / "AGENTS.md").read_text(encoding="utf-8")
     assert "Never call session-inventory tools" in final
@@ -113,7 +113,7 @@ def test_runtime_install_fails_closed_on_existing_model_mismatch(tmp_path: Path)
         del command, cwd, input_text, timeout
         return CommandResult(
             0,
-            json.dumps([{"id": "captains-chair", "model": "unexpected/model"}]),
+            json.dumps([{"id": "make-it-so", "model": "unexpected/model"}]),
             "",
         )
 
@@ -370,7 +370,7 @@ def test_runtime_plan_accepts_codex_openai_model_route_alias(tmp_path: Path) -> 
             0,
             json.dumps(
                 [
-                    {"id": "captains-chair", "model": "openai/gpt-5.6-terra"},
+                    {"id": "make-it-so", "model": "openai/gpt-5.6-terra"},
                     {"id": "github-coder", "model": "openai/gpt-5.3-codex-spark"},
                     {"id": "github-reviewer", "model": "openai/gpt-5.6-terra"},
                     {"id": "github-tester", "model": "openai/gpt-5.6-luna"},

@@ -1,0 +1,204 @@
+from __future__ import annotations
+
+from collections.abc import Callable
+
+from make_it_so.command import CommandRunner, run_command
+from make_it_so.direct_orchestrator import DirectOrchestrator
+from make_it_so.direct_workers import CommandWorkerExecutor
+from make_it_so.models import DirectOrchestratorConfig, OpenClawWorkboardConfig, OrchestratorConfig
+from make_it_so.openclaw_workboard import OpenClawWorkboardAdapter
+from make_it_so.orchestration import (
+    CompletionValidator,
+    WorkerLifecycleAdapter,
+    WorkerOrchestratorAdapter,
+    WorkflowOrchestrator,
+    WorkQueueAdapter,
+    WorkspaceCleanup,
+)
+from make_it_so.plugins import EntryPointProvider, load_entrypoint_plugins
+
+
+class RuntimeAdapterUnavailable(RuntimeError):
+    """Raised when a validated runtime is configured before its adapter is installed."""
+
+
+class RuntimeAdapterContractError(RuntimeError):
+    """Raised when an installed runtime does not implement the portable contract."""
+
+
+RUNTIME_ADAPTER_ENTRYPOINT_GROUP = "make_it_so.runtime_adapters"
+
+
+QueueAdapterBuilder = Callable[[OrchestratorConfig, CommandRunner], WorkerOrchestratorAdapter]
+
+_QUEUE_METHODS = (
+    "ensure_board",
+    "list_cards",
+    "create_card",
+    "complete_card",
+    "unblock_card",
+    "reclaim_card",
+    "reassign_card",
+    "comment",
+    "dispatch",
+    "diagnostics",
+)
+
+
+def validate_worker_orchestrator_adapter(
+    adapter: WorkerOrchestratorAdapter,
+) -> WorkerOrchestratorAdapter:
+    missing = [name for name in _QUEUE_METHODS if not callable(getattr(adapter, name, None))]
+    if not isinstance(adapter, WorkerLifecycleAdapter):
+        missing.extend(
+            name
+            for name in ("heartbeat_card", "complete_claimed_card", "block_claimed_card")
+            if not callable(getattr(adapter, name, None))
+        )
+    if missing:
+        raise RuntimeAdapterContractError(
+            "runtime adapter is missing required operations: " + ", ".join(sorted(set(missing)))
+        )
+    return adapter
+
+
+# Compatibility entry point for existing extension packages.
+validate_work_queue_adapter = validate_worker_orchestrator_adapter
+
+
+class RuntimeAdapterRegistry:
+    """Explicit queue-adapter registry that keeps future runtimes out of core policy."""
+
+    def __init__(self) -> None:
+        self._builders: dict[str, QueueAdapterBuilder] = {}
+        self._loaded_plugins: set[str] = set()
+
+    def register(self, kind: str, builder: QueueAdapterBuilder, *, replace: bool = False) -> None:
+        normalized = kind.strip()
+        if not normalized:
+            raise ValueError("runtime adapter kind must not be empty")
+        if normalized in self._builders and not replace:
+            raise ValueError(f"runtime adapter is already registered: {normalized}")
+        self._builders[normalized] = builder
+
+    def discover(self, *, provider: EntryPointProvider | None = None) -> tuple[str, ...]:
+        """Discover packaged queue adapters without moving policy into plugins."""
+        if provider is None:
+            return load_entrypoint_plugins(
+                self,
+                group=RUNTIME_ADAPTER_ENTRYPOINT_GROUP,
+                loaded=self._loaded_plugins,
+            )
+        return load_entrypoint_plugins(
+            self,
+            group=RUNTIME_ADAPTER_ENTRYPOINT_GROUP,
+            provider=provider,
+            loaded=self._loaded_plugins,
+        )
+
+    def build(self, config: OrchestratorConfig, runner: CommandRunner) -> WorkerOrchestratorAdapter:
+        builder = self._builders.get(config.kind)
+        if builder is None:
+            raise RuntimeAdapterUnavailable(
+                f"orchestrator kind {config.kind} has no installed queue adapter; "
+                "register a WorkerOrchestratorAdapter with RuntimeAdapterRegistry"
+            )
+        return validate_worker_orchestrator_adapter(builder(config, runner))
+
+
+def _build_openclaw_queue(config: OrchestratorConfig, runner: CommandRunner) -> WorkerOrchestratorAdapter:
+    if not isinstance(config, OpenClawWorkboardConfig):
+        raise TypeError("openclaw_workboard adapter requires OpenClawWorkboardConfig")
+    return OpenClawWorkboardAdapter(config, runner)
+
+
+def _build_direct_orchestrator(
+    config: OrchestratorConfig, runner: CommandRunner
+) -> WorkerOrchestratorAdapter:
+    if not isinstance(config, DirectOrchestratorConfig):
+        raise TypeError("direct adapter requires DirectOrchestratorConfig")
+    executor = (
+        None
+        if config.worker_runtime == "external"
+        else CommandWorkerExecutor(config.worker_runtime, config.executable or "", runner)
+    )
+    workers = config.workers
+    models = config.worker_models
+    worker_models = {
+        workers.captain: models.captain,
+        workers.coder: models.coder,
+        workers.reviewer: models.reviewer,
+        workers.tester: models.tester,
+        workers.ux_reviewer: models.ux_reviewer,
+        workers.final_reviewer: models.final_reviewer,
+        workers.merger: models.merger,
+        workers.verifier: models.verifier,
+    }
+    return DirectOrchestrator(
+        config.database_path,
+        executor=executor,
+        lease_seconds=config.lease_seconds,
+        max_dispatch_workers=config.max_dispatch_workers,
+        worker_models=worker_models,
+    )
+
+
+DEFAULT_RUNTIME_ADAPTERS = RuntimeAdapterRegistry()
+DEFAULT_RUNTIME_ADAPTERS.register("openclaw_workboard", _build_openclaw_queue)
+DEFAULT_RUNTIME_ADAPTERS.register("direct", _build_direct_orchestrator)
+
+
+def register_work_queue_adapter(
+    kind: str,
+    builder: QueueAdapterBuilder,
+    *,
+    replace: bool = False,
+) -> None:
+    """Register a production queue adapter in the process-wide default registry."""
+    DEFAULT_RUNTIME_ADAPTERS.register(kind, builder, replace=replace)
+
+
+def build_work_queue_adapter(
+    config: OrchestratorConfig,
+    runner: CommandRunner = run_command,
+    *,
+    registry: RuntimeAdapterRegistry = DEFAULT_RUNTIME_ADAPTERS,
+) -> WorkQueueAdapter:
+    """Build the queue adapter for one runtime configuration.
+
+    The default registry contains OpenClaw. Tests and host integrations can pass
+    an instance-local registry so future runtimes do not mutate global state.
+    """
+    if registry is DEFAULT_RUNTIME_ADAPTERS:
+        registry.discover()
+    return registry.build(config, runner)
+
+
+def build_work_queue_orchestrator(
+    config: OrchestratorConfig,
+    runner: CommandRunner = run_command,
+    *,
+    registry: RuntimeAdapterRegistry = DEFAULT_RUNTIME_ADAPTERS,
+    workspace_cleanup: WorkspaceCleanup | None = None,
+    completion_validator: CompletionValidator | None = None,
+) -> WorkflowOrchestrator:
+    """Build the runtime-neutral orchestrator around one queue adapter."""
+    return WorkflowOrchestrator(
+        build_work_queue_adapter(config, runner, registry=registry),
+        config,
+        workspace_cleanup=workspace_cleanup,
+        completion_validator=completion_validator,
+    )
+
+
+__all__ = [
+    "RuntimeAdapterUnavailable",
+    "RuntimeAdapterContractError",
+    "RuntimeAdapterRegistry",
+    "RUNTIME_ADAPTER_ENTRYPOINT_GROUP",
+    "validate_worker_orchestrator_adapter",
+    "validate_work_queue_adapter",
+    "register_work_queue_adapter",
+    "build_work_queue_adapter",
+    "build_work_queue_orchestrator",
+]

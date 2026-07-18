@@ -53,7 +53,7 @@
       "description": "Durable board-free orchestration for Codex and portable runtimes.",
       "properties": {
         "board_prefix": {
-          "default": "captains-chair",
+          "default": "make-it-so",
           "minLength": 1,
           "title": "Board Prefix",
           "type": "string"
@@ -162,7 +162,7 @@
       "description": "Configuration envelope for an orchestrator supplied by an extension package.",
       "properties": {
         "board_prefix": {
-          "default": "captains-chair",
+          "default": "make-it-so",
           "minLength": 1,
           "title": "Board Prefix",
           "type": "string"
@@ -635,7 +635,7 @@
       "additionalProperties": false,
       "properties": {
         "board_prefix": {
-          "default": "captains-chair",
+          "default": "make-it-so",
           "minLength": 1,
           "title": "Board Prefix",
           "type": "string"
@@ -695,14 +695,14 @@
           "title": "Executable",
           "type": "string"
         },
-        "captains_chair_command": {
+        "make_it_so_command": {
           "default": [
-            "captains_chair"
+            "make_it_so"
           ],
           "items": {
             "type": "string"
           },
-          "title": "Captains Chair Command",
+          "title": "Make It So Command",
           "type": "array"
         },
         "auth_source_agent": {
@@ -891,7 +891,7 @@
           "type": "string"
         },
         "project_manifest": {
-          "default": ".captains-chair/project.yaml",
+          "default": ".make-it-so/project.yaml",
           "title": "Project Manifest",
           "type": "string"
         },

@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from captains_chair.command import CommandResult, run_command
-from captains_chair.harness import CodexAdapter
-from captains_chair.models import HarnessConfig, HarnessHealth, ModelTarget, ReasoningEffort, RoleModels
+from make_it_so.command import CommandResult, run_command
+from make_it_so.harness import CodexAdapter
+from make_it_so.models import HarnessConfig, HarnessHealth, ModelTarget, ReasoningEffort, RoleModels
 
 FAKE_CODEX = r'''
 from __future__ import annotations

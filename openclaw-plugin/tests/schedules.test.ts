@@ -12,20 +12,20 @@ import {
 } from "../src/schedules.js";
 
 const definition: ScheduleDefinition = {
-  name: "captains-chair-course-review",
+  name: "make-it-so-course-review",
   every: "2h",
   kind: "course_review",
-  command: ["python", "-m", "captains_chair.sidecar", "--once", "review"],
+  command: ["python", "-m", "make_it_so.sidecar", "--once", "review"],
 };
 
 const expectedArgv = [
   "python3",
   "-m",
-  "captains_chair.sidecar",
+  "make_it_so.sidecar",
   "--once",
   "review",
   "--config",
-  "/tmp/captains-chair.yaml",
+  "/tmp/make-it-so.yaml",
 ];
 
 describe("OpenClaw schedule reconciliation", () => {
@@ -54,10 +54,10 @@ describe("OpenClaw schedule reconciliation", () => {
   });
 
   it("builds the configured executable and preserves the sidecar argv", () => {
-    expect(buildCommandArgv(definition, "python3", "/tmp/captains-chair.yaml")).toEqual(
+    expect(buildCommandArgv(definition, "python3", "/tmp/make-it-so.yaml")).toEqual(
       expectedArgv,
     );
-    expect(buildCronAddArgs(definition, "python3", "/tmp/captains-chair.yaml", "/tmp")).toContain(
+    expect(buildCronAddArgs(definition, "python3", "/tmp/make-it-so.yaml", "/tmp")).toContain(
       JSON.stringify(expectedArgv),
     );
   });
@@ -71,16 +71,16 @@ describe("OpenClaw schedule reconciliation", () => {
       payload: { kind: "command", argv: expectedArgv },
     };
     expect(
-      findExistingCronJob([existing], definition, "python3", "/tmp/captains-chair.yaml"),
+      findExistingCronJob([existing], definition, "python3", "/tmp/make-it-so.yaml"),
     ).toBe(existing);
     const drifted = { ...existing, enabled: false, payload: { kind: "command", argv: ["python3", "wrong"] } };
-    expect(inspectCronJob([drifted, existing], definition, "python3", "/tmp/captains-chair.yaml")).toMatchObject({
+    expect(inspectCronJob([drifted, existing], definition, "python3", "/tmp/make-it-so.yaml")).toMatchObject({
       primary: drifted,
       duplicates: [existing],
       drift: ["command"],
       enabled: false,
     });
-    expect(buildCronEditArgs("job-1", definition, "python3", "/tmp/captains-chair.yaml", "/tmp")).toContain("edit");
+    expect(buildCronEditArgs("job-1", definition, "python3", "/tmp/make-it-so.yaml", "/tmp")).toContain("edit");
   });
 
   it("reports unreadable command drift for repair", () => {
@@ -88,7 +88,7 @@ describe("OpenClaw schedule reconciliation", () => {
       [{ id: "job-1", name: definition.name, schedule: { kind: "every", everyMs: 7_200_000 } }],
       definition,
       "python3",
-      "/tmp/captains-chair.yaml",
+      "/tmp/make-it-so.yaml",
     ).drift).toEqual(["command_unreadable"]);
   });
 });

@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from captains_chair.models import ApplicationSurface, ProjectManifest, QAProfile
-from captains_chair.qa import infer_surfaces, paths_match_surface, select_qa
+from make_it_so.models import ApplicationSurface, ProjectManifest, QAProfile
+from make_it_so.qa import infer_surfaces, paths_match_surface, select_qa
 from tests.helpers import repo_config
 
 

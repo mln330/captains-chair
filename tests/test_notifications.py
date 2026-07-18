@@ -3,9 +3,9 @@ from pathlib import Path
 
 import pytest
 
-from captains_chair.command import CommandResult, CommandRunner
-from captains_chair.models import EventRecord, NotificationConfig, RunState
-from captains_chair.notifications import (
+from make_it_so.command import CommandResult, CommandRunner
+from make_it_so.models import EventRecord, NotificationConfig, RunState
+from make_it_so.notifications import (
     NotificationError,
     Notifier,
     NotifierAdapterContractError,
@@ -186,7 +186,7 @@ def test_approval_reminder_preserves_owner_attention_provenance() -> None:
     message = render_event(event)
 
     assert message.startswith("ACTION NEEDED, second ping.")
-    assert "Approve: `captains_chair approve --repo NewmanZone/PrintHub --action-id action-123`" in message
+    assert "Approve: `make_it_so approve --repo NewmanZone/PrintHub --action-id action-123`" in message
 
 
 def test_lowercase_owner_blocker_still_pages_owner() -> None:
@@ -238,7 +238,7 @@ def test_openclaw_discord_notifier_sends_and_surfaces_gateway_failure() -> None:
         calls.append(list(command))
         return CommandResult(0, "", "")
 
-    from captains_chair.notifications import OpenClawDiscordNotifier
+    from make_it_so.notifications import OpenClawDiscordNotifier
 
     notifier = OpenClawDiscordNotifier(
         NotificationConfig(kind="openclaw_discord", route="channel-1", executable="openclaw"),
@@ -269,15 +269,15 @@ def test_openclaw_discord_notifier_sends_and_surfaces_gateway_failure() -> None:
 def test_discord_webhook_notifier_handles_missing_success_http_and_os_errors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from captains_chair.notifications import DiscordWebhookNotifier
+    from make_it_so.notifications import DiscordWebhookNotifier
 
-    config = NotificationConfig(kind="discord_webhook", webhook_env="CAPTAINS_CHAIR_TEST_WEBHOOK")
+    config = NotificationConfig(kind="discord_webhook", webhook_env="MAKE_IT_SO_TEST_WEBHOOK")
     notifier = DiscordWebhookNotifier(config)
-    monkeypatch.delenv("CAPTAINS_CHAIR_TEST_WEBHOOK", raising=False)
+    monkeypatch.delenv("MAKE_IT_SO_TEST_WEBHOOK", raising=False)
     with pytest.raises(NotificationError, match="is not set"):
         notifier.send(notification_event())
 
-    monkeypatch.setenv("CAPTAINS_CHAIR_TEST_WEBHOOK", "https://discord.test/webhook")
+    monkeypatch.setenv("MAKE_IT_SO_TEST_WEBHOOK", "https://discord.test/webhook")
 
     class Response:
         def __init__(self, status: int) -> None:
@@ -293,14 +293,14 @@ def test_discord_webhook_notifier_handles_missing_success_http_and_os_errors(
         del request, timeout
         return Response(204)
 
-    monkeypatch.setattr("captains_chair.notifications.urllib.request.urlopen", success)
+    monkeypatch.setattr("make_it_so.notifications.urllib.request.urlopen", success)
     notifier.send(notification_event())
 
     def unavailable_http(request: object, timeout: int) -> Response:
         del request, timeout
         return Response(503)
 
-    monkeypatch.setattr("captains_chair.notifications.urllib.request.urlopen", unavailable_http)
+    monkeypatch.setattr("make_it_so.notifications.urllib.request.urlopen", unavailable_http)
     with pytest.raises(NotificationError, match="HTTP 503"):
         notifier.send(notification_event())
 
@@ -308,7 +308,7 @@ def test_discord_webhook_notifier_handles_missing_success_http_and_os_errors(
         del request, timeout
         raise OSError("network unavailable")
 
-    monkeypatch.setattr("captains_chair.notifications.urllib.request.urlopen", unavailable)
+    monkeypatch.setattr("make_it_so.notifications.urllib.request.urlopen", unavailable)
     with pytest.raises(NotificationError, match="network unavailable"):
         notifier.send(notification_event())
 

@@ -3,12 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, cast
 
-from captains_chair.engine import ControlPlaneEngine
-from captains_chair.github import GitHubProvider
-from captains_chair.harness import HarnessAdapter
-from captains_chair.models import OperationMode
-from captains_chair.notifications import Notifier
-from captains_chair.state import StateStore
+from make_it_so.engine import ControlPlaneEngine
+from make_it_so.github import GitHubProvider
+from make_it_so.harness import HarnessAdapter
+from make_it_so.models import OperationMode
+from make_it_so.notifications import Notifier
+from make_it_so.state import StateStore
 from tests.helpers import app_config, model_policy, repo_config
 
 

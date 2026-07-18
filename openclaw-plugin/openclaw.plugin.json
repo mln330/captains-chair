@@ -1,17 +1,17 @@
 {
-  "id": "captains-chair",
-  "name": "Captain's Chair",
+  "id": "make-it-so",
+  "name": "Make It So",
   "description": "An SDLC control plane that puts the builder in command of an agent crew.",
   "activation": {
     "onStartup": true
   },
   "contracts": {
     "tools": [
-      "captains_chair_course_status",
-      "captains_chair_resolve_checkpoint",
-      "captains_chair_answer_readiness",
-      "captains_chair_start_planning",
-      "captains_chair_ready_work"
+      "make_it_so_course_status",
+      "make_it_so_resolve_checkpoint",
+      "make_it_so_answer_readiness",
+      "make_it_so_start_planning",
+      "make_it_so_ready_work"
     ]
   },
   "configSchema": {
@@ -20,7 +20,7 @@
     "properties": {
       "configPath": {
         "type": "string",
-        "description": "Path to the Captain's Chair YAML configuration"
+        "description": "Path to the Make It So YAML configuration"
       },
       "pythonExecutable": {
         "type": "string",
@@ -29,7 +29,7 @@
       "sidecarCommand": {
         "type": "array",
         "items": { "type": "string" },
-        "default": ["-m", "captains_chair.sidecar"]
+        "default": ["-m", "make_it_so.sidecar"]
       },
       "openclawExecutable": {
         "type": "string",

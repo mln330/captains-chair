@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from captains_chair.command import CommandResult, run_command
-from captains_chair.github import GhGitHubProvider, GitHubProviderError
-from captains_chair.models import CourseStatus, NotificationConfig, RepoConfig, RepositoryProvisioningConfig
+from make_it_so.command import CommandResult, run_command
+from make_it_so.github import GhGitHubProvider, GitHubProviderError
+from make_it_so.models import CourseStatus, NotificationConfig, RepoConfig, RepositoryProvisioningConfig
 from tests.test_courses import ready_course
 
 
@@ -46,7 +46,7 @@ def test_snapshot_collects_and_normalizes_all_github_collections(tmp_path: Path)
         if values[1:3] == ["pr", "list"]:
             return json_result([{"number": 8, "headRefOid": "head-8"}])
         if values[1:3] == ["api", "repos/example/project/branches"]:
-            return json_result([{"name": "main"}, {"name": "captains_chair/work/8"}])
+            return json_result([{"name": "main"}, {"name": "make_it_so/work/8"}])
         if values[1:3] == ["run", "list"]:
             return json_result([{"databaseId": 9, "conclusion": "success"}])
         raise AssertionError(f"unexpected command: {values}")
@@ -57,7 +57,7 @@ def test_snapshot_collects_and_normalizes_all_github_collections(tmp_path: Path)
     assert snapshot.repo["nameWithOwner"] == "example/project"
     assert snapshot.issues == [{"number": 7, "title": "Gap"}]
     assert snapshot.pull_requests == [{"number": 8, "headRefOid": "head-8"}]
-    assert snapshot.branches == ["main", "captains_chair/work/8"]
+    assert snapshot.branches == ["main", "make_it_so/work/8"]
     assert snapshot.workflow_runs == [{"databaseId": 9, "conclusion": "success"}]
     assert all(cwd == tmp_path for _, cwd in calls)
 
@@ -395,7 +395,7 @@ def test_mutations_use_provider_cwd_and_return_read_back_pr(tmp_path: Path) -> N
     provider = GhGitHubProvider(runner, cwd=tmp_path)
     configured = repo(tmp_path)
     created = provider.create_pull_request(
-        configured, branch="captains_chair/work/13", title="Implement issue 13", body="Details"
+        configured, branch="make_it_so/work/13", title="Implement issue 13", body="Details"
     )
     provider.mark_ready(configured, 13)
     provider.comment_pull_request(configured, 13, "Review this")
@@ -403,7 +403,7 @@ def test_mutations_use_provider_cwd_and_return_read_back_pr(tmp_path: Path) -> N
     assert provider.default_branch_sha(configured) == "main-13"
     assert provider.create_issue(configured, "Issue 14", "Details")["url"].endswith("/14")
     provider.update_issue(configured, 14, "Updated", None)
-    provider.label_issue(configured, 14, ("bug", "captains_chair"))
+    provider.label_issue(configured, 14, ("bug", "make_it_so"))
     provider.retarget_issue(configured, 14, "Sprint 2", ("octocat",))
     provider.close_issue(configured, 14, "Completed")
 
@@ -414,7 +414,7 @@ def test_mutations_use_provider_cwd_and_return_read_back_pr(tmp_path: Path) -> N
         values[1:3] == ["issue", "edit"]
         and "--add-label" in values
         and values[values.index("--add-label") + 1] == "bug"
-        and values[values.index("--add-label", values.index("--add-label") + 1) + 1] == "captains_chair"
+        and values[values.index("--add-label", values.index("--add-label") + 1) + 1] == "make_it_so"
         for values, _ in calls
     )
 

@@ -4,8 +4,8 @@ import json
 from pathlib import Path
 from typing import Any, cast
 
-from captains_chair.models import OpenClawWorkboardConfig, WorkerAssignments
-from captains_chair.orchestration import QueueCard, QueueCardSpec, QueueStatus
+from make_it_so.models import OpenClawWorkboardConfig, WorkerAssignments
+from make_it_so.orchestration import QueueCard, QueueCardSpec, QueueStatus
 
 
 class InMemoryWorkQueue:

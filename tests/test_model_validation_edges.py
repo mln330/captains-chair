@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from captains_chair.models import (
+from make_it_so.models import (
     AppConfig,
     Checkpoint,
     CheckpointKind,

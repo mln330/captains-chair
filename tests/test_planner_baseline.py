@@ -6,11 +6,11 @@ from typing import Any, TypeVar, cast
 import pytest
 from pydantic import BaseModel
 
-from captains_chair.command import CommandResult
-from captains_chair.engine import ControlPlaneEngine, ModelCallSuppressedError
-from captains_chair.github import GhGitHubProvider, RepositorySnapshot
-from captains_chair.harness import HarnessAdapter
-from captains_chair.models import (
+from make_it_so.command import CommandResult
+from make_it_so.engine import ControlPlaneEngine, ModelCallSuppressedError
+from make_it_so.github import GhGitHubProvider, RepositorySnapshot
+from make_it_so.harness import HarnessAdapter
+from make_it_so.models import (
     ActionKind,
     ActionScope,
     EventRecord,
@@ -22,10 +22,10 @@ from captains_chair.models import (
     RunState,
     UsageConfig,
 )
-from captains_chair.notifications import NotificationError, Notifier
-from captains_chair.orchestration import EnqueuedWorkflow, WorkflowOrchestrator
-from captains_chair.state import StateStore
-from captains_chair.worktrees import Worktree
+from make_it_so.notifications import NotificationError, Notifier
+from make_it_so.orchestration import EnqueuedWorkflow, WorkflowOrchestrator
+from make_it_so.state import StateStore
+from make_it_so.worktrees import Worktree
 from tests.helpers import app_config, model_policy, repo_config
 
 OutputModel = TypeVar("OutputModel", bound=BaseModel)
@@ -241,7 +241,7 @@ class CapturingOrchestrator:
         self.decisions.append(decision)
         return EnqueuedWorkflow(
             workflow_id=action_id,
-            board_id="captains-chair-example-project",
+            board_id="make-it-so-example-project",
             root_card_id="root-1",
             stage_cards={"captain": "card-1"},
         )
@@ -265,7 +265,7 @@ class StubWorktrees:
         del repo
         path = self.root / work_id
         path.mkdir(parents=True, exist_ok=True)
-        branch = f"captains_chair/{lane}/{work_id}"
+        branch = f"make_it_so/{lane}/{work_id}"
         return Worktree(path=path, branch=branch, base="origin/main", push_branch=branch)
 
 
@@ -497,7 +497,7 @@ def test_direct_model_call_honors_unknown_telemetry_guard_without_daily_limit(
     state.record_external_usage(
         {
             "source": "openclaw-session",
-            "external_id": "agent:captains-chair:unknown-session",
+            "external_id": "agent:make-it-so:unknown-session",
             "repo": repo.full_name,
             "role": "captain",
             "model": "gpt-5.5",
@@ -788,7 +788,7 @@ def test_autonomous_engine_labels_issue_from_planner_action(tmp_path: Path) -> N
         summary="Mark the issue as ready for implementation",
         reason="The issue has enough acceptance criteria for the coding queue.",
         target_issue=39,
-        issue_labels=("ready-for-dev", "captains_chair"),
+        issue_labels=("ready-for-dev", "make_it_so"),
     )
     engine, state, github = _issue_action_engine(tmp_path, decision)
 
@@ -798,8 +798,8 @@ def test_autonomous_engine_labels_issue_from_planner_action(tmp_path: Path) -> N
 
     assert result.event.event_type == "ISSUE_LABELED"
     assert result.event.evidence["issue"] == 39
-    assert result.event.evidence["labels"] == ["ready-for-dev", "captains_chair"]
-    assert github.labeled == [(39, ("ready-for-dev", "captains_chair"))]
+    assert result.event.evidence["labels"] == ["ready-for-dev", "make_it_so"]
+    assert github.labeled == [(39, ("ready-for-dev", "make_it_so"))]
     assert state.current_state("example/project") == RunState.READY
 
 

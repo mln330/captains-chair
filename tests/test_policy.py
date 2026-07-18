@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from captains_chair.models import (
+from make_it_so.models import (
     ActionKind,
     ActionScope,
     CompletionPolicy,
@@ -11,7 +11,7 @@ from captains_chair.models import (
     PlanDecision,
     PullRequestGate,
 )
-from captains_chair.policy import (
+from make_it_so.policy import (
     evaluate_action,
     evaluate_control_plane_completion,
     evaluate_merge,

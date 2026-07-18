@@ -4,8 +4,8 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from captains_chair.config import load_config, load_project_manifest, write_json_schema
-from captains_chair.models import (
+from make_it_so.config import load_config, load_project_manifest, write_json_schema
+from make_it_so.models import (
     ActionKind,
     AppConfig,
     CompletionPolicy,
@@ -54,13 +54,13 @@ def test_openclaw_workboard_rejects_model_worker_merge_execution() -> None:
         )
 
 
-@pytest.mark.parametrize("command", ((), ("captains_chair", "")))
+@pytest.mark.parametrize("command", ((), ("make_it_so", "")))
 def test_openclaw_workboard_rejects_empty_control_plane_command(
     command: tuple[str, ...],
 ) -> None:
     with pytest.raises(ValueError, match="must contain non-empty argv items"):
         OpenClawWorkboardConfig(
-            captains_chair_command=command,
+            make_it_so_command=command,
             workers=WorkerAssignments(
                 captain="captain",
                 coder="coder",
@@ -109,14 +109,14 @@ reviewer_modle: typo
 
 
 def test_config_helpers_handle_manifests_and_schema_writes(tmp_path: Path) -> None:
-    assert load_project_manifest(tmp_path, ".captains-chair/project.yaml") is None
-    manifest_path = tmp_path / ".captains-chair" / "project.yaml"
+    assert load_project_manifest(tmp_path, ".make-it-so/project.yaml") is None
+    manifest_path = tmp_path / ".make-it-so" / "project.yaml"
     manifest_path.parent.mkdir()
     manifest_path.write_text(
         "version: 1\ngoal: Test project\ncanonical_docs: [README.md]\nplanning_doc: PLAN.md\nchecks: [pytest]\n",
         encoding="utf-8",
     )
-    manifest = load_project_manifest(tmp_path, ".captains-chair/project.yaml")
+    manifest = load_project_manifest(tmp_path, ".make-it-so/project.yaml")
     assert manifest is not None and manifest.goal == "Test project"
 
     schema_path = tmp_path / "nested" / "config.schema.json"

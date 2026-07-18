@@ -5,8 +5,8 @@ from typing import Any, cast
 
 import pytest
 
-import captains_chair.orchestration as orchestration
-from captains_chair.models import (
+import make_it_so.orchestration as orchestration
+from make_it_so.models import (
     ActionKind,
     CompletionPolicy,
     DirectOrchestratorConfig,
@@ -15,7 +15,7 @@ from captains_chair.models import (
     PlanDecision,
     WorkerAssignments,
 )
-from captains_chair.orchestration import (
+from make_it_so.orchestration import (
     BlockerKind,
     QueueCard,
     QueueCardSpec,
@@ -47,7 +47,7 @@ def worker_config() -> OpenClawWorkboardConfig:
     return OpenClawWorkboardConfig(
         require_live_completion_validation=False,
         workers=WorkerAssignments(
-            captain="captains-chair",
+            captain="make-it-so",
             coder="github-coder",
             reviewer="github-reviewer",
             tester="github-tester",
@@ -118,7 +118,7 @@ def test_autonomous_workflow_is_role_separated_and_dependency_gated(tmp_path: Pa
         implementation_decision(),
         "action-1234567890",
         worker_config(),
-        workspace=WorkspaceRef(kind="worktree", path=tmp_path / "work", branch="captains_chair/work/39"),
+        workspace=WorkspaceRef(kind="worktree", path=tmp_path / "work", branch="make_it_so/work/39"),
     )
 
     by_stage = {card.labels[-1]: card for card in workflow.stages}
@@ -190,7 +190,7 @@ def test_completed_workflow_cleans_shared_workspace_without_touching_branch_meta
 ) -> None:
     repo = repo_config(tmp_path, mode=OperationMode.AUTONOMOUS, completion=CompletionPolicy.OWNER_APPROVAL)
     workspace = WorkspaceRef(
-        kind="worktree", path=tmp_path / "managed-worktree", branch="captains_chair/work/39"
+        kind="worktree", path=tmp_path / "managed-worktree", branch="make_it_so/work/39"
     )
     queue = InMemoryWorkQueue()
     cleaned: list[tuple[str, str | None]] = []
@@ -224,7 +224,7 @@ def test_completed_workflow_cleans_shared_workspace_without_touching_branch_meta
 
 def test_incomplete_or_inconsistent_workflow_never_cleans_workspace(tmp_path: Path) -> None:
     repo = repo_config(tmp_path, mode=OperationMode.AUTONOMOUS, completion=CompletionPolicy.OWNER_APPROVAL)
-    workspace = WorkspaceRef(kind="worktree", path=tmp_path / "managed-worktree", branch="captains_chair/work/39")
+    workspace = WorkspaceRef(kind="worktree", path=tmp_path / "managed-worktree", branch="make_it_so/work/39")
     queue = InMemoryWorkQueue()
     cleaned: list[str] = []
     orchestrator = WorkflowOrchestrator(
@@ -254,7 +254,7 @@ def test_incomplete_or_inconsistent_workflow_never_cleans_workspace(tmp_path: Pa
     queue.cards[review_id] = queue.cards[review_id].model_copy(
         update={
             "workspace": WorkspaceRef(
-                kind="worktree", path=tmp_path / "different-worktree", branch="captains_chair/work/other"
+                kind="worktree", path=tmp_path / "different-worktree", branch="make_it_so/work/other"
             )
         }
     )
@@ -268,7 +268,7 @@ def test_incomplete_or_inconsistent_workflow_never_cleans_workspace(tmp_path: Pa
 
 def test_workspace_cleanup_failure_does_not_stop_unrelated_dispatch(tmp_path: Path) -> None:
     repo = repo_config(tmp_path, mode=OperationMode.AUTONOMOUS, completion=CompletionPolicy.OWNER_APPROVAL)
-    workspace = WorkspaceRef(kind="worktree", path=tmp_path / "managed-worktree", branch="captains_chair/work/39")
+    workspace = WorkspaceRef(kind="worktree", path=tmp_path / "managed-worktree", branch="make_it_so/work/39")
     queue = InMemoryWorkQueue()
 
     def cleanup(_repo: Any, _workspace: WorkspaceRef) -> bool:
@@ -287,7 +287,7 @@ def test_workspace_cleanup_failure_does_not_stop_unrelated_dispatch(tmp_path: Pa
         id="unrelated-card",
         title="Unrelated ready work",
         status=QueueStatus.READY,
-        labels=("captains_chair", "stage:implementation"),
+        labels=("make_it_so", "stage:implementation"),
         agent_id="github-coder",
     )
 
@@ -561,7 +561,7 @@ def test_partial_enqueue_cleans_allocated_workspace(tmp_path: Path) -> None:
             raise RuntimeError("gateway disconnected before materialization")
 
     repo = repo_config(tmp_path)
-    workspace = WorkspaceRef(kind="worktree", path=tmp_path / "managed-worktree", branch="captains_chair/work/39")
+    workspace = WorkspaceRef(kind="worktree", path=tmp_path / "managed-worktree", branch="make_it_so/work/39")
     cleaned: list[str] = []
     orchestrator = WorkflowOrchestrator(
         FailingQueue(),
@@ -583,7 +583,7 @@ def test_partial_enqueue_preserves_workspace_after_root_card_exists(tmp_path: Pa
             return super().create_card(board_id, spec)
 
     repo = repo_config(tmp_path)
-    workspace = WorkspaceRef(kind="worktree", path=tmp_path / "managed-worktree", branch="captains_chair/work/39")
+    workspace = WorkspaceRef(kind="worktree", path=tmp_path / "managed-worktree", branch="make_it_so/work/39")
     cleaned: list[str] = []
     queue = FailingQueue()
     orchestrator = WorkflowOrchestrator(
@@ -627,7 +627,7 @@ def test_issue_mutation_uses_control_plane_worker_and_verifier(tmp_path: Path) -
 
     for index, decision in enumerate(decisions):
         workflow = build_workflow(repo, decision, f"issue-action-{index}", worker_config())
-        assert [card.agent_id for card in workflow.stages] == ["captains-chair", "github-verify"]
+        assert [card.agent_id for card in workflow.stages] == ["make-it-so", "github-verify"]
         assert workflow.stages[1].parents == (workflow.stages[0].key,)
 
 
@@ -741,7 +741,7 @@ def test_enqueue_resolves_dependency_keys_to_card_ids_and_is_idempotent(tmp_path
 
     assert first.root_card_id == second.root_card_id
     assert first.stage_cards == second.stage_cards
-    assert queue.board == "captains-chair-example-project"
+    assert queue.board == "make-it-so-example-project"
     implementation_spec = next(spec for spec in queue.specs if spec.key.endswith(":implementation"))
     review_spec = next(
         spec
@@ -763,7 +763,7 @@ def test_merge_and_post_merge_cards_do_not_inherit_a_pr_branch_workspace(tmp_pat
     workspace = WorkspaceRef(
         kind="worktree",
         path=tmp_path / "pr-worktree",
-        branch="captains_chair/review/pr-35-head-1",
+        branch="make_it_so/review/pr-35-head-1",
         push_branch="feature/current-pr",
     )
 
@@ -817,7 +817,7 @@ def test_reconcile_creates_coder_repair_for_blocked_review_and_keeps_dispatching
         id="review-1",
         title="Independent review",
         status=QueueStatus.BLOCKED,
-        labels=("captains_chair", "stage:review"),
+        labels=("make_it_so", "stage:review"),
         agent_id="github-reviewer",
         source_url="https://github.com/example/project/pull/4",
         metadata={"workerProtocol": {"detail": "TECHNICAL: authorization test is missing"}},
@@ -841,7 +841,7 @@ def test_reconcile_can_suppress_worker_dispatch_after_recovery(tmp_path: Path) -
         id="ready-1",
         title="Implementation",
         status=QueueStatus.READY,
-        labels=("captains_chair", "stage:implementation"),
+        labels=("make_it_so", "stage:implementation"),
         agent_id="github-coder",
     )
 
@@ -864,12 +864,12 @@ def test_repair_label_is_compact_for_uuid_card(tmp_path: Path) -> None:
     repo = repo_config(tmp_path)
     queue = MemoryQueue()
     card_id = "a8917312-58e2-45c5-ab57-e4f340e29e76"
-    workspace = WorkspaceRef(kind="worktree", path=tmp_path / "work", branch="captains_chair/work/39")
+    workspace = WorkspaceRef(kind="worktree", path=tmp_path / "work", branch="make_it_so/work/39")
     queue.cards["blocked-review"] = QueueCard(
         id=card_id,
         title="Independent review",
         status=QueueStatus.BLOCKED,
-        labels=("captains_chair", "stage:review"),
+        labels=("make_it_so", "stage:review"),
         workspace=workspace,
         metadata={"workerProtocol": {"detail": "TECHNICAL: issue found"}},
     )
@@ -889,14 +889,14 @@ def test_reconcile_leaves_real_user_blocker_but_dispatches_unrelated_work(tmp_pa
         id="blocked-1",
         title="Production credential",
         status=QueueStatus.BLOCKED,
-        labels=("captains_chair", "stage:implementation"),
+        labels=("make_it_so", "stage:implementation"),
         metadata={"workerProtocol": {"detail": "USER_SECRET: Azure credential is required"}},
     )
     queue.cards["ready"] = QueueCard(
         id="ready-1",
         title="Unrelated documentation",
         status=QueueStatus.READY,
-        labels=("captains_chair", "stage:implementation"),
+        labels=("make_it_so", "stage:implementation"),
     )
     orchestrator = WorkflowOrchestrator(queue, worker_config())
 
@@ -914,7 +914,7 @@ def test_reconcile_routes_exhausted_technical_failure_to_control_plane_recovery(
         id="coder-1",
         title="Implementation",
         status=QueueStatus.BLOCKED,
-        labels=("captains_chair", "stage:implementation"),
+        labels=("make_it_so", "stage:implementation"),
         metadata={
             "failureCount": 3,
             "automation": {"maxRetries": 2},
@@ -927,7 +927,7 @@ def test_reconcile_routes_exhausted_technical_failure_to_control_plane_recovery(
 
     assert len(result.control_plane_recoveries) == 1
     recovery = queue.specs[-1]
-    assert recovery.agent_id == "captains-chair"
+    assert recovery.agent_id == "make-it-so"
     assert any(label.startswith("control-plane-recovery") for label in recovery.labels)
     assert queue.reassigned == []
 
@@ -941,8 +941,8 @@ def test_control_plane_action_without_completion_proof_is_retried_instead_of_cou
         id="recovery-1",
         title="Captain recovery",
         status=QueueStatus.DONE,
-        labels=("captains_chair", "stage:control_plane_action", "control-plane-recovery-for:failed-1"),
-        agent_id="captains-chair",
+        labels=("make_it_so", "stage:control_plane_action", "control-plane-recovery-for:failed-1"),
+        agent_id="make-it-so",
         metadata={},
     )
     orchestrator = WorkflowOrchestrator(queue, worker_config())
@@ -952,7 +952,7 @@ def test_control_plane_action_without_completion_proof_is_retried_instead_of_cou
     assert result.proof_retries == ("recovery-1",)
     assert len(result.protocol_retries) == 1
     retry = queue.specs[-1]
-    assert retry.agent_id == "captains-chair"
+    assert retry.agent_id == "make-it-so"
     assert "stage:control_plane_action" in retry.labels
     assert "retry-for:recovery-1" in retry.labels
     assert result.cleaned_workspaces == ()
@@ -966,7 +966,7 @@ def test_control_plane_recovery_uses_a_fresh_card_for_uuid_worker_failure(tmp_pa
         id=failed_id,
         title="Repair findings",
         status=QueueStatus.BLOCKED,
-        labels=("captains_chair", "stage:repair"),
+        labels=("make_it_so", "stage:repair"),
         metadata={
             "failureCount": 3,
             "automation": {"maxRetries": 2},
@@ -979,7 +979,7 @@ def test_control_plane_recovery_uses_a_fresh_card_for_uuid_worker_failure(tmp_pa
     assert len(result.control_plane_recoveries) == 1
     recovery = queue.specs[-1]
     assert all(len(label) <= 40 for label in recovery.labels)
-    assert recovery.agent_id == "captains-chair"
+    assert recovery.agent_id == "make-it-so"
     assert recovery.key.endswith(":1")
 
 
@@ -990,14 +990,14 @@ def test_completed_repair_unblocks_original_independent_gate(tmp_path: Path) -> 
         id="review-1",
         title="Review",
         status=QueueStatus.BLOCKED,
-        labels=("captains_chair", "stage:review"),
+        labels=("make_it_so", "stage:review"),
         metadata={"workerProtocol": {"detail": "TECHNICAL: fix requested"}},
     )
     queue.cards["repair"] = QueueCard(
         id="repair-1",
         title="Repair",
         status=QueueStatus.DONE,
-        labels=("captains_chair", "stage:repair", "repair-for:review-1"),
+        labels=("make_it_so", "stage:repair", "repair-for:review-1"),
         metadata={"proof": [{"status": "passed", "note": "new head abcdef1"}]},
     )
     orchestrator = WorkflowOrchestrator(queue, worker_config())
@@ -1018,21 +1018,21 @@ def test_fresh_gate_retry_proof_completes_blocked_original(tmp_path: Path) -> No
         id="review-1",
         title="Review",
         status=QueueStatus.BLOCKED,
-        labels=("captains_chair", "stage:review"),
+        labels=("make_it_so", "stage:review"),
         metadata={"workerProtocol": {"detail": "TECHNICAL: fix requested"}},
     )
     queue.cards["repair"] = QueueCard(
         id="repair-1",
         title="Repair",
         status=QueueStatus.DONE,
-        labels=("captains_chair", "stage:repair", "repair-for:review-1"),
+        labels=("make_it_so", "stage:repair", "repair-for:review-1"),
         metadata={"proof": [{"status": "passed", "note": "new head abcdef1"}]},
     )
     queue.cards["retry"] = QueueCard(
         id="retry-1",
         title="Fresh review",
         status=QueueStatus.DONE,
-        labels=("captains_chair", "stage:review", "retry-for:review-1"),
+        labels=("make_it_so", "stage:review", "retry-for:review-1"),
         metadata={"proof": [{"status": "passed", "note": "reviewed abcdef1"}]},
     )
 
@@ -1048,7 +1048,7 @@ def test_done_worker_card_without_passed_proof_is_requeued_before_dispatch(tmp_p
         id="review-1",
         title="Review",
         status=QueueStatus.DONE,
-        labels=("captains_chair", "stage:review"),
+        labels=("make_it_so", "stage:review"),
         agent_id="github-reviewer",
         metadata={"proof": []},
     )
@@ -1072,7 +1072,7 @@ def test_done_worker_card_with_passed_proof_is_not_requeued(tmp_path: Path) -> N
         id="review-1",
         title="Review",
         status=QueueStatus.DONE,
-        labels=("captains_chair", "stage:review"),
+        labels=("make_it_so", "stage:review"),
         agent_id="github-reviewer",
         metadata={"proof": [{"status": "passed", "note": "current head abcdef1"}]},
     )
@@ -1091,7 +1091,7 @@ def test_openclaw_review_lifecycle_without_proof_is_requeued(tmp_path: Path) -> 
         id="review-1",
         title="Implementation",
         status=QueueStatus.REVIEW,
-        labels=("captains_chair", "stage:implementation"),
+        labels=("make_it_so", "stage:implementation"),
         agent_id="github-coder",
         metadata={"automation": {"summary": "PR opened"}},
     )
@@ -1114,7 +1114,7 @@ def test_fresh_retry_proof_completes_original_stage_card(tmp_path: Path) -> None
         id="review-1",
         title="Implementation",
         status=QueueStatus.REVIEW,
-        labels=("captains_chair", "stage:implementation"),
+        labels=("make_it_so", "stage:implementation"),
         agent_id="github-coder",
         metadata={"automation": {"summary": "PR opened"}},
     )
@@ -1122,7 +1122,7 @@ def test_fresh_retry_proof_completes_original_stage_card(tmp_path: Path) -> None
         id="retry-1",
         title="Retry implementation",
         status=QueueStatus.DONE,
-        labels=("captains_chair", "stage:implementation", "retry-for:review-1"),
+        labels=("make_it_so", "stage:implementation", "retry-for:review-1"),
         agent_id="github-coder",
         metadata={"proof": [{"status": "passed", "note": "PR head abcdef1"}]},
     )
@@ -1145,7 +1145,7 @@ def test_valid_final_retry_reopens_blocked_merge_card(tmp_path: Path) -> None:
         id="final-1",
         title="Final review",
         status=QueueStatus.DONE,
-        labels=("captains_chair", "workflow:flow-1", "stage:final_review"),
+        labels=("make_it_so", "workflow:flow-1", "stage:final_review"),
         metadata={
             "proof": [{"status": "passed", "note": "AUTO_MERGE_ALLOWED:abcdef1"}]
         },
@@ -1154,7 +1154,7 @@ def test_valid_final_retry_reopens_blocked_merge_card(tmp_path: Path) -> None:
         id="merge-1",
         title="Merge",
         status=QueueStatus.BLOCKED,
-        labels=("captains_chair", "workflow:flow-1", "stage:merge"),
+        labels=("make_it_so", "workflow:flow-1", "stage:merge"),
         metadata={
             "links": [{"type": "parent", "targetCardId": "final-1"}],
             "workerProtocol": {"detail": "TECHNICAL: stale final review handoff"},
@@ -1182,21 +1182,21 @@ def test_stale_final_block_retries_review_instead_of_creating_coder_repair(
         id="review-1",
         title="Independent review",
         status=QueueStatus.DONE,
-        labels=("captains_chair", "workflow:flow-1", "stage:review"),
+        labels=("make_it_so", "workflow:flow-1", "stage:review"),
         metadata={"proof": [{"status": "passed", "note": "reviewed abcdef1"}]},
     )
     queue.cards["qa"] = QueueCard(
         id="qa-1",
         title="CLI QA",
         status=QueueStatus.DONE,
-        labels=("captains_chair", "workflow:flow-1", "stage:test"),
+        labels=("make_it_so", "workflow:flow-1", "stage:test"),
         metadata={"proof": [{"status": "passed", "note": "QA_PASSED:cli:abcdef1"}]},
     )
     queue.cards["final"] = QueueCard(
         id="final-1",
         title="Final review",
         status=QueueStatus.BLOCKED,
-        labels=("captains_chair", "workflow:flow-1", "stage:final_review"),
+        labels=("make_it_so", "workflow:flow-1", "stage:final_review"),
         metadata={
             "links": [
                 {"type": "parent", "targetCardId": "review-1"},
@@ -1209,7 +1209,7 @@ def test_stale_final_block_retries_review_instead_of_creating_coder_repair(
         id="repair-1",
         title="Repair findings from Final review",
         status=QueueStatus.READY,
-        labels=("captains_chair", "workflow:flow-1", "stage:repair", "repair:final-1"),
+        labels=("make_it_so", "workflow:flow-1", "stage:repair", "repair:final-1"),
     )
 
     result = WorkflowOrchestrator(queue, worker_config()).reconcile(
@@ -1240,7 +1240,7 @@ def test_nested_final_retry_promotes_blocked_original_for_downstream_merge(
         id="final-1",
         title="Final review",
         status=QueueStatus.BLOCKED,
-        labels=("captains_chair", "workflow:flow-1", "stage:final_review"),
+        labels=("make_it_so", "workflow:flow-1", "stage:final_review"),
         metadata={
             "workerProtocol": {"detail": "TECHNICAL: stale final review handoff"},
         },
@@ -1250,7 +1250,7 @@ def test_nested_final_retry_promotes_blocked_original_for_downstream_merge(
         title="Retry final review",
         status=QueueStatus.BLOCKED,
         labels=(
-            "captains_chair",
+            "make_it_so",
             "workflow:flow-1",
             "stage:final_review",
             "retry-for:final-1",
@@ -1262,7 +1262,7 @@ def test_nested_final_retry_promotes_blocked_original_for_downstream_merge(
         title="Nested retry final review",
         status=QueueStatus.DONE,
         labels=(
-            "captains_chair",
+            "make_it_so",
             "workflow:flow-1",
             "stage:final_review",
             "retry-for:first-retry-1",
@@ -1277,7 +1277,7 @@ def test_nested_final_retry_promotes_blocked_original_for_downstream_merge(
         id="merge-1",
         title="Merge",
         status=QueueStatus.TODO,
-        labels=("captains_chair", "workflow:flow-1", "stage:merge"),
+        labels=("make_it_so", "workflow:flow-1", "stage:merge"),
         metadata={"links": [{"type": "parent", "targetCardId": "final-1"}]},
     )
 
@@ -1294,7 +1294,7 @@ def test_recovered_control_plane_card_is_cancelled_without_dispatch(tmp_path: Pa
         id="target-1",
         title="Review",
         status=QueueStatus.DONE,
-        labels=("captains_chair", "stage:review"),
+        labels=("make_it_so", "stage:review"),
         metadata={"proof": [{"status": "passed", "note": "reviewed abcdef1"}]},
     )
     queue.cards["recovery"] = QueueCard(
@@ -1302,7 +1302,7 @@ def test_recovered_control_plane_card_is_cancelled_without_dispatch(tmp_path: Pa
         title="Recovery",
         status=QueueStatus.READY,
         labels=(
-            "captains_chair",
+            "make_it_so",
             "stage:control_plane_action",
             "control-plane-recovery:target-1",
         ),
@@ -1324,7 +1324,7 @@ def test_exhausted_merge_ready_card_resets_before_dispatch(tmp_path: Path) -> No
         id="final-1",
         title="Final review",
         status=QueueStatus.DONE,
-        labels=("captains_chair", "workflow:flow-1", "stage:final_review"),
+        labels=("make_it_so", "workflow:flow-1", "stage:final_review"),
         metadata={
             "proof": [{"status": "passed", "note": "AUTO_MERGE_ALLOWED:abcdef1"}]
         },
@@ -1333,7 +1333,7 @@ def test_exhausted_merge_ready_card_resets_before_dispatch(tmp_path: Path) -> No
         id="merge-1",
         title="Merge",
         status=QueueStatus.READY,
-        labels=("captains_chair", "workflow:flow-1", "stage:merge"),
+        labels=("make_it_so", "workflow:flow-1", "stage:merge"),
         metadata={
             "links": [{"type": "parent", "targetCardId": "final-1"}],
             "failureCount": 3,
@@ -1355,14 +1355,14 @@ def test_repair_for_cancelled_target_is_not_dispatched(tmp_path: Path) -> None:
         id="target-1",
         title="Final review",
         status=QueueStatus.BLOCKED,
-        labels=("captains_chair", "stage:final_review"),
+        labels=("make_it_so", "stage:final_review"),
         metadata={"comments": [{"body": "CANCELLED: superseded"}]},
     )
     queue.cards["repair"] = QueueCard(
         id="repair-1",
         title="Repair",
         status=QueueStatus.READY,
-        labels=("captains_chair", "stage:repair", "repair:target-1"),
+        labels=("make_it_so", "stage:repair", "repair:target-1"),
     )
 
     WorkflowOrchestrator(queue, worker_config()).reconcile(repo)
@@ -1381,7 +1381,7 @@ def test_nested_retry_proof_completes_original_without_another_retry(tmp_path: P
         id="review-1",
         title="Implementation",
         status=QueueStatus.DONE,
-        labels=("captains_chair", "stage:final_review"),
+        labels=("make_it_so", "stage:final_review"),
         agent_id="github-reviewer",
         metadata={"proof": []},
     )
@@ -1389,14 +1389,14 @@ def test_nested_retry_proof_completes_original_without_another_retry(tmp_path: P
         id="retry-1",
         title="Retry review",
         status=QueueStatus.READY,
-        labels=("captains_chair", "stage:final_review", "retry-for:review-1"),
+        labels=("make_it_so", "stage:final_review", "retry-for:review-1"),
         agent_id="github-reviewer",
     )
     queue.cards["nested-retry"] = QueueCard(
         id="retry-2",
         title="Nested retry review",
         status=QueueStatus.DONE,
-        labels=("captains_chair", "stage:final_review", "retry-for:retry-1"),
+        labels=("make_it_so", "stage:final_review", "retry-for:retry-1"),
         agent_id="github-reviewer",
         metadata={
             "proof": [
@@ -1411,7 +1411,7 @@ def test_nested_retry_proof_completes_original_without_another_retry(tmp_path: P
         id="retry-3",
         title="Newer nested retry review",
         status=QueueStatus.READY,
-        labels=("captains_chair", "stage:final_review", "retry-for:retry-2"),
+        labels=("make_it_so", "stage:final_review", "retry-for:retry-2"),
         agent_id="github-reviewer",
     )
 
@@ -1431,7 +1431,7 @@ def test_fresh_retry_uses_workboard_safe_compact_label_for_uuid_card(tmp_path: P
         id=original_id,
         title="Implementation",
         status=QueueStatus.REVIEW,
-        labels=("captains_chair", "stage:implementation"),
+        labels=("make_it_so", "stage:implementation"),
         agent_id="github-coder",
     )
 
@@ -1445,12 +1445,12 @@ def test_fresh_retry_uses_workboard_safe_compact_label_for_uuid_card(tmp_path: P
 def test_fresh_retry_preserves_the_isolated_workspace(tmp_path: Path) -> None:
     repo = repo_config(tmp_path)
     queue = MemoryQueue()
-    workspace = WorkspaceRef(kind="worktree", path=tmp_path / "work", branch="captains_chair/work/39")
+    workspace = WorkspaceRef(kind="worktree", path=tmp_path / "work", branch="make_it_so/work/39")
     queue.cards["original"] = QueueCard(
         id="review-1",
         title="Implementation",
         status=QueueStatus.REVIEW,
-        labels=("captains_chair", "stage:implementation"),
+        labels=("make_it_so", "stage:implementation"),
         agent_id="github-coder",
         workspace=workspace,
     )
@@ -1467,7 +1467,7 @@ def test_archived_cards_are_not_recovered_or_retried(tmp_path: Path) -> None:
         id="old-1",
         title="Superseded implementation",
         status=QueueStatus.DONE,
-        labels=("captains_chair", "stage:implementation"),
+        labels=("make_it_so", "stage:implementation"),
         metadata={"archivedAt": "2026-07-12T00:00:00Z"},
     )
 
@@ -1485,7 +1485,7 @@ def test_retry_copies_only_parent_links(tmp_path: Path) -> None:
         id="review-1",
         title="Implementation",
         status=QueueStatus.REVIEW,
-        labels=("captains_chair", "stage:implementation"),
+        labels=("make_it_so", "stage:implementation"),
         agent_id="github-coder",
         metadata={
             "links": [
@@ -1507,20 +1507,20 @@ def test_archived_retry_does_not_satisfy_live_retry_lookup(tmp_path: Path) -> No
         id="review-1",
         title="Implementation",
         status=QueueStatus.REVIEW,
-        labels=("captains_chair", "stage:implementation"),
+        labels=("make_it_so", "stage:implementation"),
         agent_id="github-coder",
     )
     queue.cards["archived-retry"] = QueueCard(
         id="retry-old",
         title="Archived retry",
         status=QueueStatus.TODO,
-        labels=("captains_chair", "stage:implementation", "retry-for:review-1"),
+        labels=("make_it_so", "stage:implementation", "retry-for:review-1"),
         metadata={"archivedAt": "2026-07-12T00:00:00Z"},
     )
 
     WorkflowOrchestrator(queue, worker_config()).reconcile(repo)
 
-    assert queue.specs[-1].key == "captains_chair:retry:review-1:2"
+    assert queue.specs[-1].key == "make_it_so:retry:review-1:2"
 
 
 def test_proofless_retry_chain_routes_to_fresh_control_plane_recovery(tmp_path: Path) -> None:
@@ -1530,14 +1530,14 @@ def test_proofless_retry_chain_routes_to_fresh_control_plane_recovery(tmp_path: 
         id="review-1",
         title="Implementation",
         status=QueueStatus.DONE,
-        labels=("captains_chair", "stage:implementation"),
+        labels=("make_it_so", "stage:implementation"),
         metadata={"proof": []},
     )
     queue.cards["retry-1"] = QueueCard(
         id="retry-1",
         title="Retry one",
         status=QueueStatus.DONE,
-        labels=("captains_chair", "stage:implementation", "retry-for:review-1"),
+        labels=("make_it_so", "stage:implementation", "retry-for:review-1"),
         metadata={"proof": []},
     )
     queue.cards["retry-2"] = QueueCard(
@@ -1545,7 +1545,7 @@ def test_proofless_retry_chain_routes_to_fresh_control_plane_recovery(tmp_path: 
         title="Retry two",
         status=QueueStatus.REVIEW,
         labels=(
-            "captains_chair",
+            "make_it_so",
             "stage:implementation",
             "retry-for:review-1",
             "retry-for:retry-1",
@@ -1557,8 +1557,8 @@ def test_proofless_retry_chain_routes_to_fresh_control_plane_recovery(tmp_path: 
 
     assert len(result.control_plane_recoveries) == 1
     recovery = queue.specs[-1]
-    assert recovery.agent_id == "captains-chair"
-    assert recovery.key == "captains_chair:control-plane-recovery:retry-2:1"
+    assert recovery.agent_id == "make-it-so"
+    assert recovery.key == "make_it_so:control-plane-recovery:retry-2:1"
 
 
 def test_openclaw_review_lifecycle_with_proof_is_normalized_to_done(tmp_path: Path) -> None:
@@ -1568,7 +1568,7 @@ def test_openclaw_review_lifecycle_with_proof_is_normalized_to_done(tmp_path: Pa
         id="review-1",
         title="Independent review",
         status=QueueStatus.REVIEW,
-        labels=("captains_chair", "stage:review"),
+        labels=("make_it_so", "stage:review"),
         agent_id="github-reviewer",
         metadata={"proof": [{"status": "passed", "note": "head abcdef1"}]},
     )
@@ -1587,7 +1587,7 @@ def test_has_active_workflow_matches_issue_or_pr_and_ignores_completed_groups(tm
         id="active-1",
         title="Review",
         status=QueueStatus.RUNNING,
-        labels=("captains_chair", "workflow:action-1", "stage:review"),
+        labels=("make_it_so", "workflow:action-1", "stage:review"),
         source_url="https://github.com/other/project/issues/39",
     )
     orchestrator = WorkflowOrchestrator(queue, worker_config())
@@ -1611,20 +1611,20 @@ def test_active_workflow_count_preserves_capacity_for_owner_blocked_work(tmp_pat
                 id="technical-1",
                 title="Technical workflow",
                 status=QueueStatus.RUNNING,
-                labels=("captains_chair", "workflow:technical", "stage:implementation"),
+                labels=("make_it_so", "workflow:technical", "stage:implementation"),
             ),
             "owner": QueueCard(
                 id="owner-1",
                 title="Owner-blocked workflow",
                 status=QueueStatus.BLOCKED,
-                labels=("captains_chair", "workflow:owner", "stage:implementation"),
+                labels=("make_it_so", "workflow:owner", "stage:implementation"),
                 metadata={"workerProtocol": {"detail": "USER_SECRET: Azure token required"}},
             ),
             "done": QueueCard(
                 id="done-1",
                 title="Completed workflow",
                 status=QueueStatus.DONE,
-                labels=("captains_chair", "workflow:done", "stage:implementation"),
+                labels=("make_it_so", "workflow:done", "stage:implementation"),
             ),
         }
     )
@@ -1636,6 +1636,6 @@ def test_active_workflow_count_preserves_capacity_for_owner_blocked_work(tmp_pat
         id="owner-running-1",
         title="Owner workflow still has active work",
         status=QueueStatus.RUNNING,
-        labels=("captains_chair", "workflow:owner", "stage:review"),
+        labels=("make_it_so", "workflow:owner", "stage:review"),
     )
     assert orchestrator.active_workflow_count(repo) == 2

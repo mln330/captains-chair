@@ -1,16 +1,17 @@
 import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 import yaml
 
-import captains_chair.sidecar as sidecar_module
-from captains_chair.config import load_config
-from captains_chair.github import GitHubProvider, RepositorySnapshot
-from captains_chair.models import (
+import make_it_so.sidecar as sidecar_module
+from make_it_so.config import load_config
+from make_it_so.github import GitHubProvider, RepositorySnapshot
+from make_it_so.models import (
     CourseKind,
     HarnessConfig,
     OpenClawWorkboardConfig,
@@ -19,8 +20,8 @@ from captains_chair.models import (
     RepositoryProvisioningConfig,
     WorkerAssignments,
 )
-from captains_chair.orchestration import QueueCard, QueueStatus
-from captains_chair.sidecar import SidecarError, SidecarServer
+from make_it_so.orchestration import QueueCard, QueueStatus
+from make_it_so.sidecar import SidecarError, SidecarServer
 from tests.helpers import app_config, repo_config
 from tests.test_courses import ready_course, rebind_readiness_review
 
@@ -182,7 +183,7 @@ def test_sidecar_correlates_workboard_sessions_and_reports_execution_facts(
             status=QueueStatus.DONE,
             labels=("workflow:routing-canary", "stage:merge"),
             agent_id="merger",
-            source_url="https://github.com/mln330/captains-chair/pull/42",
+            source_url="https://github.com/mln330/make-it-so/pull/42",
             metadata={"comments": [{"createdAt": 2, "body": "Merged after green gates."}]},
         ),
         QueueCard(
@@ -209,7 +210,7 @@ def test_sidecar_correlates_workboard_sessions_and_reports_execution_facts(
                     {
                         "number": 42,
                         "title": "Routing canary",
-                        "url": "https://github.com/mln330/captains-chair/pull/42",
+                        "url": "https://github.com/mln330/make-it-so/pull/42",
                         "isDraft": False,
                         "reviewDecision": "APPROVED",
                     }
@@ -223,7 +224,7 @@ def test_sidecar_correlates_workboard_sessions_and_reports_execution_facts(
         state.record_external_usage(
             {
                 "source": "openclaw-session",
-                "external_id": "agent:github-merge:captains-chair:worker:merge-done:managed:1",
+                "external_id": "agent:github-merge:make-it-so:worker:merge-done:managed:1",
                 "repo": kwargs["repo"],
                 "role": "merger",
                 "stage": "merge",
@@ -258,7 +259,7 @@ def test_sidecar_correlates_workboard_sessions_and_reports_execution_facts(
     assert result["workboard_status"]["pr_count"] == 1
     assert result["workboard_status"]["pr_numbers"] == [42]
     assert result["workboard_status"]["pr_urls"] == [
-        "https://github.com/mln330/captains-chair/pull/42"
+        "https://github.com/mln330/make-it-so/pull/42"
     ]
     assert result["github_status"]["open_prs"] == 1
     assert result["github_status"]["checks"] == {"recent": 1, "failed": 0, "pending": 0, "passed": 1}
@@ -298,8 +299,8 @@ def test_sidecar_reports_health_portfolio_and_schedule_contract(tmp_path: Path) 
     schedule = server.request("schedule.describe")
     assert schedule["source_of_truth"] == "openclaw_gateway_cron"
     assert [job["name"] for job in schedule["jobs"]] == [
-        "captains-chair-reconcile",
-        "captains-chair-course-review",
+        "make-it-so-reconcile",
+        "make-it-so-course-review",
     ]
     assert [job["kind"] for job in schedule["jobs"]] == ["reconcile", "review"]
     assert schedule["repository_enablement"] == {"example/project": True}
@@ -317,6 +318,64 @@ def test_sidecar_reports_health_portfolio_and_schedule_contract(tmp_path: Path) 
         {"full_name": "example/project", "fingerprint": "decision-1"},
     )
     assert acknowledged["count"] == 1
+
+
+def test_sidecar_collects_multi_repo_portfolio_concurrently(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base = repo_config(tmp_path)
+    repos = tuple(
+        base.model_copy(
+            update={
+                "full_name": f"example/project-{index}",
+                "local_path": tmp_path / f"repo-{index}",
+            }
+        )
+        for index in range(3)
+    )
+    config = app_config(tmp_path, base).model_copy(update={"repos": repos})
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+    server = SidecarServer(config_path)
+    barrier = threading.Barrier(len(repos))
+
+    def synchronized_status(repo: RepoConfig) -> dict[str, str]:
+        barrier.wait(timeout=2)
+        return {"full_name": repo.full_name}
+
+    monkeypatch.setattr(server, "_repo_status", synchronized_status)
+
+    result = server.request("portfolio.status")
+
+    assert [row["full_name"] for row in result["repos"]] == [repo.full_name for repo in repos]
+
+
+def test_sidecar_collects_github_and_workboard_status_concurrently(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = repo_config(tmp_path)
+    config = app_config(tmp_path, repo)
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+    server = SidecarServer(config_path)
+    barrier = threading.Barrier(2)
+
+    def workboard_status(_repo: RepoConfig) -> dict[str, str]:
+        barrier.wait(timeout=2)
+        return {"status": "ready"}
+
+    def github_status(_repo: RepoConfig) -> dict[str, str]:
+        barrier.wait(timeout=2)
+        return {"status": "available"}
+
+    monkeypatch.setattr(server, "_workboard_status", workboard_status)
+    monkeypatch.setattr(server, "_github_status", github_status)
+
+    result = server.request("portfolio.status")
+
+    repo_result = result["repos"][0]
+    assert repo_result["workboard_status"]["status"] == "ready"
+    assert repo_result["github_status"]["status"] == "available"
 
 
 def test_sidecar_registers_and_updates_repositories_atomically(tmp_path: Path) -> None:
@@ -514,7 +573,7 @@ def test_greenfield_repo_creation_waits_for_course_approval_and_seeds_durable_fi
 
     assert pending["status"] == "awaiting_course_approval"
     assert provider.calls == []
-    assert (local_path / ".captains-chair" / "courses" / "first-course.yaml").is_file()
+    assert (local_path / ".make-it-so" / "courses" / "first-course.yaml").is_file()
 
     engaged = server.request(
         "course.approve",
@@ -526,7 +585,7 @@ def test_greenfield_repo_creation_waits_for_course_approval_and_seeds_durable_fi
     assert provider.calls == [("example/new-project", "first-course")]
     assert (local_path / "README.md").is_file()
     assert (local_path / "docs" / "IMPLEMENTATION_PLAN.md").is_file()
-    assert (local_path / ".captains-chair" / "project.yaml").is_file()
+    assert (local_path / ".make-it-so" / "project.yaml").is_file()
     assert load_config(config_path).repo("example/new-project").provisioning.enabled is True
 
 
@@ -624,7 +683,7 @@ def test_sidecar_run_once_executes_the_bounded_review_entrypoint(
         calls.append(command)
         return subprocess.CompletedProcess(command, 0, "review complete", "")
 
-    monkeypatch.setattr("captains_chair.sidecar.subprocess.run", fake_run)
+    monkeypatch.setattr("make_it_so.sidecar.subprocess.run", fake_run)
     result = server.request("run.once", {"kind": "review"})
 
     assert result["status"] == "completed"
@@ -647,7 +706,7 @@ def test_sidecar_reconcile_does_not_skip_board_free_repositories(
         calls.append(command)
         return subprocess.CompletedProcess(command, 0, "reconcile complete", "")
 
-    monkeypatch.setattr("captains_chair.sidecar.subprocess.run", fake_run)
+    monkeypatch.setattr("make_it_so.sidecar.subprocess.run", fake_run)
     result = server.request("run.once", {"kind": "reconcile"})
 
     assert result["status"] == "completed"
@@ -730,14 +789,14 @@ def test_sidecar_readiness_review_uses_the_durable_cli_operation(
             stderr="",
         )
 
-    monkeypatch.setattr("captains_chair.sidecar.subprocess.run", fake_run)
+    monkeypatch.setattr("make_it_so.sidecar.subprocess.run", fake_run)
     result = server.request(
         "course.readiness_review",
         {"full_name": "example/project", "course_key": "feature-search", "harness": "test"},
     )
 
     assert result["status"] == "awaiting_approval"
-    assert commands[0][0:3] == [sys.executable, "-m", "captains_chair.cli"]
+    assert commands[0][0:3] == [sys.executable, "-m", "make_it_so.cli"]
     assert commands[0][-6:] == [
         "--repo",
         "example/project",
@@ -990,21 +1049,21 @@ def test_sidecar_reports_dirty_git_and_one_shot_failures(tmp_path: Path, monkeyp
         del kwargs
         return subprocess.CompletedProcess(args, 0, " M README.md\n", "")
 
-    monkeypatch.setattr("captains_chair.sidecar.subprocess.run", dirty_run)
+    monkeypatch.setattr("make_it_so.sidecar.subprocess.run", dirty_run)
     assert server.request("repos.list")["repos"][0]["dirty"] is True
 
     def unavailable_git(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
         del args, kwargs
         raise OSError("git unavailable")
 
-    monkeypatch.setattr("captains_chair.sidecar.subprocess.run", unavailable_git)
+    monkeypatch.setattr("make_it_so.sidecar.subprocess.run", unavailable_git)
     assert server.request("repos.list")["repos"][0]["dirty"] is True
 
     def fail_run(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
         del args, kwargs
         raise subprocess.TimeoutExpired("review", 1)
 
-    monkeypatch.setattr("captains_chair.sidecar.subprocess.run", fail_run)
+    monkeypatch.setattr("make_it_so.sidecar.subprocess.run", fail_run)
     result = server.request("run.once", {"kind": "review"})
     assert result["status"] == "degraded"
     assert result["execution"][0]["status"] == "failed"
@@ -1031,7 +1090,7 @@ def test_sidecar_stdio_protocol_returns_jsonrpc_errors_without_stopping(tmp_path
         [str(Path(__file__).parents[1] / "src"), environment.get("PYTHONPATH", "")]
     )
     completed = subprocess.run(
-        [sys.executable, "-m", "captains_chair.sidecar", "--config", str(config_path)],
+        [sys.executable, "-m", "make_it_so.sidecar", "--config", str(config_path)],
         input=(
             '{"jsonrpc":"2.0","id":1,"method":"health","params":{}}\n'
             "not-json\n"
@@ -1069,7 +1128,7 @@ def test_one_shot_process_exit_code_reflects_degraded_status(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["captains-chair-sidecar", "--config", str(tmp_path / "config.yaml"), "--once", "review"],
+        ["make-it-so-sidecar", "--config", str(tmp_path / "config.yaml"), "--once", "review"],
     )
 
     assert sidecar_module.main() == 2

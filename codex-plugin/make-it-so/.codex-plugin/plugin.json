@@ -1,0 +1,19 @@
+{
+  "name": "make-it-so",
+  "version": "0.2.0",
+  "description": "Make It So SDLC control plane for Codex",
+  "author": {
+    "name": "mln330"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Make It So",
+    "shortDescription": "Run policy-gated repository courses in Codex.",
+    "longDescription": "Make It So gives Codex durable courses, adapter-neutral orchestration, PR evidence gates, and token telemetry.",
+    "developerName": "mln330",
+    "category": "Productivity",
+    "capabilities": [],
+    "defaultPrompt": "Use Make It So to inspect the repository, report readiness, and advance only policy-approved work."
+  },
+  "mcpServers": "./.mcp.json"
+}

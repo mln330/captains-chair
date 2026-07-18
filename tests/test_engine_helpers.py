@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-import captains_chair.engine as engine
-from captains_chair.models import (
+import make_it_so.engine as engine
+from make_it_so.models import (
     ActionKind,
     CommentDisposition,
     CommentTriage,
@@ -19,7 +19,7 @@ from captains_chair.models import (
     UXReview,
     WorkerResult,
 )
-from captains_chair.worktrees import Worktree
+from make_it_so.worktrees import Worktree
 from tests.helpers import repo_config
 
 
@@ -47,9 +47,9 @@ def test_engine_evidence_and_check_helpers(tmp_path: Path) -> None:
     repo = repo_config(tmp_path)
     worktree = Worktree(
         path=tmp_path / "worktree",
-        branch="captains_chair/work/auth-1",
+        branch="make_it_so/work/auth-1",
         base="origin/main",
-        push_branch="captains_chair/work/auth-1",
+        push_branch="make_it_so/work/auth-1",
     )
     assert engine._fingerprint({"b": 2, "a": 1}) == engine._fingerprint({"a": 1, "b": 2})  # pyright: ignore[reportPrivateUsage]
     assert engine._pr_link(repo, 42) == "https://github.com/example/project/pull/42"  # pyright: ignore[reportPrivateUsage]
@@ -85,9 +85,9 @@ def test_worker_and_review_comments_include_evidence() -> None:
     prompt = engine._worker_prompt(  # pyright: ignore[reportPrivateUsage]
         repo,
         decision(),
-        Worktree(Path("work"), "captains_chair/work/auth-1", "origin/main", "captains_chair/work/auth-1"),
+        Worktree(Path("work"), "make_it_so/work/auth-1", "origin/main", "make_it_so/work/auth-1"),
     )
-    assert "captains_chair/work/auth-1" in prompt
+    assert "make_it_so/work/auth-1" in prompt
     body = engine._pull_request_body(  # pyright: ignore[reportPrivateUsage]
         repo,
         decision(),

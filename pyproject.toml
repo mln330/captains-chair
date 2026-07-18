@@ -3,7 +3,7 @@ requires = ["hatchling>=1.25"]
 build-backend = "hatchling.build"
 
 [project]
-name = "captains-chair"
+name = "make-it-so"
 version = "0.2.0"
 description = "An open-source, harness-neutral SDLC control plane that puts the builder in command of an agent crew."
 readme = "README.md"
@@ -27,10 +27,10 @@ dev = [
 ]
 
 [project.scripts]
-captains-chair = "captains_chair.cli:main"
+make-it-so = "make_it_so.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/captains_chair"]
+packages = ["src/make_it_so"]
 
 [tool.hatch.build]
 exclude = [
@@ -61,13 +61,13 @@ typeCheckingMode = "strict"
 reportMissingTypeStubs = false
 
 [tool.mutmut]
-source_paths = ["src/captains_chair"]
+source_paths = ["src/make_it_so"]
 only_mutate = [
-  "src/captains_chair/model_policy.py",
-  "src/captains_chair/merge_gate.py",
-  "src/captains_chair/policy.py",
-  "src/captains_chair/state.py",
-  "src/captains_chair/orchestration.py",
+  "src/make_it_so/model_policy.py",
+  "src/make_it_so/merge_gate.py",
+  "src/make_it_so/policy.py",
+  "src/make_it_so/state.py",
+  "src/make_it_so/orchestration.py",
 ]
 pytest_add_cli_args_test_selection = [
   "tests/test_model_policy.py",

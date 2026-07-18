@@ -62,14 +62,14 @@ type CommandResult = {
   stderr?: unknown;
 };
 
-const PLUGIN_ID = "captains-chair";
+const PLUGIN_ID = "make-it-so";
 const CONFIG_SCHEMA = {
   type: "object",
   additionalProperties: false,
   properties: {
     configPath: { type: "string" },
     pythonExecutable: { type: "string", default: "python3" },
-    sidecarCommand: { type: "array", items: { type: "string" }, default: ["-m", "captains_chair.sidecar"] },
+    sidecarCommand: { type: "array", items: { type: "string" }, default: ["-m", "make_it_so.sidecar"] },
     openclawExecutable: { type: "string", default: "openclaw" },
     installSchedules: { type: "boolean", default: false },
   },
@@ -88,17 +88,17 @@ function configArgs(config: Record<string, unknown>): string[] {
   const value = config.sidecarCommand;
   return Array.isArray(value) && value.every((item) => typeof item === "string")
     ? [...value]
-    : ["-m", "captains_chair.sidecar"];
+    : ["-m", "make_it_so.sidecar"];
 }
 
 export default definePluginEntry({
   id: PLUGIN_ID,
-  name: "Captain's Chair",
+  name: "Make It So",
   description: "An SDLC control plane that puts the builder in command of an agent crew.",
   configSchema: CONFIG_SCHEMA,
   register(api: Api) {
     const config = api.pluginConfig ?? {};
-    const configPath = expandPath(configString(config, "configPath", "~/.config/captains-chair/config.yaml"));
+    const configPath = expandPath(configString(config, "configPath", "~/.config/make-it-so/config.yaml"));
     const sidecar = new SidecarSupervisor(
       {
         executable: configString(config, "pythonExecutable", "python3"),
@@ -114,18 +114,18 @@ export default definePluginEntry({
     api.session?.controls?.registerControlUiDescriptor?.({
       surface: "tab",
       id: PLUGIN_ID,
-      label: "Captain's Chair",
+      label: "Make It So",
       description: "Set the course, inspect progress, and engage the crew.",
       icon: "compass",
       group: "control",
       order: 70,
-      path: "/captains-chair/",
+      path: "/make-it-so/",
       requiredScopes: ["operator.read"],
     });
 
     const uiRoot = join(api.rootDir ?? process.cwd(), "dist", "ui");
     api.registerHttpRoute?.({
-      path: "/captains-chair/",
+      path: "/make-it-so/",
       auth: "plugin",
       handler: async (req, res) => {
         if (rejectNonControlUiRequest(req, res, { cors: false })) return;
@@ -134,11 +134,11 @@ export default definePluginEntry({
         res.setHeader("cache-control", "no-store");
         res.setHeader("content-security-policy", "frame-ancestors 'self'");
         res.setHeader("x-content-type-options", "nosniff");
-        res.end(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="captains-chair-control-token" content="${controlUiToken}"><title>Captain's Chair</title><link rel="stylesheet" crossorigin="anonymous" href="/captains-chair/assets/index.css"></head><body><div id="root"></div><script crossorigin="anonymous" src="/captains-chair/assets/index.js"></script></body></html>`);
+        res.end(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="make-it-so-control-token" content="${controlUiToken}"><title>Make It So</title><link rel="stylesheet" crossorigin="anonymous" href="/make-it-so/assets/index.css"></head><body><div id="root"></div><script crossorigin="anonymous" src="/make-it-so/assets/index.js"></script></body></html>`);
       },
     });
     api.registerHttpRoute?.({
-      path: "/captains-chair/assets/index.css",
+      path: "/make-it-so/assets/index.css",
       auth: "plugin",
       handler: async (req, res) => {
         if (rejectNonControlUiRequest(req, res)) return;
@@ -149,12 +149,12 @@ export default definePluginEntry({
           res.end(body);
         } catch (error) {
           res.statusCode = 503;
-          res.end(`Captain's Chair UI is not built: ${String(error)}`);
+          res.end(`Make It So UI is not built: ${String(error)}`);
         }
       },
     });
     api.registerHttpRoute?.({
-      path: "/captains-chair/assets/index.js",
+      path: "/make-it-so/assets/index.js",
       auth: "plugin",
       handler: async (req, res) => {
         if (rejectNonControlUiRequest(req, res)) return;
@@ -165,7 +165,7 @@ export default definePluginEntry({
           res.end(body);
         } catch (error) {
           res.statusCode = 503;
-          res.end(`Captain's Chair UI is not built: ${String(error)}`);
+          res.end(`Make It So UI is not built: ${String(error)}`);
         }
       },
     });
@@ -190,41 +190,41 @@ export default definePluginEntry({
         },
       });
     };
-    apiRoute("/captains-chair/api/portfolio/status", "portfolio.status");
-    apiRoute("/captains-chair/api/repos/list", "repos.list");
-    apiRoute("/captains-chair/api/repos/register", "repo.register");
-    apiRoute("/captains-chair/api/repos/create", "repo.create");
-    apiRoute("/captains-chair/api/repos/update", "repo.update");
-    apiRoute("/captains-chair/api/models/validate", "models.validate");
-    apiRoute("/captains-chair/api/models/config", "models.config");
-    apiRoute("/captains-chair/api/models/update", "models.update");
-    apiRoute("/captains-chair/api/usage/config", "usage.config");
-    apiRoute("/captains-chair/api/usage/update", "usage.update");
-    apiRoute("/captains-chair/api/courses/list", "courses.list");
-    apiRoute("/captains-chair/api/course/get", "course.get");
-    apiRoute("/captains-chair/api/course/create", "course.create");
-    apiRoute("/captains-chair/api/course/readiness", "course.readiness");
-    apiRoute("/captains-chair/api/course/planning-session", "course.planning_session");
-    apiRoute("/captains-chair/api/course/models", "course.models");
-    apiRoute("/captains-chair/api/course/requirement", "course.requirement");
-    apiRoute("/captains-chair/api/course/approve", "course.approve");
-    apiRoute("/captains-chair/api/course/ready-work", "course.ready_work");
-    apiRoute("/captains-chair/api/course/checkpoint", "course.checkpoint");
-    apiRoute("/captains-chair/api/course/pause", "course.pause");
-    apiRoute("/captains-chair/api/course/resume", "course.resume");
-    apiRoute("/captains-chair/api/schedule/describe", "schedule.describe");
-    apiRoute("/captains-chair/api/schedule/configure", "schedule.configure");
-    apiRoute("/captains-chair/api/attention/ack", "attention.ack");
+    apiRoute("/make-it-so/api/portfolio/status", "portfolio.status");
+    apiRoute("/make-it-so/api/repos/list", "repos.list");
+    apiRoute("/make-it-so/api/repos/register", "repo.register");
+    apiRoute("/make-it-so/api/repos/create", "repo.create");
+    apiRoute("/make-it-so/api/repos/update", "repo.update");
+    apiRoute("/make-it-so/api/models/validate", "models.validate");
+    apiRoute("/make-it-so/api/models/config", "models.config");
+    apiRoute("/make-it-so/api/models/update", "models.update");
+    apiRoute("/make-it-so/api/usage/config", "usage.config");
+    apiRoute("/make-it-so/api/usage/update", "usage.update");
+    apiRoute("/make-it-so/api/courses/list", "courses.list");
+    apiRoute("/make-it-so/api/course/get", "course.get");
+    apiRoute("/make-it-so/api/course/create", "course.create");
+    apiRoute("/make-it-so/api/course/readiness", "course.readiness");
+    apiRoute("/make-it-so/api/course/planning-session", "course.planning_session");
+    apiRoute("/make-it-so/api/course/models", "course.models");
+    apiRoute("/make-it-so/api/course/requirement", "course.requirement");
+    apiRoute("/make-it-so/api/course/approve", "course.approve");
+    apiRoute("/make-it-so/api/course/ready-work", "course.ready_work");
+    apiRoute("/make-it-so/api/course/checkpoint", "course.checkpoint");
+    apiRoute("/make-it-so/api/course/pause", "course.pause");
+    apiRoute("/make-it-so/api/course/resume", "course.resume");
+    apiRoute("/make-it-so/api/schedule/describe", "schedule.describe");
+    apiRoute("/make-it-so/api/schedule/configure", "schedule.configure");
+    apiRoute("/make-it-so/api/attention/ack", "attention.ack");
 
     api.registerTool?.({
-      name: "captains_chair_course_status",
-      description: "Read Captain's Chair course readiness and work-package state.",
+      name: "make_it_so_course_status",
+      description: "Read Make It So course readiness and work-package state.",
       parameters: { type: "object", properties: { full_name: { type: "string" }, course_key: { type: "string" } }, required: ["full_name", "course_key"] },
       execute: async (params: Record<string, unknown>) => request("course.get", params),
     });
     api.registerTool?.({
-      name: "captains_chair_resolve_checkpoint",
-      description: "Record a checkpoint decision through Captain's Chair policy.",
+      name: "make_it_so_resolve_checkpoint",
+      description: "Record a checkpoint decision through Make It So policy.",
       parameters: {
         type: "object",
         properties: {
@@ -240,8 +240,8 @@ export default definePluginEntry({
       execute: async (params: Record<string, unknown>) => request("course.checkpoint", params),
     });
     api.registerTool?.({
-      name: "captains_chair_answer_readiness",
-      description: "Record or verify a course readiness answer through Captain's Chair.",
+      name: "make_it_so_answer_readiness",
+      description: "Record or verify a course readiness answer through Make It So.",
       parameters: {
         type: "object",
         properties: {
@@ -260,7 +260,7 @@ export default definePluginEntry({
       execute: async (params: Record<string, unknown>) => request("course.requirement", params),
     });
     api.registerTool?.({
-      name: "captains_chair_start_planning",
+      name: "make_it_so_start_planning",
       description: "Return the durable course context and next questions for a native OpenClaw planning conversation.",
       parameters: {
         type: "object",
@@ -270,7 +270,7 @@ export default definePluginEntry({
       execute: async (params: Record<string, unknown>) => request("course.planning_session", params),
     });
     api.registerTool?.({
-      name: "captains_chair_ready_work",
+      name: "make_it_so_ready_work",
       description: "List dependency-ready work packages for an approved course.",
       parameters: { type: "object", properties: { full_name: { type: "string" }, course_key: { type: "string" } }, required: ["full_name", "course_key"] },
       execute: async (params: Record<string, unknown>) => request("course.ready_work", params),
@@ -286,8 +286,8 @@ export default definePluginEntry({
         }
       },
       {
-        name: "captains-chair-workboard-reconciliation",
-        description: "Reconcile Captain's Chair when an OpenClaw Workboard card changes.",
+        name: "make-it-so-workboard-reconciliation",
+        description: "Reconcile Make It So when an OpenClaw Workboard card changes.",
       },
     );
 
@@ -305,32 +305,32 @@ export default definePluginEntry({
         }
       }, { scope });
     };
-    gateway("captainsChair.health", "health");
-    gateway("captainsChair.portfolio.status", "portfolio.status");
-    gateway("captainsChair.repos.list", "repos.list");
-    gateway("captainsChair.repos.register", "repo.register", "operator.write");
-    gateway("captainsChair.repos.create", "repo.create", "operator.write");
-    gateway("captainsChair.repos.update", "repo.update", "operator.write");
-    gateway("captainsChair.models.validate", "models.validate");
-    gateway("captainsChair.models.config", "models.config");
-    gateway("captainsChair.models.update", "models.update", "operator.write");
-    gateway("captainsChair.usage.config", "usage.config");
-    gateway("captainsChair.usage.update", "usage.update", "operator.write");
-    gateway("captainsChair.courses.list", "courses.list");
-    gateway("captainsChair.course.get", "course.get");
-    gateway("captainsChair.course.create", "course.create", "operator.write");
-    gateway("captainsChair.course.readiness", "course.readiness");
-    gateway("captainsChair.course.planningSession", "course.planning_session");
-    gateway("captainsChair.course.models", "course.models", "operator.write");
-    gateway("captainsChair.course.requirement", "course.requirement", "operator.write");
-    gateway("captainsChair.course.approve", "course.approve", "operator.write");
-    gateway("captainsChair.course.readyWork", "course.ready_work");
-    gateway("captainsChair.course.checkpoint", "course.checkpoint", "operator.write");
-    gateway("captainsChair.course.pause", "course.pause", "operator.write");
-    gateway("captainsChair.course.resume", "course.resume", "operator.write");
-    gateway("captainsChair.schedule.describe", "schedule.describe");
-    gateway("captainsChair.schedule.configure", "schedule.configure", "operator.admin");
-    gateway("captainsChair.attention.ack", "attention.ack", "operator.write");
+    gateway("makeItSo.health", "health");
+    gateway("makeItSo.portfolio.status", "portfolio.status");
+    gateway("makeItSo.repos.list", "repos.list");
+    gateway("makeItSo.repos.register", "repo.register", "operator.write");
+    gateway("makeItSo.repos.create", "repo.create", "operator.write");
+    gateway("makeItSo.repos.update", "repo.update", "operator.write");
+    gateway("makeItSo.models.validate", "models.validate");
+    gateway("makeItSo.models.config", "models.config");
+    gateway("makeItSo.models.update", "models.update", "operator.write");
+    gateway("makeItSo.usage.config", "usage.config");
+    gateway("makeItSo.usage.update", "usage.update", "operator.write");
+    gateway("makeItSo.courses.list", "courses.list");
+    gateway("makeItSo.course.get", "course.get");
+    gateway("makeItSo.course.create", "course.create", "operator.write");
+    gateway("makeItSo.course.readiness", "course.readiness");
+    gateway("makeItSo.course.planningSession", "course.planning_session");
+    gateway("makeItSo.course.models", "course.models", "operator.write");
+    gateway("makeItSo.course.requirement", "course.requirement", "operator.write");
+    gateway("makeItSo.course.approve", "course.approve", "operator.write");
+    gateway("makeItSo.course.readyWork", "course.ready_work");
+    gateway("makeItSo.course.checkpoint", "course.checkpoint", "operator.write");
+    gateway("makeItSo.course.pause", "course.pause", "operator.write");
+    gateway("makeItSo.course.resume", "course.resume", "operator.write");
+    gateway("makeItSo.schedule.describe", "schedule.describe");
+    gateway("makeItSo.schedule.configure", "schedule.configure", "operator.admin");
+    gateway("makeItSo.attention.ack", "attention.ack", "operator.write");
     const scheduleDefinitions = async (): Promise<ScheduleDefinition[]> => {
       const description = await request("schedule.describe");
       return Array.isArray(description.jobs)
@@ -410,7 +410,7 @@ export default definePluginEntry({
       if (action === "resume") await reconcileSchedules();
       const definitions = await scheduleDefinitions();
       const selected = name ? definitions.filter((item) => item.name === name) : definitions;
-      if (!selected.length) throw new Error(`unknown Captain's Chair schedule: ${name}`);
+      if (!selected.length) throw new Error(`unknown Make It So schedule: ${name}`);
       const jobs = await liveCronJobs();
       const results: unknown[] = [];
       for (const definition of selected) {
@@ -424,25 +424,25 @@ export default definePluginEntry({
       return { status: action, jobs: results };
     };
 
-    api.registerGatewayMethod?.("captainsChair.schedule.install", async ({ respond }) => {
+    api.registerGatewayMethod?.("makeItSo.schedule.install", async ({ respond }) => {
       try {
         respond(true, await reconcileSchedules());
       } catch (error) {
         respond(false, { error: String(error) });
       }
     }, { scope: "operator.admin" });
-    api.registerGatewayMethod?.("captainsChair.schedule.status", async ({ respond }) => {
+    api.registerGatewayMethod?.("makeItSo.schedule.status", async ({ respond }) => {
       try { respond(true, await scheduleStatus()); } catch (error) { respond(false, { error: String(error) }); }
     }, { scope: "operator.read" });
     for (const action of ["pause", "resume", "remove"] as const) {
-      api.registerGatewayMethod?.(`captainsChair.schedule.${action}`, async ({ respond, params }) => {
+      api.registerGatewayMethod?.(`makeItSo.schedule.${action}`, async ({ respond, params }) => {
         try { respond(true, await mutateSchedules(action, typeof params?.name === "string" ? params.name : undefined)); }
         catch (error) { respond(false, { error: String(error) }); }
       }, { scope: "operator.admin" });
     }
 
     api.registerHttpRoute?.({
-      path: "/captains-chair/api/schedule/install",
+      path: "/make-it-so/api/schedule/install",
       auth: "plugin",
       handler: async (req, res) => {
         if (rejectNonControlUiRequest(req, res, { token: controlUiToken })) return;
@@ -478,18 +478,18 @@ export default definePluginEntry({
         },
       });
     };
-    scheduleRoute("/captains-chair/api/schedule/status", async () => scheduleStatus());
-    scheduleRoute("/captains-chair/api/schedule/pause", async (params) => mutateSchedules("pause", typeof params.name === "string" ? params.name : undefined));
-    scheduleRoute("/captains-chair/api/schedule/resume", async (params) => mutateSchedules("resume", typeof params.name === "string" ? params.name : undefined));
-    scheduleRoute("/captains-chair/api/schedule/remove", async (params) => mutateSchedules("remove", typeof params.name === "string" ? params.name : undefined));
-    scheduleRoute("/captains-chair/api/schedule/edit", async (params) => {
+    scheduleRoute("/make-it-so/api/schedule/status", async () => scheduleStatus());
+    scheduleRoute("/make-it-so/api/schedule/pause", async (params) => mutateSchedules("pause", typeof params.name === "string" ? params.name : undefined));
+    scheduleRoute("/make-it-so/api/schedule/resume", async (params) => mutateSchedules("resume", typeof params.name === "string" ? params.name : undefined));
+    scheduleRoute("/make-it-so/api/schedule/remove", async (params) => mutateSchedules("remove", typeof params.name === "string" ? params.name : undefined));
+    scheduleRoute("/make-it-so/api/schedule/edit", async (params) => {
       await request("schedule.configure", params);
       return reconcileSchedules();
     });
 
     api.registerCommand?.({
-      name: "captains-chair",
-      description: "Inspect and control Captain's Chair courses",
+      name: "make-it-so",
+      description: "Inspect and control Make It So courses",
       acceptsArgs: true,
       requireAuth: true,
       requiredScopes: ["operator.read"],
@@ -507,10 +507,10 @@ export default definePluginEntry({
             const repo = item as Record<string, unknown>;
             return `${repo.full_name}: ${repo.state} | ${repo.operation_mode} | ${repo.active_work ? "work active" : "idle"}`;
           });
-          return { text: lines.length ? `Captain's Chair status\n${lines.join("\n")}\nDashboard: /captains-chair/` : "No matching repository is registered." };
+          return { text: lines.length ? `Make It So status\n${lines.join("\n")}\nDashboard: /make-it-so/` : "No matching repository is registered." };
         }
         const mayWrite = senderIsOwner === true || gatewayClientScopes?.some((scope) => scope === "operator.write" || scope === "operator.admin") === true;
-        if (action !== "plan" && !mayWrite) return { text: "Captain's Chair refused that mutation: owner or operator.write scope is required." };
+        if (action !== "plan" && !mayWrite) return { text: "Make It So refused that mutation: owner or operator.write scope is required." };
         const fullName = parts.shift();
         const courseKey = parts.shift();
         if (action === "plan" && fullName && courseKey) result = await request("course.planning_session", { full_name: fullName, course_key: courseKey });
@@ -518,22 +518,22 @@ export default definePluginEntry({
         else if ((action === "pause" || action === "resume") && fullName && courseKey) result = await request(`course.${action}`, { full_name: fullName, course_key: courseKey });
         else if (action === "checkpoint" && fullName && courseKey && parts.length >= 2) result = await request("course.checkpoint", { full_name: fullName, course_key: courseKey, checkpoint_key: parts[0], status: parts[1], resolved_by: actor, evidence: ["openclaw-command"] });
         else if (action === "ack" && fullName && courseKey) result = await request("attention.ack", { full_name: fullName, fingerprint: courseKey, event_type: parts[0] });
-        else return { text: "Usage: /captains-chair status [repo] | plan|approve|pause|resume <repo> <course> | checkpoint <repo> <course> <key> <status> | ack <repo> <fingerprint> [event]" };
+        else return { text: "Usage: /make-it-so status [repo] | plan|approve|pause|resume <repo> <course> | checkpoint <repo> <course> <key> <status> | ack <repo> <fingerprint> [event]" };
         const status = String(result.status ?? result.interaction ?? "completed");
-        return { text: `Captain's Chair: ${action} ${status}. Dashboard: /captains-chair/` };
+        return { text: `Make It So: ${action} ${status}. Dashboard: /make-it-so/` };
       },
     });
 
     api.registerCli?.(
       async ({ program }) => {
-        const command = program.command("captains-chair").description("Set the course and inspect the agent crew");
+        const command = program.command("make-it-so").description("Set the course and inspect the agent crew");
         const cliAction = <Args extends unknown[]>(action: (...args: Args) => Promise<void>) =>
           withSidecarShutdown(sidecar, action);
         command.command("status").description("Show portfolio status").action(cliAction(async () => {
           const result = await request("portfolio.status");
           process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
         }));
-        command.command("schedules").description("Describe Captain's Chair schedules").action(cliAction(async () => {
+        command.command("schedules").description("Describe Make It So schedules").action(cliAction(async () => {
           const result = await scheduleStatus();
           process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
         }));
@@ -574,18 +574,18 @@ export default definePluginEntry({
           process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
         }));
       },
-      { descriptors: [{ name: "captains-chair", description: "Set the course and inspect the agent crew", hasSubcommands: true }] },
+      { descriptors: [{ name: "make-it-so", description: "Set the course and inspect the agent crew", hasSubcommands: true }] },
     );
 
     api.registerService?.({
       id: PLUGIN_ID,
       start: async () => {
         await sidecar.start();
-        api.logger?.info?.("Captain's Chair sidecar started");
+        api.logger?.info?.("Make It So sidecar started");
       },
       stop: async () => {
         await sidecar.stop();
-        api.logger?.info?.("Captain's Chair sidecar stopped");
+        api.logger?.info?.("Make It So sidecar stopped");
       },
     });
   },

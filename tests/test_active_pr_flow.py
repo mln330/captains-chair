@@ -5,11 +5,11 @@ from typing import Any, TypeVar, cast
 import pytest
 from pydantic import BaseModel
 
-from captains_chair.courses import CourseStore
-from captains_chair.engine import ControlPlaneEngine, WorkerBlockedError
-from captains_chair.github import GhGitHubProvider, RepositorySnapshot
-from captains_chair.harness import HarnessAdapter
-from captains_chair.models import (
+from make_it_so.courses import CourseStore
+from make_it_so.engine import ControlPlaneEngine, WorkerBlockedError
+from make_it_so.github import GhGitHubProvider, RepositorySnapshot
+from make_it_so.harness import HarnessAdapter
+from make_it_so.models import (
     ActionKind,
     CommentDisposition,
     CommentTriage,
@@ -34,10 +34,10 @@ from captains_chair.models import (
     UXReview,
     WorkPackage,
 )
-from captains_chair.notifications import NotificationError, Notifier
-from captains_chair.orchestration import EnqueuedWorkflow
-from captains_chair.state import StateStore
-from captains_chair.worktrees import Worktree
+from make_it_so.notifications import NotificationError, Notifier
+from make_it_so.orchestration import EnqueuedWorkflow
+from make_it_so.state import StateStore
+from make_it_so.worktrees import Worktree
 from tests.helpers import app_config, model_policy, repo_config
 
 OutputModel = TypeVar("OutputModel", bound=BaseModel)
@@ -59,7 +59,7 @@ class ActivePrGitHub:
             repo={"nameWithOwner": "example/project"},
             issues=[],
             pull_requests=[{"number": 35, "headRefOid": self.head_sha}],
-            branches=["main", "captains_chair/docs/plan"],
+            branches=["main", "make_it_so/docs/plan"],
             workflow_runs=[],
         )
 
@@ -69,7 +69,7 @@ class ActivePrGitHub:
         return {
             "number": number,
             "url": f"https://github.test/example/project/pull/{number}",
-            "headRefName": "captains_chair/docs/plan",
+            "headRefName": "make_it_so/docs/plan",
             "headRefOid": self.head_sha,
             "baseRefName": "main",
             "isDraft": True,
@@ -293,7 +293,7 @@ class QueueingWorkboardWorkflow:
         self.workspaces.append(workspace)
         return EnqueuedWorkflow(
             workflow_id=action_id,
-            board_id="captains-chair-example-project",
+            board_id="make-it-so-example-project",
             root_card_id="root-card",
             stage_cards={"review": "review-card"},
         )
@@ -321,7 +321,7 @@ class ReviewWorktrees:
             raise self.error
         return Worktree(
             path=self.root,
-            branch=f"captains_chair/{lane}/{work_id}",
+            branch=f"make_it_so/{lane}/{work_id}",
             base="origin/main",
             push_branch=remote_branch,
         )
@@ -364,7 +364,7 @@ def test_active_pr_continues_to_review_and_auto_merge_without_replanning(tmp_pat
         repo.full_name,
         action_id="action-1",
         pr_number=35,
-        branch="captains_chair/docs/plan",
+        branch="make_it_so/docs/plan",
         head_sha="head-1",
         status="pr_open",
         decision=decision.model_dump(mode="json"),
@@ -511,7 +511,7 @@ def test_ux_review_failure_preserves_original_error_and_discards_disposable_work
         repo.full_name,
         action_id="action-ux-failure",
         pr_number=35,
-        branch="captains_chair/work/39",
+        branch="make_it_so/work/39",
         head_sha="head-1",
         status="pr_open",
         decision=decision.model_dump(mode="json"),
@@ -557,7 +557,7 @@ def test_ux_review_cleanup_fallback_is_visible_and_does_not_block_completion(
         repo.full_name,
         action_id="action-ux-cleanup",
         pr_number=35,
-        branch="captains_chair/work/39",
+        branch="make_it_so/work/39",
         head_sha="head-1",
         status="pr_open",
         decision=decision.model_dump(mode="json"),
@@ -609,7 +609,7 @@ def test_active_pr_with_workboard_owner_does_not_direct_review_or_merge(tmp_path
         repo.full_name,
         action_id="action-1",
         pr_number=35,
-        branch="captains_chair/work/39",
+        branch="make_it_so/work/39",
         head_sha="head-1",
         status="pr_open",
         decision=decision.model_dump(mode="json"),
@@ -653,7 +653,7 @@ def test_active_pr_workboard_review_uses_isolated_current_head_workspace(tmp_pat
         repo.full_name,
         action_id="action-1",
         pr_number=35,
-        branch="captains_chair/work/39",
+        branch="make_it_so/work/39",
         head_sha="head-1",
         status="pr_open",
         decision=decision.model_dump(mode="json"),
@@ -675,12 +675,12 @@ def test_active_pr_workboard_review_uses_isolated_current_head_workspace(tmp_pat
     result = engine.cycle(repo, shadow=False, execute=True)
 
     assert result.event.event_type == "WORKFLOW_QUEUED"
-    assert worktrees.calls == [("pr-35-head-1", "captains_chair/docs/plan", "review")]
+    assert worktrees.calls == [("pr-35-head-1", "make_it_so/docs/plan", "review")]
     assert len(queue.workspaces) == 1
     workspace = queue.workspaces[0]
     assert workspace is not None
-    assert cast(Any, workspace).branch == "captains_chair/review/pr-35-head-1"
-    assert cast(Any, workspace).push_branch == "captains_chair/docs/plan"
+    assert cast(Any, workspace).branch == "make_it_so/review/pr-35-head-1"
+    assert cast(Any, workspace).push_branch == "make_it_so/docs/plan"
 
 
 def test_active_pr_review_workspace_failure_preserves_pr_open_for_retry(tmp_path: Path) -> None:
@@ -701,7 +701,7 @@ def test_active_pr_review_workspace_failure_preserves_pr_open_for_retry(tmp_path
         repo.full_name,
         action_id="action-1",
         pr_number=35,
-        branch="captains_chair/work/39",
+        branch="make_it_so/work/39",
         head_sha="head-1",
         status="pr_open",
         decision=decision.model_dump(mode="json"),
@@ -754,7 +754,7 @@ def test_active_pr_queue_failure_handles_review_workspace_ownership(
         repo.full_name,
         action_id="action-1",
         pr_number=35,
-        branch="captains_chair/work/39",
+        branch="make_it_so/work/39",
         head_sha="head-1",
         status="pr_open",
         decision=decision.model_dump(mode="json"),
@@ -801,7 +801,7 @@ def test_active_pr_waits_for_checks_without_spending_review_tokens(tmp_path: Pat
         repo.full_name,
         action_id="action-1",
         pr_number=35,
-        branch="captains_chair/work/39",
+        branch="make_it_so/work/39",
         head_sha="head-1",
         status="pr_open",
         decision=decision.model_dump(mode="json"),
@@ -850,7 +850,7 @@ def test_autonomous_final_review_escalates_only_explicit_goal_divergence(tmp_pat
         repo.full_name,
         action_id="action-1",
         pr_number=35,
-        branch="captains_chair/docs/plan",
+        branch="make_it_so/docs/plan",
         head_sha="head-1",
         status="pr_open",
         decision=decision.model_dump(mode="json"),
@@ -892,7 +892,7 @@ def test_active_pr_reuses_completion_wait_without_repeating_reviews(tmp_path: Pa
         repo.full_name,
         action_id="action-1",
         pr_number=35,
-        branch="captains_chair/docs/plan",
+        branch="make_it_so/docs/plan",
         head_sha="head-1",
         status="pr_open",
         decision=decision.model_dump(mode="json"),
@@ -947,7 +947,7 @@ def test_final_review_cannot_surface_owner_completion_when_live_gate_fails(tmp_p
         repo.full_name,
         action_id="action-owner-gate",
         pr_number=35,
-        branch="captains_chair/work/39",
+        branch="make_it_so/work/39",
         head_sha="head-1",
         status="pr_open",
         decision=decision.model_dump(mode="json"),
@@ -990,7 +990,7 @@ def test_notification_failure_does_not_repeat_active_pr_review_work(tmp_path: Pa
         repo.full_name,
         action_id="action-1",
         pr_number=35,
-        branch="captains_chair/docs/plan",
+        branch="make_it_so/docs/plan",
         head_sha="head-1",
         status="pr_open",
         decision=decision.model_dump(mode="json"),
@@ -1035,7 +1035,7 @@ def test_active_pr_review_findings_are_repaired_without_owner_attention(tmp_path
         repo.full_name,
         action_id="action-1",
         pr_number=35,
-        branch="captains_chair/work/39",
+        branch="make_it_so/work/39",
         head_sha="head-1",
         status="pr_open",
         decision=decision.model_dump(mode="json"),
@@ -1077,7 +1077,7 @@ def test_active_pr_comment_triage_dispatches_repair_for_actionable_threads(tmp_p
         repo.full_name,
         action_id="action-1",
         pr_number=35,
-        branch="captains_chair/work/39",
+        branch="make_it_so/work/39",
         head_sha="head-1",
         status="pr_open",
         decision=decision.model_dump(mode="json"),
@@ -1126,7 +1126,7 @@ def test_active_pr_unclassified_final_blocker_is_repairable(tmp_path: Path) -> N
         repo.full_name,
         action_id="action-1",
         pr_number=35,
-        branch="captains_chair/work/39",
+        branch="make_it_so/work/39",
         head_sha="head-1",
         status="pr_open",
         decision=decision.model_dump(mode="json"),

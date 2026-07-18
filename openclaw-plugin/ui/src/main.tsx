@@ -137,7 +137,7 @@ type UpdatePayload = Record<string, unknown>;
 type ModelPreset = "economy" | "balanced" | "maximum_quality" | "local_first";
 
 const CONTROL_UI_TOKEN = document
-  .querySelector<HTMLMetaElement>('meta[name="captains-chair-control-token"]')
+  .querySelector<HTMLMetaElement>('meta[name="make-it-so-control-token"]')
   ?.content ?? "";
 
 const ROUTE_DEFAULTS = [
@@ -172,11 +172,11 @@ const ROUTE_DEFAULTS = [
 type EditableRoute = { model: string; effort: string };
 
 function callGateway<T>(path: string, params: Record<string, unknown> = {}): Promise<T> {
-  return fetch(`/captains-chair/api/${path}`, {
+  return fetch(`/make-it-so/api/${path}`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      "x-captains-chair-control-token": CONTROL_UI_TOKEN,
+      "x-make-it-so-control-token": CONTROL_UI_TOKEN,
     },
     body: JSON.stringify(params),
   }).then(async (response) => {
@@ -609,12 +609,12 @@ function CourseModelSettings({ repository, repo, course, onSaved }: { repository
 }
 
 function SchedulePanel({ status, onRefresh }: { status: ScheduleStatus | null; onRefresh: () => void }) {
-  const [reconcileEvery, setReconcileEvery] = useState(status?.jobs.find((job) => job.name === "captains-chair-reconcile")?.every ?? "5m");
-  const [reviewEvery, setReviewEvery] = useState(status?.jobs.find((job) => job.name === "captains-chair-course-review")?.every ?? "2h");
+  const [reconcileEvery, setReconcileEvery] = useState(status?.jobs.find((job) => job.name === "make-it-so-reconcile")?.every ?? "5m");
+  const [reviewEvery, setReviewEvery] = useState(status?.jobs.find((job) => job.name === "make-it-so-course-review")?.every ?? "2h");
   const [message, setMessage] = useState<string | null>(null);
   useEffect(() => {
-    setReconcileEvery(status?.jobs.find((job) => job.name === "captains-chair-reconcile")?.every ?? "5m");
-    setReviewEvery(status?.jobs.find((job) => job.name === "captains-chair-course-review")?.every ?? "2h");
+    setReconcileEvery(status?.jobs.find((job) => job.name === "make-it-so-reconcile")?.every ?? "5m");
+    setReviewEvery(status?.jobs.find((job) => job.name === "make-it-so-course-review")?.every ?? "2h");
   }, [status]);
   const action = async (path: string, params: Record<string, unknown> = {}) => {
     setMessage(null);
@@ -680,7 +680,7 @@ export function App() {
   const courseAction = async (path: string, params: Record<string, unknown>) => { try { await callGateway(path, params); refresh(); } catch (reason) { setError(String(reason)); } };
   useEffect(refresh, []);
   const repos = portfolio?.repos ?? [];
-  return <main className="shell"><header className="topbar"><div><p className="eyebrow">FLIGHT CONTROL</p><h1>Captain's Chair</h1><p className="subtitle">Set the course. Engage the crew.</p></div><div className="action-row"><button className="secondary" onClick={refresh} disabled={refreshing} aria-label="Refresh portfolio">{refreshing ? "Refreshing..." : "Refresh"}</button></div></header>
+  return <main className="shell"><header className="topbar"><div><p className="eyebrow">FLIGHT CONTROL</p><h1>Make It So</h1><p className="subtitle">Set the course. Engage the crew.</p></div><div className="action-row"><button className="secondary" onClick={refresh} disabled={refreshing} aria-label="Refresh portfolio">{refreshing ? "Refreshing..." : "Refresh"}</button></div></header>
     {error && <div className="alert" role="alert">{error}</div>}
     <section className="overview" aria-labelledby="overview-title"><div className="section-heading"><div><p className="eyebrow">MISSION OVERVIEW</p><h2 id="overview-title">Current courses</h2></div><span className="status-pill">{portfolio ? `${repos.length} registered` : "Connecting"}</span></div>{repos.length ? <div className="repo-grid">{repos.map((repo) => <RepoPanel key={repo.full_name} repo={repo} onSave={updateRepo} />)}</div> : <div className="empty"><h3>No repositories registered</h3><p>Register a repository to begin a readiness review.</p></div>}</section>
     <SchedulePanel status={scheduleStatus} onRefresh={refresh} />

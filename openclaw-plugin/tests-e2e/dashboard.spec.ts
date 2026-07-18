@@ -28,13 +28,13 @@ const course = {
 };
 
 async function mockApi(page: Page) {
-  await page.route("**/captains-chair/api/portfolio/status", (route) => route.fulfill({ json: { repos: [repo] } }));
-  await page.route("**/captains-chair/api/courses/list", (route) => route.fulfill({ json: { courses: [{ repository: repo.full_name, course, readiness: { ready: true, unresolved: [] } }] } }));
-  await page.route("**/captains-chair/api/models/config", (route) => route.fulfill({ json: { global_profiles: {}, runtime_profiles: {}, runtimes: ["openclaw"] } }));
-  await page.route("**/captains-chair/api/schedule/status", (route) => route.fulfill({ json: { status: "inspected", jobs: [{ name: "captains-chair-reconcile", every: "5m", enabled: true, health: "healthy" }, { name: "captains-chair-course-review", every: "2h", enabled: false, health: "paused" }] } }));
-  await page.route("**/captains-chair/api/models/validate", (route) => route.fulfill({ json: { can_save: true, status: "unverified", warnings: [] } }));
-  await page.route("**/captains-chair/api/course/models", (route) => route.fulfill({ json: { status: "updated" } }));
-  await page.route("**/captains-chair/api/course/planning-session", (route) => route.fulfill({
+  await page.route("**/make-it-so/api/portfolio/status", (route) => route.fulfill({ json: { repos: [repo] } }));
+  await page.route("**/make-it-so/api/courses/list", (route) => route.fulfill({ json: { courses: [{ repository: repo.full_name, course, readiness: { ready: true, unresolved: [] } }] } }));
+  await page.route("**/make-it-so/api/models/config", (route) => route.fulfill({ json: { global_profiles: {}, runtime_profiles: {}, runtimes: ["openclaw"] } }));
+  await page.route("**/make-it-so/api/schedule/status", (route) => route.fulfill({ json: { status: "inspected", jobs: [{ name: "make-it-so-reconcile", every: "5m", enabled: true, health: "healthy" }, { name: "make-it-so-course-review", every: "2h", enabled: false, health: "paused" }] } }));
+  await page.route("**/make-it-so/api/models/validate", (route) => route.fulfill({ json: { can_save: true, status: "unverified", warnings: [] } }));
+  await page.route("**/make-it-so/api/course/models", (route) => route.fulfill({ json: { status: "updated" } }));
+  await page.route("**/make-it-so/api/course/planning-session", (route) => route.fulfill({
     json: {
       interaction: "host_agent_conversation",
       mutation_requires_course_approval: true,
@@ -48,7 +48,7 @@ test("dashboard renders the course map and planning brief", async ({ page }, tes
   await mockApi(page);
   await page.goto("/");
 
-  await expect(page.getByRole("heading", { name: "Captain's Chair" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Make It So" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "example/project" })).toBeVisible();
   await expect(page.getByText("Search improvements")).toBeVisible();
   await page.getByRole("button", { name: /expand search improvements/i }).click();
@@ -90,6 +90,6 @@ test("dashboard has no horizontal overflow and exposes schedule controls", async
   await mockApi(page);
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Managed schedules" })).toBeVisible();
-  await expect(page.getByText("captains-chair-course-review")).toBeVisible();
+  await expect(page.getByText("make-it-so-course-review")).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 });

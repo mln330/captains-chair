@@ -5,8 +5,8 @@ from tempfile import TemporaryDirectory
 from hypothesis import given
 from hypothesis import strategies as st
 
-from captains_chair.courses import eligible_work_packages
-from captains_chair.models import (
+from make_it_so.courses import eligible_work_packages
+from make_it_so.models import (
     ActionKind,
     CompletionPolicy,
     Course,
@@ -16,7 +16,7 @@ from captains_chair.models import (
     PlanDecision,
     WorkPackage,
 )
-from captains_chair.policy import evaluate_action
+from make_it_so.policy import evaluate_action
 from tests.helpers import repo_config
 
 

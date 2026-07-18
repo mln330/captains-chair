@@ -25,14 +25,14 @@ jobs:
       - run: pyright
       - run: >-
           python -W error::ResourceWarning -m pytest
-          --cov=captains_chair --cov-branch
+          --cov=make_it_so --cov-branch
           --cov-report=term-missing --cov-report=json:coverage.json
           --junitxml=pytest-results.xml
       - run: python scripts/check_coverage.py coverage.json
       - name: Enforce portable-core coverage
         run: >-
           coverage report
-          --include='src/captains_chair/models.py,src/captains_chair/orchestration.py,src/captains_chair/policy.py,src/captains_chair/state.py,src/captains_chair/openclaw_workboard.py,src/captains_chair/openclaw_runtime.py,src/captains_chair/merge_gate.py,src/captains_chair/queue_events.py'
+          --include='src/make_it_so/models.py,src/make_it_so/orchestration.py,src/make_it_so/policy.py,src/make_it_so/state.py,src/make_it_so/openclaw_workboard.py,src/make_it_so/openclaw_runtime.py,src/make_it_so/merge_gate.py,src/make_it_so/queue_events.py'
           --fail-under=80
       - run: python -m build
       - name: Publish Python evidence

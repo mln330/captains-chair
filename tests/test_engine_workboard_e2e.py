@@ -7,12 +7,12 @@ from typing import Any, TypeVar, cast
 import pytest
 from pydantic import BaseModel
 
-from captains_chair.command import CommandResult, run_command
-from captains_chair.conformance import run_full_autonomous_workflow
-from captains_chair.engine import ControlPlaneEngine
-from captains_chair.github import GhGitHubProvider, RepositorySnapshot
-from captains_chair.harness import HarnessAdapter
-from captains_chair.models import (
+from make_it_so.command import CommandResult, run_command
+from make_it_so.conformance import run_full_autonomous_workflow
+from make_it_so.engine import ControlPlaneEngine
+from make_it_so.github import GhGitHubProvider, RepositorySnapshot
+from make_it_so.harness import HarnessAdapter
+from make_it_so.models import (
     ActionKind,
     CompletionPolicy,
     EventRecord,
@@ -23,9 +23,9 @@ from captains_chair.models import (
     RunState,
     WorkerResult,
 )
-from captains_chair.orchestration import EnqueuedWorkflow, WorkflowOrchestrator
-from captains_chair.state import StateStore
-from captains_chair.worktrees import Worktree
+from make_it_so.orchestration import EnqueuedWorkflow, WorkflowOrchestrator
+from make_it_so.state import StateStore
+from make_it_so.worktrees import Worktree
 from tests.fakes import InMemoryWorkQueue, worker_policy
 from tests.helpers import app_config, model_policy, repo_config
 
@@ -287,7 +287,7 @@ def direct_implementation_runner(
     if "show" in command:
         return CommandResult(0, "# Durable plan\n", "")
     if "branch" in command and "--show-current" in command:
-        return CommandResult(0, "captains_chair/work/39\n", "")
+        return CommandResult(0, "make_it_so/work/39\n", "")
     if "rev-list" in command:
         return CommandResult(0, "1\n", "")
     return CommandResult(0, "", "")
@@ -320,7 +320,7 @@ class FakeRepairWorktrees:
         self.calls.append((work_id, remote_branch))
         return Worktree(
             path=self.path,
-            branch="captains_chair/repair/pr-42",
+            branch="make_it_so/repair/pr-42",
             base="origin/main",
             push_branch=remote_branch,
         )
@@ -351,7 +351,7 @@ class RecoveringOrchestrator(FailingOrchestrator):
             raise RuntimeError("Workboard gateway unavailable")
         return EnqueuedWorkflow(
             workflow_id="recovered-workflow",
-            board_id="captains-chair-example-project",
+            board_id="make-it-so-example-project",
             root_card_id="root-1",
             stage_cards={"implementation": "card-1"},
         )
@@ -366,9 +366,9 @@ class QueueWorktrees:
         del repo
         return Worktree(
             path=self.path,
-            branch=f"captains_chair/{lane}/{work_id}",
+            branch=f"make_it_so/{lane}/{work_id}",
             base="origin/main",
-            push_branch=f"captains_chair/{lane}/{work_id}",
+            push_branch=f"make_it_so/{lane}/{work_id}",
         )
 
     def remove(self, repo: object, worktree: Worktree) -> bool:
@@ -404,9 +404,9 @@ def _git_commit(cwd: Path, message: str) -> None:
     _git(
         cwd,
         "-c",
-        "user.name=CAPTAINS_CHAIR Test",
+        "user.name=MAKE_IT_SO Test",
         "-c",
-        "user.email=captains_chair@example.test",
+        "user.email=make_it_so@example.test",
         "commit",
         "-m",
         message,
@@ -418,8 +418,8 @@ def test_engine_queues_full_workflow_from_a_real_isolated_git_worktree(tmp_path:
     repo_root = tmp_path / "repo"
     _git(None, "init", "--bare", str(bare))
     _git(None, "init", "--initial-branch=main", str(repo_root))
-    _git(repo_root, "config", "user.name", "CAPTAINS_CHAIR Test")
-    _git(repo_root, "config", "user.email", "captains_chair@example.test")
+    _git(repo_root, "config", "user.name", "MAKE_IT_SO Test")
+    _git(repo_root, "config", "user.email", "make_it_so@example.test")
     (repo_root / "README.md").write_text("# Disposable project\n", encoding="utf-8")
     (repo_root / "ISSUES_EXECUTION_PLAN.md").write_text("# Plan\n", encoding="utf-8")
     _git(repo_root, "add", "README.md", "ISSUES_EXECUTION_PLAN.md")
@@ -464,7 +464,7 @@ def test_engine_queues_full_workflow_from_a_real_isolated_git_worktree(tmp_path:
     assert implementation.workspace.path is not None
     assert implementation.workspace.path.is_dir()
     assert implementation.workspace.path != repo_root
-    assert implementation.workspace.branch == "captains_chair/work/39"
+    assert implementation.workspace.branch == "make_it_so/work/39"
     assert _git(repo_root, "branch", "--show-current") == "main"
     assert _git(repo_root, "status", "--porcelain") == ""
     assert not (repo_root / "feature.txt").exists()
@@ -524,7 +524,7 @@ def test_engine_planning_hands_off_to_shared_autonomous_workflow(tmp_path: Path)
     result = engine.cycle(repo, shadow=False, execute=True)
 
     assert result.event.event_type == "WORKFLOW_QUEUED"
-    assert result.event.evidence["board_id"] == "captains-chair-example-project"
+    assert result.event.evidence["board_id"] == "make-it-so-example-project"
     assert harness.roles == ["planner"]
     decision = PlanDecision.model_validate(result.event.evidence["decision"])
     action_id = str(result.event.evidence["action_id"])
@@ -712,7 +712,7 @@ def test_engine_queues_planner_selected_repair_with_existing_pr_workspace(tmp_pa
     action_id = str(result.event.evidence["action_id"])
     repair_card = queue.cards[queue.keys[f"{action_id}:repair"]]
     assert repair_card.workspace is not None
-    assert repair_card.workspace.branch == "captains_chair/repair/pr-42"
+    assert repair_card.workspace.branch == "make_it_so/repair/pr-42"
     assert repair_card.workspace.push_branch == "feature/current-pr"
     assert "push implementation changes to `feature/current-pr`" in (repair_card.notes or "")
 

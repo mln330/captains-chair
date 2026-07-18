@@ -3,18 +3,18 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import plugin from "../src/index.js";
 
-describe("Captain's Chair OpenClaw registration", () => {
+describe("Make It So OpenClaw registration", () => {
   it("declares every agent tool in the host manifest contract", () => {
     const manifest = JSON.parse(
       readFileSync(resolve(process.cwd(), "openclaw.plugin.json"), "utf8"),
     ) as { activation?: { onStartup?: boolean }; contracts?: { tools?: string[] } };
     expect(manifest.activation?.onStartup).toBe(true);
     expect(manifest.contracts?.tools).toEqual([
-      "captains_chair_course_status",
-      "captains_chair_resolve_checkpoint",
-      "captains_chair_answer_readiness",
-      "captains_chair_start_planning",
-      "captains_chair_ready_work",
+      "make_it_so_course_status",
+      "make_it_so_resolve_checkpoint",
+      "make_it_so_answer_readiness",
+      "make_it_so_start_planning",
+      "make_it_so_ready_work",
     ]);
   });
 
@@ -64,43 +64,43 @@ describe("Captain's Chair OpenClaw registration", () => {
     const entry = plugin as unknown as { register: (value: typeof api) => void };
     entry.register(api);
 
-    expect(registrations.controls).toContain("captains-chair");
-    expect(registrations.gateway).toContain("captainsChair.portfolio.status");
-    expect(registrations.gateway).toContain("captainsChair.models.config");
-    expect(registrations.gateway).toContain("captainsChair.models.update");
-    expect(registrations.gateway).toContain("captainsChair.usage.config");
-    expect(registrations.gateway).toContain("captainsChair.usage.update");
-    expect(registrations.gateway).toContain("captainsChair.repos.create");
-    expect(registrations.gateway).toContain("captainsChair.course.requirement");
-    expect(registrations.gateway).toContain("captainsChair.course.planningSession");
-    expect(registrations.gateway).toContain("captainsChair.course.models");
-    expect(registrations.gatewayScopes["captainsChair.health"]).toBe("operator.read");
-    expect(registrations.gatewayScopes["captainsChair.course.create"]).toBe("operator.write");
-    expect(registrations.gatewayScopes["captainsChair.schedule.install"]).toBe("operator.admin");
-    expect(registrations.gatewayScopes["captainsChair.schedule.status"]).toBe("operator.read");
-    expect(registrations.tools).toContain("captains_chair_course_status");
-    expect(registrations.tools).toContain("captains_chair_answer_readiness");
-    expect(registrations.tools).toContain("captains_chair_start_planning");
-    expect(registrations.hooks).toEqual(["captains-chair-workboard-reconciliation"]);
-    expect(registrations.routes).toContain("/captains-chair/");
-    expect(registrations.routes).toContain("/captains-chair/api/schedule/install");
-    expect(registrations.routes).toContain("/captains-chair/api/schedule/status");
-    expect(registrations.routes).toContain("/captains-chair/api/schedule/edit");
-    expect(registrations.routes).toContain("/captains-chair/api/repos/create");
-    expect(registrations.routes).toContain("/captains-chair/api/course/models");
-    expect(registrations.routes).toContain("/captains-chair/api/models/config");
-    expect(registrations.routes).toContain("/captains-chair/api/models/update");
-    expect(registrations.routes).toContain("/captains-chair/api/usage/update");
-    expect(registrations.routeAuth["/captains-chair/"]).toBe("plugin");
-    expect(registrations.routeAuth["/captains-chair/assets/index.js"]).toBe("plugin");
-    expect(registrations.routeAuth["/captains-chair/api/repos/create"]).toBe("plugin");
-    expect(registrations.routeAuth["/captains-chair/api/schedule/install"]).toBe("plugin");
-    expect(registrations.routeAuth["/captains-chair/api/schedule/status"]).toBe("plugin");
-    expect(registrations.services).toEqual(["captains-chair"]);
+    expect(registrations.controls).toContain("make-it-so");
+    expect(registrations.gateway).toContain("makeItSo.portfolio.status");
+    expect(registrations.gateway).toContain("makeItSo.models.config");
+    expect(registrations.gateway).toContain("makeItSo.models.update");
+    expect(registrations.gateway).toContain("makeItSo.usage.config");
+    expect(registrations.gateway).toContain("makeItSo.usage.update");
+    expect(registrations.gateway).toContain("makeItSo.repos.create");
+    expect(registrations.gateway).toContain("makeItSo.course.requirement");
+    expect(registrations.gateway).toContain("makeItSo.course.planningSession");
+    expect(registrations.gateway).toContain("makeItSo.course.models");
+    expect(registrations.gatewayScopes["makeItSo.health"]).toBe("operator.read");
+    expect(registrations.gatewayScopes["makeItSo.course.create"]).toBe("operator.write");
+    expect(registrations.gatewayScopes["makeItSo.schedule.install"]).toBe("operator.admin");
+    expect(registrations.gatewayScopes["makeItSo.schedule.status"]).toBe("operator.read");
+    expect(registrations.tools).toContain("make_it_so_course_status");
+    expect(registrations.tools).toContain("make_it_so_answer_readiness");
+    expect(registrations.tools).toContain("make_it_so_start_planning");
+    expect(registrations.hooks).toEqual(["make-it-so-workboard-reconciliation"]);
+    expect(registrations.routes).toContain("/make-it-so/");
+    expect(registrations.routes).toContain("/make-it-so/api/schedule/install");
+    expect(registrations.routes).toContain("/make-it-so/api/schedule/status");
+    expect(registrations.routes).toContain("/make-it-so/api/schedule/edit");
+    expect(registrations.routes).toContain("/make-it-so/api/repos/create");
+    expect(registrations.routes).toContain("/make-it-so/api/course/models");
+    expect(registrations.routes).toContain("/make-it-so/api/models/config");
+    expect(registrations.routes).toContain("/make-it-so/api/models/update");
+    expect(registrations.routes).toContain("/make-it-so/api/usage/update");
+    expect(registrations.routeAuth["/make-it-so/"]).toBe("plugin");
+    expect(registrations.routeAuth["/make-it-so/assets/index.js"]).toBe("plugin");
+    expect(registrations.routeAuth["/make-it-so/api/repos/create"]).toBe("plugin");
+    expect(registrations.routeAuth["/make-it-so/api/schedule/install"]).toBe("plugin");
+    expect(registrations.routeAuth["/make-it-so/api/schedule/status"]).toBe("plugin");
+    expect(registrations.services).toEqual(["make-it-so"]);
     expect(registrations.cli).toBe(1);
-    expect(registrations.commands).toEqual(["captains-chair"]);
+    expect(registrations.commands).toEqual(["make-it-so"]);
     await expect(registrations.commandDefinitions[0].handler({ args: "approve example/project feature", senderIsOwner: false, gatewayClientScopes: ["operator.read"] })).resolves.toEqual({
-      text: "Captain's Chair refused that mutation: owner or operator.write scope is required.",
+      text: "Make It So refused that mutation: owner or operator.write scope is required.",
     });
   });
 
@@ -109,6 +109,6 @@ describe("Captain's Chair OpenClaw registration", () => {
     expect(source).toContain('<link rel="stylesheet" crossorigin="anonymous"');
     expect(source).toContain('<script crossorigin="anonymous"');
     expect(source).toContain('content-security-policy", "frame-ancestors \'self\'');
-    expect(source).toContain('captains-chair-control-token');
+    expect(source).toContain('make-it-so-control-token');
   });
 });

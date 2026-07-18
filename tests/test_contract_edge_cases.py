@@ -7,21 +7,21 @@ from typing import Any
 
 import pytest
 
-import captains_chair.completion_gate as completion_gate
-import captains_chair.scheduler as scheduler
-import captains_chair.worktrees as worktrees
-from captains_chair.canary import build_canary_spec, evaluate_canary_card, summarize_canary_card
-from captains_chair.command import CommandResult
-from captains_chair.direct_orchestrator import DirectOrchestrator
-from captains_chair.models import (
+import make_it_so.completion_gate as completion_gate
+import make_it_so.scheduler as scheduler
+import make_it_so.worktrees as worktrees
+from make_it_so.canary import build_canary_spec, evaluate_canary_card, summarize_canary_card
+from make_it_so.command import CommandResult
+from make_it_so.direct_orchestrator import DirectOrchestrator
+from make_it_so.models import (
     CompletionPolicy,
     NotificationConfig,
     OperationMode,
     RepoConfig,
 )
-from captains_chair.orchestration import QueueCard, QueueCardSpec, QueueStatus, WorkStage
-from captains_chair.scheduler import OpenClawScheduler, ScheduleSpec
-from captains_chair.worktrees import Worktree, WorktreeManager
+from make_it_so.orchestration import QueueCard, QueueCardSpec, QueueStatus, WorkStage
+from make_it_so.scheduler import OpenClawScheduler, ScheduleSpec
+from make_it_so.worktrees import Worktree, WorktreeManager
 from tests.helpers import repo_config
 
 
@@ -78,15 +78,15 @@ def test_worktree_manager_fail_closed_edges(tmp_path: Path) -> None:
             repo,
             Worktree(
                 path=tmp_path / "outside",
-                branch="captains_chair/repair/ux-item",
+                branch="make_it_so/repair/ux-item",
                 base="origin/main",
-                push_branch="captains_chair/repair/ux-item",
+                push_branch="make_it_so/repair/ux-item",
             ),
         )
 
 
 def test_scheduler_rejects_malformed_openclaw_payloads_and_handles_cron_shape(tmp_path: Path) -> None:
-    value = ScheduleSpec(name="job", argv=("python", "-m", "captains_chair"), cwd=tmp_path)
+    value = ScheduleSpec(name="job", argv=("python", "-m", "make_it_so"), cwd=tmp_path)
 
     def malformed(command: Sequence[str], **kwargs: Any) -> CommandResult:
         del kwargs

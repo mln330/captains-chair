@@ -4,8 +4,8 @@ from typing import Any, cast
 
 import pytest
 
-from captains_chair.models import RunState
-from captains_chair.state import ALLOWED_TRANSITIONS, LeaseBusyError, StateStore
+from make_it_so.models import RunState
+from make_it_so.state import ALLOWED_TRANSITIONS, LeaseBusyError, StateStore
 
 _PATHS_TO_STATE: dict[RunState, tuple[RunState, ...]] = {
     RunState.UNBASELINED: (),
@@ -217,7 +217,7 @@ def test_state_reopens_with_active_work_after_process_restart(tmp_path: Path) ->
         "example/project",
         action_id="action-1",
         pr_number=42,
-        branch="captains_chair/work/42",
+        branch="make_it_so/work/42",
         head_sha="head-1",
         status="pr_open",
         decision={"action": "implement", "summary": "Implement issue 42"},

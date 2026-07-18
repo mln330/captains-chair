@@ -9,16 +9,16 @@ from typing import Any
 import pytest
 import yaml
 
-import captains_chair.cli as cli
-from captains_chair.canary import (
+import make_it_so.cli as cli
+from make_it_so.canary import (
     build_canary_spec,
     canary_board_id,
     canary_proof_marker,
     evaluate_canary_card,
 )
-from captains_chair.command import CommandResult
-from captains_chair.completion_gate import GitHubCompletionValidator
-from captains_chair.conformance import (
+from make_it_so.command import CommandResult
+from make_it_so.completion_gate import GitHubCompletionValidator
+from make_it_so.conformance import (
     RuntimeConformanceError,
     run_mixed_blocker_isolation,
     run_runtime_conformance,
@@ -26,7 +26,7 @@ from captains_chair.conformance import (
     run_user_blocker_isolation,
     stage_card,
 )
-from captains_chair.models import (
+from make_it_so.models import (
     ActionKind,
     CompletionPolicy,
     OpenClawWorkboardConfig,
@@ -36,8 +36,8 @@ from captains_chair.models import (
     WorkerAssignments,
     WorkerModelAssignments,
 )
-from captains_chair.openclaw_workboard import OpenClawWorkboardAdapter
-from captains_chair.orchestration import WorkflowOrchestrator
+from make_it_so.openclaw_workboard import OpenClawWorkboardAdapter
+from make_it_so.orchestration import WorkflowOrchestrator
 from tests.helpers import app_config, repo_config
 
 
@@ -72,7 +72,7 @@ class FakeGateway:
     ) -> CommandResult:
         del cwd, input_text, timeout
         values = list(command)
-        if values and values[0] == "captains_chair":
+        if values and values[0] == "make_it_so":
             return CommandResult(
                 0,
                 json.dumps(
@@ -96,7 +96,7 @@ class FakeGateway:
                 0,
                 json.dumps(
                     [
-                        {"id": "captains-chair", "model": WorkerModelAssignments().captain},
+                        {"id": "make-it-so", "model": WorkerModelAssignments().captain},
                         {"id": "github-coder", "model": self.coder_model},
                         {"id": "github-reviewer", "model": WorkerModelAssignments().reviewer},
                         {"id": "github-tester", "model": WorkerModelAssignments().tester},
@@ -266,7 +266,7 @@ def _config(*, require_live: bool = False) -> OpenClawWorkboardConfig:
         dispatch_strategy="workboard",
         require_live_completion_validation=require_live,
         workers=WorkerAssignments(
-            captain="captains-chair",
+            captain="make-it-so",
             coder="github-coder",
             reviewer="github-reviewer",
             tester="github-tester",
@@ -332,7 +332,7 @@ def test_real_openclaw_adapter_drives_full_autonomous_workflow(tmp_path: Path) -
         tmp_path,
         mode=OperationMode.AUTONOMOUS,
         completion=CompletionPolicy.AUTO_MERGE,
-    ).model_copy(update={"orchestration_board": "captains-chair-example-project"})
+    ).model_copy(update={"orchestration_board": "make-it-so-example-project"})
     gateway = FakeGateway()
     github = FakeCompletionGitHub()
     runtime_config = _config(require_live=True)
@@ -370,7 +370,7 @@ def test_real_openclaw_adapter_drives_full_autonomous_workflow(tmp_path: Path) -
 
 
 def test_openclaw_user_blocker_does_not_stop_unrelated_work(tmp_path: Path) -> None:
-    repo = repo_config(tmp_path).model_copy(update={"orchestration_board": "captains-chair-example-project"})
+    repo = repo_config(tmp_path).model_copy(update={"orchestration_board": "make-it-so-example-project"})
     gateway = FakeGateway()
     adapter = OpenClawWorkboardAdapter(_config(), gateway.runner)
     orchestrator = WorkflowOrchestrator(adapter, _config())
@@ -390,7 +390,7 @@ def test_openclaw_user_blocker_does_not_stop_unrelated_work(tmp_path: Path) -> N
 
 
 def test_openclaw_technical_recovery_does_not_stop_unrelated_work(tmp_path: Path) -> None:
-    repo = repo_config(tmp_path).model_copy(update={"orchestration_board": "captains-chair-example-project"})
+    repo = repo_config(tmp_path).model_copy(update={"orchestration_board": "make-it-so-example-project"})
     gateway = FakeGateway()
     adapter = OpenClawWorkboardAdapter(_config(), gateway.runner)
     orchestrator = WorkflowOrchestrator(adapter, _config())
@@ -410,7 +410,7 @@ def test_openclaw_technical_recovery_does_not_stop_unrelated_work(tmp_path: Path
 
 
 def test_openclaw_mixed_blockers_keep_unrelated_work_moving(tmp_path: Path) -> None:
-    repo = repo_config(tmp_path).model_copy(update={"orchestration_board": "captains-chair-example-project"})
+    repo = repo_config(tmp_path).model_copy(update={"orchestration_board": "make-it-so-example-project"})
     gateway = FakeGateway()
     adapter = OpenClawWorkboardAdapter(_config(), gateway.runner)
     orchestrator = WorkflowOrchestrator(adapter, _config())
@@ -437,7 +437,7 @@ def test_openclaw_mixed_blockers_keep_unrelated_work_moving(tmp_path: Path) -> N
 
 
 def test_new_adapter_instance_recovers_ended_worker_session(tmp_path: Path) -> None:
-    repo = repo_config(tmp_path).model_copy(update={"orchestration_board": "captains-chair-example-project"})
+    repo = repo_config(tmp_path).model_copy(update={"orchestration_board": "make-it-so-example-project"})
     gateway = FakeGateway()
     first = OpenClawWorkboardAdapter(_config(), gateway.runner)
     orchestrator = WorkflowOrchestrator(first, _config())
@@ -456,7 +456,7 @@ def test_new_adapter_instance_recovers_ended_worker_session(tmp_path: Path) -> N
 
 
 def test_openclaw_recovery_warning_does_not_stop_unrelated_dispatch(tmp_path: Path) -> None:
-    repo = repo_config(tmp_path).model_copy(update={"orchestration_board": "captains-chair-example-project"})
+    repo = repo_config(tmp_path).model_copy(update={"orchestration_board": "make-it-so-example-project"})
     gateway = FakeGateway()
     adapter = OpenClawWorkboardAdapter(_config(), gateway.runner)
     orchestrator = WorkflowOrchestrator(adapter, _config())
@@ -487,7 +487,7 @@ def test_openclaw_recovery_warning_does_not_stop_unrelated_dispatch(tmp_path: Pa
 
 
 def test_openclaw_model_mismatch_suppresses_new_worker_dispatch(tmp_path: Path) -> None:
-    repo = repo_config(tmp_path).model_copy(update={"orchestration_board": "captains-chair-example-project"})
+    repo = repo_config(tmp_path).model_copy(update={"orchestration_board": "make-it-so-example-project"})
     gateway = FakeGateway()
     gateway.coder_model = "ollama/glm-5.2:cloud"
     adapter = OpenClawWorkboardAdapter(_config(), gateway.runner)
@@ -504,7 +504,7 @@ def test_openclaw_model_mismatch_suppresses_new_worker_dispatch(tmp_path: Path) 
 
 def test_real_openclaw_adapter_runs_runtime_canary_to_durable_pass(tmp_path: Path) -> None:
     repo = repo_config(tmp_path).model_copy(
-        update={"orchestration_board": "captains-chair-example-project"}
+        update={"orchestration_board": "make-it-so-example-project"}
     )
     gateway = FakeGateway()
     adapter = OpenClawWorkboardAdapter(_config(), gateway.runner)
@@ -514,7 +514,7 @@ def test_real_openclaw_adapter_runs_runtime_canary_to_durable_pass(tmp_path: Pat
     adapter.ensure_board(
         board_id,
         f"{repo.full_name} runtime canary",
-        "Disposable CAPTAINS_CHAIR runtime validation cards; no repository changes are allowed.",
+        "Disposable MAKE_IT_SO runtime validation cards; no repository changes are allowed.",
         repo.local_path,
     )
     spec = build_canary_spec(
@@ -549,7 +549,7 @@ def test_openclaw_cli_canary_uses_real_adapter_without_model_calls(
     repo = repo_config(tmp_path).model_copy(
         update={
             "orchestrator": "workers",
-            "orchestration_board": "captains-chair-example-project",
+            "orchestration_board": "make-it-so-example-project",
             "operation_mode": OperationMode.SUPERVISED,
         }
     )

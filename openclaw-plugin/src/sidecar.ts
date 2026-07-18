@@ -49,7 +49,7 @@ export class SidecarSupervisor {
     private readonly options: SidecarOptions,
     private readonly log: (message: string, error?: unknown) => void = () => undefined,
   ) {
-    this.timeoutMs = options.timeoutMs ?? 30_000;
+    this.timeoutMs = options.timeoutMs ?? 60_000;
   }
 
   public get running(): boolean {
@@ -74,7 +74,7 @@ export class SidecarSupervisor {
     child.stderr.on("data", (chunk: Buffer) => this.log(chunk.toString().trim()));
     child.once("error", (error) => this.failPending(error instanceof Error ? error : new Error(String(error))));
     child.once("exit", (code, signal) => {
-      this.failPending(new Error(`Captain's Chair sidecar exited (${code ?? signal ?? "unknown"})`));
+      this.failPending(new Error(`Make It So sidecar exited (${code ?? signal ?? "unknown"})`));
       this.lines?.close();
       this.lines = undefined;
       this.child = undefined;
@@ -82,11 +82,11 @@ export class SidecarSupervisor {
     try {
       const health = await this.request("health");
       if (health.status !== "healthy") {
-        throw new Error(`Captain's Chair sidecar health was ${String(health.status ?? "missing")}`);
+        throw new Error(`Make It So sidecar health was ${String(health.status ?? "missing")}`);
       }
       if (health.protocol_version !== SIDECAR_PROTOCOL_VERSION) {
         throw new Error(
-          `Captain's Chair sidecar protocol mismatch: expected ${SIDECAR_PROTOCOL_VERSION}, got ${String(health.protocol_version ?? "missing")}`,
+          `Make It So sidecar protocol mismatch: expected ${SIDECAR_PROTOCOL_VERSION}, got ${String(health.protocol_version ?? "missing")}`,
         );
       }
     } catch (error) {
@@ -100,7 +100,7 @@ export class SidecarSupervisor {
 
   public async request(method: string, params: Record<string, unknown> = {}): Promise<RpcResult> {
     await this.start();
-    if (!this.child?.stdin.writable) throw new Error("Captain's Chair sidecar is not writable");
+    if (!this.child?.stdin.writable) throw new Error("Make It So sidecar is not writable");
     const id = this.nextId++;
     const request: SidecarRequest = { jsonrpc: "2.0", id, method, params };
     return new Promise<RpcResult>((resolve, reject) => {
@@ -116,7 +116,7 @@ export class SidecarSupervisor {
   public async stop(): Promise<void> {
     const child = this.child;
     if (!child) return;
-    this.failPending(new Error("Captain's Chair sidecar stopped"));
+    this.failPending(new Error("Make It So sidecar stopped"));
     this.lines?.close();
     child.kill();
     this.child = undefined;
