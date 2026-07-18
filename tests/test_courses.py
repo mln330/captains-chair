@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from captains_chair.courses import (
+from make_it_so.courses import (
     CourseError,
     CourseStore,
     approve_course,
@@ -16,7 +16,7 @@ from captains_chair.courses import (
     resume_course,
     set_work_package_status,
 )
-from captains_chair.models import (
+from make_it_so.models import (
     Checkpoint,
     CheckpointKind,
     CheckpointStatus,
@@ -33,7 +33,7 @@ from captains_chair.models import (
     WorkPackage,
     WorkPackageStatus,
 )
-from captains_chair.readiness import REQUIRED_READINESS_CATEGORIES, readiness_input_sha
+from make_it_so.readiness import REQUIRED_READINESS_CATEGORIES, readiness_input_sha
 
 
 def course() -> Course:
@@ -278,7 +278,7 @@ def test_course_store_round_trips_durable_yaml(tmp_path: Path) -> None:
     store = CourseStore(tmp_path / "repo")
     value = ready_course()
     path = store.save(value)
-    assert path == tmp_path / "repo" / ".captains-chair" / "courses" / "feature-search.yaml"
+    assert path == tmp_path / "repo" / ".make-it-so" / "courses" / "feature-search.yaml"
     assert store.load("feature-search") == value
     assert store.list() == (value,)
 

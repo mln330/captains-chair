@@ -1,7 +1,7 @@
 {
-  "name": "@mln330/openclaw-captains-chair",
+  "name": "@mln330/openclaw-make-it-so",
   "version": "0.2.0",
-  "description": "Captain's Chair control plane for OpenClaw",
+  "description": "Make It So control plane for OpenClaw",
   "type": "module",
   "main": "./dist/index.js",
   "files": [

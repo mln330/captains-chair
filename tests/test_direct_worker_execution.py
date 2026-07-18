@@ -9,14 +9,14 @@ from typing import Literal
 
 import pytest
 
-from captains_chair.command import CommandResult
-from captains_chair.direct_orchestrator import DirectOrchestrator
-from captains_chair.direct_workers import (
+from make_it_so.command import CommandResult
+from make_it_so.direct_orchestrator import DirectOrchestrator
+from make_it_so.direct_workers import (
     CommandWorkerExecutor,
     WorkerExecutionResult,
     _worker_prompt,  # pyright: ignore[reportPrivateUsage]
 )
-from captains_chair.models import (
+from make_it_so.models import (
     ActionKind,
     CompletionPolicy,
     DirectOrchestratorConfig,
@@ -25,7 +25,7 @@ from captains_chair.models import (
     WorkerAssignments,
     WorkerModelAssignments,
 )
-from captains_chair.orchestration import (
+from make_it_so.orchestration import (
     BlockerKind,
     QueueCard,
     QueueCardSpec,
@@ -33,7 +33,7 @@ from captains_chair.orchestration import (
     WorkspaceRef,
     classify_blocker,
 )
-from captains_chair.runtime import build_work_queue_orchestrator
+from make_it_so.runtime import build_work_queue_orchestrator
 from tests.helpers import repo_config
 
 WORKERS = WorkerAssignments(
@@ -201,7 +201,7 @@ def test_merge_worker_prompt_allows_only_explicit_merge_stage_action(tmp_path: P
         id="merge-1",
         title="Merge the reviewed change",
         status=QueueStatus.READY,
-        labels=("captains_chair", "stage:merge"),
+        labels=("make_it_so", "stage:merge"),
         notes="Run the merge gate and merge the PR when allowed.",
     )
 

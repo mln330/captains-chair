@@ -3,9 +3,9 @@ from typing import cast
 
 import pytest
 
-from captains_chair.conformance import run_runtime_conformance
-from captains_chair.direct_orchestrator import DirectOrchestrator
-from captains_chair.models import (
+from make_it_so.conformance import run_runtime_conformance
+from make_it_so.direct_orchestrator import DirectOrchestrator
+from make_it_so.models import (
     ActionKind,
     CompletionPolicy,
     DirectOrchestratorConfig,
@@ -13,8 +13,8 @@ from captains_chair.models import (
     PlanDecision,
     WorkerAssignments,
 )
-from captains_chair.orchestration import QueueCardSpec, QueueStatus, WorkerLifecycleAdapter
-from captains_chair.runtime import build_work_queue_orchestrator
+from make_it_so.orchestration import QueueCardSpec, QueueStatus, WorkerLifecycleAdapter
+from make_it_so.runtime import build_work_queue_orchestrator
 from tests.helpers import repo_config
 
 

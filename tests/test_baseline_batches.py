@@ -1,6 +1,6 @@
 from typing import Any
 
-from captains_chair.baseline import BASELINE_BATCH_CHARS, baseline_batches
+from make_it_so.baseline import BASELINE_BATCH_CHARS, baseline_batches
 
 
 def test_baseline_batches_cover_documents_and_source_without_oversized_prompts() -> None:

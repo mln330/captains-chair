@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from captains_chair.json_tools import decode_first_json
+from make_it_so.json_tools import decode_first_json
 
 
 def test_decode_first_json_skips_invalid_prefix_candidates() -> None:

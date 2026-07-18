@@ -9,14 +9,14 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-import captains_chair.openclaw_usage as openclaw_usage
-import captains_chair.state as state_module
-from captains_chair.command import CommandResult
-from captains_chair.harness import CodexAdapter
-from captains_chair.models import HarnessConfig, ModelTarget, RoleModels, UsageConfig
-from captains_chair.openclaw_usage import sync_openclaw_sessions
-from captains_chair.state import StateStore
-from captains_chair.usage import build_usage_report, dispatch_budget, usage_summary_text
+import make_it_so.openclaw_usage as openclaw_usage
+import make_it_so.state as state_module
+from make_it_so.command import CommandResult
+from make_it_so.harness import CodexAdapter
+from make_it_so.models import HarnessConfig, ModelTarget, RoleModels, UsageConfig
+from make_it_so.openclaw_usage import sync_openclaw_sessions
+from make_it_so.state import StateStore
+from make_it_so.usage import build_usage_report, dispatch_budget, usage_summary_text
 
 _usage_attempt_index = state_module._usage_attempt_index  # pyright: ignore[reportPrivateUsage]
 
@@ -144,7 +144,7 @@ def test_openclaw_worker_usage_uses_card_context_for_stage_and_model_dimensions(
     tmp_path: Path,
 ) -> None:
     output = (
-        '{"sessions":[{"key":"agent:github-coder:captains-chair:worker:card-123:attempt-1",'
+        '{"sessions":[{"key":"agent:github-coder:make-it-so:worker:card-123:attempt-1",'
         '"agentId":"github-coder","model":"gpt-5.6-terra","modelProvider":"codex",'
         '"inputTokens":100,"cachedInputTokens":20,"cacheWriteTokens":7,"outputTokens":30,"totalTokens":150}]}'
     )
@@ -156,7 +156,7 @@ def test_openclaw_worker_usage_uses_card_context_for_stage_and_model_dimensions(
     state = StateStore(tmp_path / "state.db")
     result = sync_openclaw_sessions(
         state,
-        repo="mln330/captains-chair-e2e-canary-20260717",
+        repo="mln330/make-it-so-e2e-canary-20260717",
         runner=runner,
         expected_models={"coder": "codex/gpt-5.6-terra"},
         session_context={
@@ -169,13 +169,13 @@ def test_openclaw_worker_usage_uses_card_context_for_stage_and_model_dimensions(
     )
 
     assert result["sessions_imported"] == 1
-    group = state.usage_summary(repo="mln330/captains-chair-e2e-canary-20260717")[
+    group = state.usage_summary(repo="mln330/make-it-so-e2e-canary-20260717")[
         "external_groups"
     ][0]
     assert group["course_key"] == "hello-cli"
     assert group["work_package_key"] == "hello-implementation"
     assert group["stage"] == "implementation"
-    assert state.usage_dimensions("mln330/captains-chair-e2e-canary-20260717") == [
+    assert state.usage_dimensions("mln330/make-it-so-e2e-canary-20260717") == [
         {
             "date": group["date"],
             "course_key": "hello-cli",
@@ -202,7 +202,7 @@ def test_openclaw_native_workboard_session_uses_durable_card_context(tmp_path: P
                 {
                     "key": (
                         "agent:github-coder:subagent:"
-                        f"workboard-captains-chair-canary-{card_id}"
+                        f"workboard-make-it-so-canary-{card_id}"
                     ),
                     "agentId": "github-coder",
                     "model": "gpt-5.3-codex-spark",
@@ -222,7 +222,7 @@ def test_openclaw_native_workboard_session_uses_durable_card_context(tmp_path: P
     state = StateStore(tmp_path / "state.db")
     result = sync_openclaw_sessions(
         state,
-        repo="mln330/captains-chair-canary",
+        repo="mln330/make-it-so-canary",
         runner=runner,
         expected_models={"github-coder": "codex/gpt-5.3-codex-spark"},
         session_context={
@@ -235,7 +235,7 @@ def test_openclaw_native_workboard_session_uses_durable_card_context(tmp_path: P
     )
 
     assert result["sessions_imported"] == 1
-    group = state.usage_summary(repo="mln330/captains-chair-canary")["external_groups"][0]
+    group = state.usage_summary(repo="mln330/make-it-so-canary")["external_groups"][0]
     assert group["stage"] == "implementation"
     assert group["model"] == "gpt-5.3-codex-spark"
     assert group["total_tokens"] == 100
@@ -245,7 +245,7 @@ def test_failed_openclaw_session_without_model_usage_is_not_counted_as_unknown(
     tmp_path: Path,
 ) -> None:
     output = (
-        '{"sessions":[{"key":"agent:github-coder:captains-chair:worker:card-failed:attempt-1",'
+        '{"sessions":[{"key":"agent:github-coder:make-it-so:worker:card-failed:attempt-1",'
         '"agentId":"github-coder","model":"gpt-5.6-terra","modelProvider":"codex",'
         '"status":"failed","totalTokens":null,"totalTokensFresh":false}]}'
     )
@@ -350,7 +350,7 @@ def test_openclaw_direct_session_usage_enriches_without_double_counting(tmp_path
         session_id="session-123",
     )
     output = (
-        '{"sessions":[{"key":"agent:codex-harness:captains_chair:planner:session-123",'
+        '{"sessions":[{"key":"agent:codex-harness:make_it_so:planner:session-123",'
         '"agentId":"codex-harness","model":"gpt-5.5",'
         '"modelProvider":"codex","inputTokens":100,"outputTokens":30,'
         '"totalTokens":130,"totalTokensFresh":true}]}'
@@ -399,10 +399,10 @@ def test_openclaw_fallback_sessions_merge_into_one_call_without_double_counting_
     )
     output = (
         '{"sessions":['
-        '{"key":"agent:codex-harness:captains_chair:planner:attempt-0:session-root",'
+        '{"key":"agent:codex-harness:make_it_so:planner:attempt-0:session-root",'
         '"agentId":"codex-harness","model":"gpt-5.5",'
         '"inputTokens":100,"outputTokens":30,"totalTokens":130},'
-        '{"key":"agent:codex-harness:captains_chair:planner:attempt-1:session-root",'
+        '{"key":"agent:codex-harness:make_it_so:planner:attempt-1:session-root",'
         '"agentId":"codex-harness","model":"gpt-5.3-codex-spark",'
         '"inputTokens":200,"outputTokens":40,"totalTokens":240}'
         ']}'
@@ -1021,7 +1021,7 @@ def test_usage_provenance_separates_legacy_records_from_current_runtime(tmp_path
     )
     state.record_model_call(
         "repo/project",
-        "captains_chair-run",
+        "make_it_so-run",
         "coder",
         "gpt-5.3-codex-spark",
         [{"input_tokens": 200, "output_tokens": 40, "total_tokens": 240}],
@@ -1060,7 +1060,7 @@ def test_usage_summary_text_keeps_uncertainty_and_hotspots_visible() -> None:
 
     text = usage_summary_text(report, repo="repo/project", since="2026-07-13T00:00:00Z")
 
-    assert "Captain's Chair token audit: repo/project since 2026-07-13T00:00:00Z" in text
+    assert "Make It So token audit: repo/project since 2026-07-13T00:00:00Z" in text
     assert "Tokens: 1100 accounted" in text
     assert "Telemetry: partial" in text
     assert "fallback attempts" in text

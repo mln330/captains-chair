@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from captains_chair.completion_gate import GitHubCompletionValidator
-from captains_chair.models import (
+from make_it_so.completion_gate import GitHubCompletionValidator
+from make_it_so.models import (
     ActionKind,
     CompletionPolicy,
     OpenClawWorkboardConfig,
@@ -14,7 +14,7 @@ from captains_chair.models import (
     PullRequestGate,
     WorkerAssignments,
 )
-from captains_chair.orchestration import (
+from make_it_so.orchestration import (
     CompletionValidation,
     QueueCard,
     QueueStatus,
@@ -41,7 +41,7 @@ def final_card(note: str, *, source_url: str | None = None) -> QueueCard:
         id="final-card",
         title="Final review",
         status=QueueStatus.DONE,
-        labels=("captains_chair", "stage:final_review"),
+        labels=("make_it_so", "stage:final_review"),
         source_url=source_url,
         metadata={"proof": [{"status": "passed", "note": note}]},
     )
@@ -193,7 +193,7 @@ def test_pr_link_can_come_from_implementation_proof(tmp_path: Path) -> None:
         id="implementation-card",
         title="Implementation",
         status=QueueStatus.DONE,
-        labels=("captains_chair", "stage:implementation"),
+        labels=("make_it_so", "stage:implementation"),
         metadata={
             "proof": [
                 {
@@ -219,7 +219,7 @@ def test_mixed_workflow_pull_request_links_fail_closed(tmp_path: Path) -> None:
         id="implementation-card",
         title="Implementation",
         status=QueueStatus.DONE,
-        labels=("captains_chair", "stage:implementation"),
+        labels=("make_it_so", "stage:implementation"),
         metadata={
             "proof": [
                 {
@@ -233,7 +233,7 @@ def test_mixed_workflow_pull_request_links_fail_closed(tmp_path: Path) -> None:
         id="repair-card",
         title="Repair",
         status=QueueStatus.DONE,
-        labels=("captains_chair", "stage:repair"),
+        labels=("make_it_so", "stage:repair"),
         metadata={
             "proof": [
                 {
@@ -378,7 +378,7 @@ def test_rejected_live_completion_creates_retry_and_does_not_cleanup_workspace(t
     repo = repo_config(tmp_path, mode=OperationMode.AUTONOMOUS, completion=CompletionPolicy.AUTO_MERGE)
     config = OpenClawWorkboardConfig(
         workers=WorkerAssignments(
-            captain="captains-chair",
+            captain="make-it-so",
             coder="github-coder",
             reviewer="github-reviewer",
             tester="github-tester",
@@ -403,7 +403,7 @@ def test_rejected_live_completion_creates_retry_and_does_not_cleanup_workspace(t
         workspace_cleanup=lambda _repo, workspace: cleaned.append(str(workspace.path)) or True,
         completion_validator=validator,
     )
-    workspace = WorkspaceRef(kind="worktree", path=tmp_path / "managed-worktree", branch="captains_chair/work/39")
+    workspace = WorkspaceRef(kind="worktree", path=tmp_path / "managed-worktree", branch="make_it_so/work/39")
     workflow = orchestrator.enqueue(repo, decision, "live-gate-action", workspace=workspace)
     for card_id in workflow.stage_cards.values():
         note = (
@@ -428,7 +428,7 @@ def test_live_completion_is_revalidated_after_github_evidence_changes(tmp_path: 
     repo = repo_config(tmp_path, mode=OperationMode.AUTONOMOUS, completion=CompletionPolicy.AUTO_MERGE)
     config = OpenClawWorkboardConfig(
         workers=WorkerAssignments(
-            captain="captains-chair",
+            captain="make-it-so",
             coder="github-coder",
             reviewer="github-reviewer",
             tester="github-tester",

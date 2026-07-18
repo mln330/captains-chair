@@ -9,11 +9,11 @@ from typing import Any
 import pytest
 import yaml
 
-import captains_chair.cli as cli
-from captains_chair.canary import canary_board_id, canary_proof_marker
-from captains_chair.courses import CourseStore
-from captains_chair.direct_orchestrator import DirectOrchestrator
-from captains_chair.models import (
+import make_it_so.cli as cli
+from make_it_so.canary import canary_board_id, canary_proof_marker
+from make_it_so.courses import CourseStore
+from make_it_so.direct_orchestrator import DirectOrchestrator
+from make_it_so.models import (
     ActionKind,
     AppConfig,
     HarnessConfig,
@@ -27,9 +27,9 @@ from captains_chair.models import (
     UsageConfig,
     WorkerAssignments,
 )
-from captains_chair.orchestration import QueueCard, QueueCardSpec, QueueStatus, ReconcileResult
-from captains_chair.runtime import RuntimeAdapterContractError
-from captains_chair.state import StateStore
+from make_it_so.orchestration import QueueCard, QueueCardSpec, QueueStatus, ReconcileResult
+from make_it_so.runtime import RuntimeAdapterContractError
+from make_it_so.state import StateStore
 from tests.fakes import InMemoryWorkQueue
 from tests.helpers import app_config, model_policy, repo_config
 from tests.test_courses import ready_course
@@ -106,7 +106,7 @@ class FakeOrchestrator:
         del repo
         self.reconcile_calls.append((dispatch, dispatch_reason))
         return ReconcileResult(
-            board_id="captains-chair-example-project",
+            board_id="make-it-so-example-project",
             proof_retries=(),
             protocol_retries=(),
             repairs_created=(),
@@ -122,7 +122,7 @@ def _write_config(tmp_path: Path, *, operation_mode: OperationMode = OperationMo
     repo = repo_config(tmp_path).model_copy(
         update={
             "orchestrator": "workers",
-            "orchestration_board": "captains-chair-example-project",
+            "orchestration_board": "make-it-so-example-project",
             "operation_mode": operation_mode,
         }
     )
@@ -184,7 +184,7 @@ def test_repo_without_orchestrator_uses_direct_runtime_by_default(tmp_path: Path
     assert isinstance(orchestrator.adapter, DirectOrchestrator)
     assert cli._board_id(  # pyright: ignore[reportPrivateUsage]
         config, "example/project"
-    ) == "captains-chair-direct-example-project"
+    ) == "make-it-so-direct-example-project"
 
 
 def test_preflight_reports_ready_without_dispatching_workers(
@@ -310,7 +310,7 @@ def test_preflight_fails_when_worker_lifecycle_helper_is_unavailable(
     monkeypatch.setattr(
         orchestrator.adapter,
         "config",
-        SimpleNamespace(captains_chair_command=("missing-captains_chair-helper",)),
+        SimpleNamespace(make_it_so_command=("missing-make_it_so-helper",)),
         raising=False,
     )
 
@@ -361,7 +361,7 @@ def test_worker_protocol_preflight_accepts_a_real_python_module_prefix(
     monkeypatch.setattr(
         orchestrator.adapter,
         "config",
-        SimpleNamespace(captains_chair_command=(sys.executable, "-m", "captains_chair")),
+        SimpleNamespace(make_it_so_command=(sys.executable, "-m", "make_it_so")),
         raising=False,
     )
 
@@ -1116,7 +1116,7 @@ def test_reconcile_cli_reports_automatic_recovery_progress(
                     title="Replan failed work",
                     status=QueueStatus.READY,
                     labels=("stage:control_plane_action",),
-                    agent_id="captains-chair",
+                    agent_id="make-it-so",
                 ),
             ]
 
@@ -1138,7 +1138,7 @@ def test_reconcile_cli_reports_automatic_recovery_progress(
             del repo
             self.reconcile_calls.append((dispatch, dispatch_reason))
             return ReconcileResult(
-                board_id="captains-chair-example-project",
+                board_id="make-it-so-example-project",
                 proof_retries=(),
                 protocol_retries=(),
                 repairs_created=("repair-1",),
@@ -1815,7 +1815,7 @@ def test_worker_protocol_claims_next_card_from_default_direct_orchestrator(
     config_path = tmp_path / "config.yaml"
     config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
     adapter = DirectOrchestrator(config.state_dir / "orchestrators" / "example-project.db")
-    board_id = "captains-chair-direct-example-project"
+    board_id = "make-it-so-direct-example-project"
     adapter.ensure_board(board_id, "Project", "Direct work", tmp_path)
     card = adapter.create_card(
         board_id,
@@ -2037,7 +2037,7 @@ def test_recover_pr_is_idempotent_after_crash_after_push(
                 "number": number,
                 "url": "https://github.com/example/project/pull/40",
                 "baseRefName": "main",
-                "headRefName": "captains_chair/work/39",
+                "headRefName": "make_it_so/work/39",
                 "headRefOid": "head-40",
                 "files": [{"path": "src/feature.py"}],
             }

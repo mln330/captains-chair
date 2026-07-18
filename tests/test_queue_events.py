@@ -1,11 +1,11 @@
 from pathlib import Path
 from typing import Any, cast
 
-import captains_chair.queue_events as queue_events
-from captains_chair.notifications import render_event
-from captains_chair.orchestration import QueueCard, QueueStatus
-from captains_chair.queue_events import project_queue_events
-from captains_chair.state import StateStore
+import make_it_so.queue_events as queue_events
+from make_it_so.notifications import render_event
+from make_it_so.orchestration import QueueCard, QueueStatus
+from make_it_so.queue_events import project_queue_events
+from make_it_so.state import StateStore
 from tests.helpers import repo_config
 
 
@@ -16,7 +16,7 @@ def test_completed_implementation_uses_worker_summary_proof_and_pr_link(tmp_path
         id="implementation-1",
         title="Implementation: long planner title",
         status=QueueStatus.DONE,
-        labels=("captains_chair", "stage:implementation"),
+        labels=("make_it_so", "stage:implementation"),
         agent_id="coder",
         source_url="https://github.com/example/project/issues/39",
         metadata={
@@ -68,7 +68,7 @@ def test_queue_projection_is_idempotent_and_only_user_blocker_needs_attention(
     assert "unrelated ready work continues" in first[0].reason
     assert render_event(first[0]).startswith("ACTION NEEDED\n")
     assert "Provide the requested decision" in render_event(first[0])
-    assert "captains_chair orchestrate unblock --repo example/project --card user" in render_event(first[0])
+    assert "make_it_so orchestrate unblock --repo example/project --card user" in render_event(first[0])
     assert [event.event_type for event in repeated] == ["ATTENTION_REQUIRED"]
     assert repeated[0].evidence["attention_level"] == 2
     assert "second ping" in render_event(repeated[0])
@@ -104,7 +104,7 @@ def test_protocol_recovery_is_reported_once_as_requeued_work(tmp_path: Path) -> 
         id="implementation-1",
         title="Implementation",
         status=QueueStatus.REVIEW,
-        labels=("captains_chair", "stage:implementation"),
+        labels=("make_it_so", "stage:implementation"),
         agent_id="coder",
     )
     ready = review.model_copy(
@@ -115,7 +115,7 @@ def test_protocol_recovery_is_reported_once_as_requeued_work(tmp_path: Path) -> 
                     {
                         "body": (
                             "TECHNICAL: OpenClaw ended the worker run in review without "
-                            "the mandatory CAPTAINS_CHAIR completion proof; retry the same stage."
+                            "the mandatory MAKE_IT_SO completion proof; retry the same stage."
                         )
                     }
                 ]
@@ -140,7 +140,7 @@ def test_protocol_retry_can_be_reported_after_dispatch(tmp_path: Path) -> None:
         id="implementation-1",
         title="Implementation",
         status=QueueStatus.RUNNING,
-        labels=("captains_chair", "stage:implementation"),
+        labels=("make_it_so", "stage:implementation"),
         agent_id="coder",
         source_url="https://github.com/example/project/issues/39",
         metadata={"automation": {"dispatchCount": 2}},
@@ -162,7 +162,7 @@ def test_technical_repair_and_control_plane_recovery_actions_are_reported_once(t
             id="failed-1",
             title="Implementation",
             status=QueueStatus.READY,
-            labels=("captains_chair", "stage:implementation"),
+            labels=("make_it_so", "stage:implementation"),
             agent_id="coder",
             source_url="https://github.com/example/project/issues/39",
             metadata={"failureCount": 1, "automation": {"dispatchCount": 2}},
@@ -171,7 +171,7 @@ def test_technical_repair_and_control_plane_recovery_actions_are_reported_once(t
             id="repair-1",
             title="Repair review findings",
             status=QueueStatus.READY,
-            labels=("captains_chair", "stage:repair"),
+            labels=("make_it_so", "stage:repair"),
             agent_id="coder",
             source_url="https://github.com/example/project/pull/40",
         ),
@@ -179,8 +179,8 @@ def test_technical_repair_and_control_plane_recovery_actions_are_reported_once(t
             id="recovery-1",
             title="Replan failed work",
             status=QueueStatus.READY,
-            labels=("captains_chair", "stage:control_plane_action"),
-            agent_id="captains-chair",
+            labels=("make_it_so", "stage:control_plane_action"),
+            agent_id="make-it-so",
         ),
     ]
 
@@ -388,7 +388,7 @@ def test_queue_event_helpers_handle_runtime_specific_payload_edges() -> None:
         {"kind": "nested"}
     ]
     assert diagnostic_action({"actions": ["retry"]}, "unknown") == "retry"
-    assert "CAPTAINS_CHAIR" in diagnostic_action({}, "missing_proof")
+    assert "MAKE_IT_SO" in diagnostic_action({}, "missing_proof")
     assert "inspect" in diagnostic_action({}, "unknown").lower()
 
     card = QueueCard(id="edge", title="Edge", status=QueueStatus.BLOCKED, metadata={})

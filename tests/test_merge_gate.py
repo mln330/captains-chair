@@ -1,8 +1,8 @@
 from pathlib import Path
 
-from captains_chair.merge_gate import evaluate_workboard_merge, final_review_head
-from captains_chair.models import CompletionPolicy, OperationMode, PullRequestGate
-from captains_chair.orchestration import QueueCard, QueueStatus
+from make_it_so.merge_gate import evaluate_workboard_merge, final_review_head
+from make_it_so.models import CompletionPolicy, OperationMode, PullRequestGate
+from make_it_so.orchestration import QueueCard, QueueStatus
 from tests.helpers import repo_config
 
 
@@ -11,7 +11,7 @@ def final_card(*, status: str = "passed", head: str = "abcdef123456") -> QueueCa
         id="final-1",
         title="Final review",
         status=QueueStatus.DONE,
-        labels=("captains_chair", "stage:final_review"),
+        labels=("make_it_so", "stage:final_review"),
         metadata={
             "proof": [
                 {

@@ -1,6 +1,6 @@
 import pytest
 
-from captains_chair.documents import assert_durable_document, normalize_durable_document
+from make_it_so.documents import assert_durable_document, normalize_durable_document
 
 
 def test_durable_plan_rejects_live_state() -> None:

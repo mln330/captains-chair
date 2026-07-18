@@ -1,11 +1,11 @@
 # Architecture
 
-Captain's Chair separates SDLC control policy from the runtime that executes worker stages.
+Make It So separates SDLC control policy from the runtime that executes worker stages.
 
 ## Ownership
 
 - Managed repositories own product truth: goals, requirements, architecture, plans, code, tests, issues, and pull requests.
-- CAPTAINS_CHAIR core owns deterministic policy, workflow DAG construction, GitHub gates, worktree safety, evidence validation, and portable event/state records.
+- MAKE_IT_SO core owns deterministic policy, workflow DAG construction, GitHub gates, worktree safety, evidence validation, and portable event/state records.
 - Runtime adapters own queue persistence, worker launch, claims, heartbeats, retries, and runtime-specific observability.
 - GitHub remains the durable external work contract. A runtime queue is an operating view, not a replacement for issues or repository plans.
 
@@ -44,12 +44,12 @@ Runtime adapters must provide:
 Queue cards preserve the `WorkspaceRef` supplied by the core. Retry and repair cards
 must carry that same isolated workspace (or an adapter-created equivalent) rather than
 falling back to a board's shared default checkout. For a repair checkout, the local
-CAPTAINS_CHAIR branch and the original PR push branch are separate fields so a worker can commit
+MAKE_IT_SO branch and the original PR push branch are separate fields so a worker can commit
 safely in isolation and update the intended PR without guessing branch identity.
 
 The queue remains the source of worker truth. After every card in a workflow has
 completed with proof, the host-provided workspace cleaner may remove the clean local
-worktree. This is idempotent and never deletes the remote CAPTAINS_CHAIR branch or pull request;
+worktree. This is idempotent and never deletes the remote MAKE_IT_SO branch or pull request;
 inconsistent references or dirty worktrees are reported as technical health events and
 do not suppress unrelated Workboard dispatch.
 
@@ -61,7 +61,7 @@ semantics themselves.
 
 Planning uses the managed repository's current default branch as its durable source of
 truth. A clean checkout is fast-forwarded before a cycle reads the planning document;
-if the checkout is dirty, on another branch, or cannot be synchronized, CAPTAINS_CHAIR reads the
+if the checkout is dirty, on another branch, or cannot be synchronized, MAKE_IT_SO reads the
 document from `origin/<default-branch>` instead. If that remote document cannot be
 read from a real Git checkout, the cycle records degraded planning context and makes
 no model call. This prevents stale local plans from silently driving new work.
@@ -69,14 +69,14 @@ no model call. This prevents stale local plans from silently driving new work.
 Greenfield onboarding is an approval-gated exception to the normal existing-repository
 flow. The dashboard's `repo.create` action records a local course intent and readiness
 questions without calling GitHub. After the course is approved, the GitHub adapter seeds
-the README, durable implementation plan, and `.captains-chair/project.yaml`, initializes
+the README, durable implementation plan, and `.make-it-so/project.yaml`, initializes
 and commits the local source, then invokes the provider's repository-provisioning method.
 The core depends only on that provider method; GitHub CLI flags, visibility, and remote
 creation remain outside the workflow engine.
 
 ## OpenClaw Runtime
 
-OpenClaw Workboard is the production V1 orchestrator. CAPTAINS_CHAIR creates a parent work contract and role-separated child cards. Workboard dispatch starts isolated agents and supplies bounded card context, claim tokens, parent results, workspace metadata, and retry limits.
+OpenClaw Workboard is the production V1 orchestrator. MAKE_IT_SO creates a parent work contract and role-separated child cards. Workboard dispatch starts isolated agents and supplies bounded card context, claim tokens, parent results, workspace metadata, and retry limits.
 
 The default implementation workflow is:
 
@@ -86,7 +86,7 @@ The default implementation workflow is:
 4. policy-gated merge
 5. post-merge verification
 
-When an active PR enters Workboard review, CAPTAINS_CHAIR creates a fresh isolated checkout
+When an active PR enters Workboard review, MAKE_IT_SO creates a fresh isolated checkout
 of the exact PR head and passes that `WorkspaceRef` to the reviewer, tester, UX,
 final-review, and any repair cards. The local review branch is disposable; the
 original PR branch remains the only push target. Merge and post-merge cards do not
@@ -160,7 +160,7 @@ health failures are reported as `Captain HANDLING` with the automatic next actio
 technical failure must not look like a request for owner approval.
 An owner-blocked Workboard card is checked on every reconciliation, not only when
 its status first changes. It re-notifies at ladder levels 1, 2, 3, 4, 8, and 16;
-an `captains_chair ack` acknowledgement resets that card's ladder so the next unresolved
+an `make_it_so ack` acknowledgement resets that card's ladder so the next unresolved
 decision starts at level 1. This keeps unattended blockers visible without sending
 the same ping on every scheduled pass.
 Queue reconciliation also reports automatic technical retries, repair-card creation,
@@ -199,10 +199,10 @@ counts until those cards finish.
 
 ## State
 
-CAPTAINS_CHAIR SQLite remains the portable audit and policy store. OpenClaw Workboard stores runtime-local cards, claims, attempts, worker logs, proof, and diagnostics. Stable workflow and card idempotency keys make reconciliation safe after crashes or duplicate scheduled runs. The `recover-pr` crash-after-push path is also idempotent: an already executed action with the same active PR returns its existing recovery state, while a mismatched or non-proposed action fails closed. Runtime configurations require a `CompletionValidator` by default; the OpenClaw adapter uses it to validate the exact PR URL, current head, checks, mergeability, and review threads against live GitHub state. Only explicitly marked portable conformance tests may disable that requirement.
+MAKE_IT_SO SQLite remains the portable audit and policy store. OpenClaw Workboard stores runtime-local cards, claims, attempts, worker logs, proof, and diagnostics. Stable workflow and card idempotency keys make reconciliation safe after crashes or duplicate scheduled runs. The `recover-pr` crash-after-push path is also idempotent: an already executed action with the same active PR returns its existing recovery state, while a mismatched or non-proposed action fails closed. Runtime configurations require a `CompletionValidator` by default; the OpenClaw adapter uses it to validate the exact PR URL, current head, checks, mergeability, and review threads against live GitHub state. Only explicitly marked portable conformance tests may disable that requirement.
 
 OpenClaw V1 uses only OpenClaw's built-in Workboard Gateway as its queue and
-worker orchestration layer. CAPTAINS_CHAIR does not depend on a custom task system or a
+worker orchestration layer. MAKE_IT_SO does not depend on a custom task system or a
 second OpenClaw task board. Future runtimes may map the same contract to their
 own native task/session primitives, but core correctness cannot depend on any
 runtime-specific grouping feature.

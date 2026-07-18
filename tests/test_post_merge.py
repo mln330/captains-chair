@@ -2,13 +2,13 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, cast
 
-from captains_chair.command import CommandResult
-from captains_chair.engine import ControlPlaneEngine, classify_post_merge_runs
-from captains_chair.github import GhGitHubProvider, RepositorySnapshot
-from captains_chair.harness import HarnessAdapter
-from captains_chair.models import EventRecord, OperationMode, RunState
-from captains_chair.notifications import Notifier
-from captains_chair.state import StateStore
+from make_it_so.command import CommandResult
+from make_it_so.engine import ControlPlaneEngine, classify_post_merge_runs
+from make_it_so.github import GhGitHubProvider, RepositorySnapshot
+from make_it_so.harness import HarnessAdapter
+from make_it_so.models import EventRecord, OperationMode, RunState
+from make_it_so.notifications import Notifier
+from make_it_so.state import StateStore
 from tests.helpers import app_config, model_policy, repo_config
 
 

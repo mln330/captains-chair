@@ -1,6 +1,6 @@
 const CONTROL_UI_PATH = "/plugin";
-const PLUGIN_ID = "captains-chair";
-const PLUGIN_UI_PATH = "/captains-chair/";
+const PLUGIN_ID = "make-it-so";
+const PLUGIN_UI_PATH = "/make-it-so/";
 
 type RequestLike = { method?: string; headers?: Record<string, unknown> };
 type ResponseLike = {
@@ -10,7 +10,7 @@ type ResponseLike = {
 };
 type GuardOptions = { token?: string; cors?: boolean };
 
-export const CONTROL_UI_TOKEN_HEADER = "x-captains-chair-control-token";
+export const CONTROL_UI_TOKEN_HEADER = "x-make-it-so-control-token";
 
 function header(request: RequestLike, name: string): string | undefined {
   const value = request.headers?.[name];
@@ -23,7 +23,7 @@ function header(request: RequestLike, name: string): string | undefined {
  * The iframe cannot forward the parent dashboard's Gateway credential, so
  * plugin-owned UI routes authenticate the browser surface with fetch metadata.
  */
-export function isCaptainUiRequest(request: RequestLike): boolean {
+export function isMakeItSoUiRequest(request: RequestLike): boolean {
   const site = header(request, "sec-fetch-site")?.toLowerCase();
   if (site === "same-origin") return true;
   const destination = header(request, "sec-fetch-dest")?.toLowerCase();
@@ -64,9 +64,9 @@ export function rejectNonControlUiRequest(
   }
   const tokenMatches = options.token === undefined
     || header(request, CONTROL_UI_TOKEN_HEADER) === options.token;
-  if (isCaptainUiRequest(request) && tokenMatches) return false;
+  if (isMakeItSoUiRequest(request) && tokenMatches) return false;
   response.statusCode = 403;
   response.setHeader("content-type", "application/json; charset=utf-8");
-  response.end(JSON.stringify({ error: { message: "Captain's Chair UI requests must originate from the OpenClaw Control UI.", type: "forbidden" } }));
+  response.end(JSON.stringify({ error: { message: "Make It So UI requests must originate from the OpenClaw Control UI.", type: "forbidden" } }));
   return true;
 }

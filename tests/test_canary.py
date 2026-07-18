@@ -2,13 +2,13 @@ from pathlib import Path
 
 import pytest
 
-from captains_chair.canary import (
+from make_it_so.canary import (
     build_canary_spec,
     canary_board_id,
     canary_proof_marker,
     evaluate_canary_card,
 )
-from captains_chair.orchestration import QueueCard, QueueStatus
+from make_it_so.orchestration import QueueCard, QueueStatus
 from tests.helpers import repo_config
 
 
@@ -31,8 +31,8 @@ def test_canary_spec_is_dedicated_and_forbids_repository_work(tmp_path: Path) ->
         max_retries=1,
     )
 
-    assert canary_board_id(repo) == "captains_chair-canary-example-project"
-    assert spec.key == "captains_chair:canary:example/project:smoke-1"
+    assert canary_board_id(repo) == "make_it_so-canary-example-project"
+    assert spec.key == "make_it_so:canary:example/project:smoke-1"
     assert spec.agent_id == "github-tester"
     assert "Do not inspect, edit, commit, push, or merge" in spec.notes
     assert "portable worker-protocol helper is the lifecycle interface" in spec.notes
@@ -49,11 +49,11 @@ def test_canary_spec_is_dedicated_and_forbids_repository_work(tmp_path: Path) ->
             QueueStatus.DONE,
             [{"status": "passed", "note": "tests passed"}],
             "failed",
-            "does not contain CAPTAINS_CHAIR_CANARY_PROOF:smoke",
+            "does not contain MAKE_IT_SO_CANARY_PROOF:smoke",
         ),
         (
             QueueStatus.DONE,
-            [{"status": "passed", "note": "CAPTAINS_CHAIR_CANARY_PROOF:smoke"}],
+            [{"status": "passed", "note": "MAKE_IT_SO_CANARY_PROOF:smoke"}],
             "passed",
             "required passed canary proof",
         ),

@@ -1,8 +1,8 @@
-# Captain's Chair Product Reorientation
+# Make It So Product Reorientation
 
 ## Summary
 
-Captain's Chair will become an OpenClaw-first SDLC control plane, with Codex as
+Make It So will become an OpenClaw-first SDLC control plane, with Codex as
 the next supported runtime and all runtime-specific behavior isolated behind
 typed adapters.
 
@@ -40,20 +40,20 @@ task board by default while permitting optional custom kanban integrations.
   tracking.
 - Allow future adapters for GitHub Projects, Jira, Linear, or user-provided kanban
   systems. An adapter may implement orchestration, tracking, or both.
-- Captain's Chair will not build a separate user-facing kanban. SQLite stores
+- Make It So will not build a separate user-facing kanban. SQLite stores
   workflow state and evidence, not a replacement board.
 - Remove hard-coded Hermes configuration and roadmap references. Unsupported
   runtimes use the generic adapter registration contract.
 - Keep GitHub, policy, workflow topology, context packaging, worktrees, evidence
   gates, and state transitions in the runtime-neutral core.
 - Keep project truth in managed repositories:
-  - `.captains-chair/project.yaml` for checks, surfaces, documentation, and durable
+  - `.make-it-so/project.yaml` for checks, surfaces, documentation, and durable
     policy.
-  - `.captains-chair/courses/<course-id>.yaml` for approved goals, scope, exit
+  - `.make-it-so/courses/<course-id>.yaml` for approved goals, scope, exit
     criteria, work packages, and checkpoints.
   - Human-readable plans under the repository's configured documentation path.
 - Keep live status, model provenance, leases, events, schedules, token usage,
-  external-card mappings, and notification history in Captain's Chair SQLite.
+  external-card mappings, and notification history in Make It So SQLite.
 - Add versioned `Course`, `ReadinessRequirement`, `WorkPackage`, `Checkpoint`,
   `QAProfile`, `ModelProfile`, `ModelCapability`, `WorkMapping`, and
   `TokenUsageRecord` schemas.
@@ -64,15 +64,15 @@ task board by default while permitting optional custom kanban integrations.
 
 The plugin will register:
 
-- A `Captain's Chair` Control UI tab backed by `/captains-chair/`.
+- A `Make It So` Control UI tab backed by `/make-it-so/`.
 - Authenticated plugin HTTP routes serving the UI and API proxy.
 - A background service that starts and monitors the Python sidecar.
-- Gateway methods under `captainsChair.*`, protected by appropriate operator scopes.
+- Gateway methods under `makeItSo.*`, protected by appropriate operator scopes.
 - Optional agent tools for reading course state, recording planning answers,
   resolving checkpoints, and engaging approved work.
-- A namespaced `/captains-chair` command for status, planning-session links, pause,
+- A namespaced `/make-it-so` command for status, planning-session links, pause,
   resume, approval, and attention acknowledgement.
-- An `openclaw captains-chair` CLI group for setup, diagnostics, migration,
+- An `openclaw make-it-so` CLI group for setup, diagnostics, migration,
   schedules, recovery, and Workboard configuration.
 
 The plugin will manage two global cron jobs rather than multiplying jobs per
@@ -89,7 +89,7 @@ the recovery mechanism and scheduler source of truth. Schedule creation, pause,
 resume, and cadence will be available in the UI.
 
 When enabled, Workboard is authoritative for OpenClaw worker cards, claims,
-dependencies, retries, proof, and worker assignment. Captain's Chair remains
+dependencies, retries, proof, and worker assignment. Make It So remains
 authoritative for portable courses, work packages, policies, evidence, and state
 transitions. Workboard card IDs are adapter mappings rather than core identifiers.
 
@@ -114,8 +114,8 @@ Planning will use a hybrid wizard and agent conversation:
   explicit visibility and ownership confirmation.
 
 The implemented planning handoff is deliberately host-native: the dashboard can
-show a deterministic planning brief, OpenClaw exposes `/captains-chair plan` and
-`captains_chair_start_planning`, and Codex exposes the equivalent MCP tool. These
+show a deterministic planning brief, OpenClaw exposes `/make-it-so plan` and
+`make_it_so_start_planning`, and Codex exposes the equivalent MCP tool. These
 surfaces return durable course context and unresolved questions without spending
 model tokens; the active host conversation asks the questions and records answers
 through the readiness API. Approval still gates all repository mutation, and a
@@ -298,7 +298,7 @@ Star Trek logos, uniforms, ships, or trade dress.
 The README will include generated hero artwork, project badges and icons, architecture
 and SDLC diagrams, screenshots, setup instructions, model and token guidance, and an
 honest comparison with `/goal`: `/goal` tracks one Codex task objective, while
-Captain's Chair provides durable multi-repository state, scheduling, role-separated
+Make It So provides durable multi-repository state, scheduling, role-separated
 workers, optional orchestration adapters, PR and QA gates, recovery, and
 evidence-change suppression.
 

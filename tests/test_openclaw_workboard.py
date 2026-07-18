@@ -7,16 +7,16 @@ from typing import Any
 
 import pytest
 
-from captains_chair.command import CommandResult
-from captains_chair.direct_workers import WorkerExecutionError, WorkerExecutionResult
-from captains_chair.models import OpenClawWorkboardConfig, WorkerAssignments
-from captains_chair.openclaw_workboard import (
+from make_it_so.command import CommandResult
+from make_it_so.direct_workers import WorkerExecutionError, WorkerExecutionResult
+from make_it_so.models import OpenClawWorkboardConfig, WorkerAssignments
+from make_it_so.openclaw_workboard import (
     OpenClawWorkboardAdapter,
     OpenClawWorkboardError,
     _managed_completion_proof,  # pyright: ignore[reportPrivateUsage]
     decode_openclaw_json,
 )
-from captains_chair.orchestration import QueueCard, QueueCardSpec, QueueStatus, WorkspaceRef
+from make_it_so.orchestration import QueueCard, QueueCardSpec, QueueStatus, WorkspaceRef
 
 
 def config() -> OpenClawWorkboardConfig:
@@ -86,7 +86,7 @@ def test_recovery_recognizes_terminal_session_output(output: str) -> None:
         title="Implementation",
         status=QueueStatus.RUNNING,
         labels=("stage:implementation",),
-        metadata={"attempts": [{"sessionKey": "agent:coder:captains_chair:1"}]},
+        metadata={"attempts": [{"sessionKey": "agent:coder:make_it_so:1"}]},
     )
 
     recovered = OpenClawWorkboardAdapter(config(), runner).recover_ended_workers("board", [card])
@@ -116,7 +116,7 @@ def test_recovery_treats_missing_session_as_ended() -> None:
         title="Implementation",
         status=QueueStatus.RUNNING,
         labels=("stage:implementation",),
-        metadata={"attempts": [{"sessionKey": "agent:coder:captains_chair:1"}]},
+        metadata={"attempts": [{"sessionKey": "agent:coder:make_it_so:1"}]},
     )
 
     recovered = OpenClawWorkboardAdapter(config(), runner).recover_ended_workers("board", [card])
@@ -145,12 +145,12 @@ def test_create_card_uses_gateway_rpc_and_preserves_worker_metadata(tmp_path: Pa
                         "title": "Implement issue",
                         "status": "todo",
                         "priority": "high",
-                        "labels": ["captains_chair"],
+                        "labels": ["make_it_so"],
                         "agentId": "coder",
                         "workspace": {
                             "kind": "worktree",
                             "path": str(tmp_path),
-                            "branch": "captains_chair/work/39",
+                            "branch": "make_it_so/work/39",
                             "pushBranch": "feature/current-pr",
                         },
                     }
@@ -163,19 +163,19 @@ def test_create_card_uses_gateway_rpc_and_preserves_worker_metadata(tmp_path: Pa
     card = adapter.create_card(
         "printhub",
         QueueCardSpec(
-            key="captains_chair:issue:39:implementation",
+            key="make_it_so:issue:39:implementation",
             title="Implement issue",
             notes="Use the isolated worktree.",
             status=QueueStatus.TODO,
             priority="high",
-            labels=("captains_chair",),
+            labels=("make_it_so",),
             agent_id="coder",
             parents=("parent-card",),
             source_url="https://github.com/example/repo/issues/39",
             workspace=WorkspaceRef(
                 kind="worktree",
                 path=tmp_path,
-                branch="captains_chair/work/39",
+                branch="make_it_so/work/39",
                 push_branch="feature/current-pr",
             ),
             metadata={"courseKey": "course-1", "workPackageKey": "package-1"},
@@ -186,7 +186,7 @@ def test_create_card_uses_gateway_rpc_and_preserves_worker_metadata(tmp_path: Pa
     command = list(commands[0])
     assert command[2:4] == ["call", "workboard.cards.create"]
     params = json.loads(command[command.index("--params") + 1])
-    assert params["idempotencyKey"] == "captains_chair:issue:39:implementation"
+    assert params["idempotencyKey"] == "make_it_so:issue:39:implementation"
     assert params["parents"] == ["parent-card"]
     assert params["agentId"] == "coder"
     assert params["workspace"]["kind"] == "worktree"
@@ -195,7 +195,7 @@ def test_create_card_uses_gateway_rpc_and_preserves_worker_metadata(tmp_path: Pa
     assert card.workspace == WorkspaceRef(
         kind="worktree",
         path=tmp_path,
-        branch="captains_chair/work/39",
+        branch="make_it_so/work/39",
         push_branch="feature/current-pr",
     )
 
@@ -220,7 +220,7 @@ def test_create_card_bounds_labels_for_openclaw_limit(tmp_path: Path) -> None:
                         "id": "card-1",
                         "title": "Implement issue",
                         "status": "todo",
-                        "labels": ["captains_chair"],
+                        "labels": ["make_it_so"],
                     }
                 }
             ),
@@ -233,14 +233,16 @@ def test_create_card_bounds_labels_for_openclaw_limit(tmp_path: Path) -> None:
             key="key",
             title="Implement issue",
             notes="Use the isolated worktree.",
-            labels=("repo:mln330/captains-chair-e2e-smoke-20260716-0958", " stage:implementation "),
+            labels=("repo:mln330/make-it-so-e2e-smoke-20260716-0958", " stage:implementation "),
             workspace=WorkspaceRef(kind="dir", path=tmp_path),
         ),
     )
 
     params = json.loads(list(commands[0])[list(commands[0]).index("--params") + 1])
     assert all(len(label) <= 40 for label in params["labels"])
-    assert params["labels"] == ["repo:mln330/captains-chair-e2e-smoke-...", "stage:implementation"]
+    assert params["labels"][0].startswith("repo:mln330/make-it-so-e2e-smoke-")
+    assert params["labels"][0].endswith("...")
+    assert params["labels"][1] == "stage:implementation"
 
 
 def test_card_normalizes_metadata_workspace_push_branch() -> None:
@@ -265,7 +267,7 @@ def test_card_normalizes_metadata_workspace_push_branch() -> None:
                                 "workspace": {
                                     "kind": "worktree",
                                     "path": "/tmp/repair",
-                                    "branch": "captains_chair/repair/pr-41",
+                                    "branch": "make_it_so/repair/pr-41",
                                     "pushBranch": "feature/current-pr",
                                 }
                             },
@@ -281,7 +283,7 @@ def test_card_normalizes_metadata_workspace_push_branch() -> None:
     assert card.workspace == WorkspaceRef(
         kind="worktree",
         path=Path("/tmp/repair"),
-        branch="captains_chair/repair/pr-41",
+        branch="make_it_so/repair/pr-41",
         push_branch="feature/current-pr",
     )
 
@@ -650,12 +652,12 @@ def test_recovery_reconstructs_managed_session_from_claim_owner() -> None:
         title="Test",
         status=QueueStatus.RUNNING,
         agent_id="github-coder",
-        metadata={"claim": {"ownerId": "captains-chair-managed:managed:card-1:attempt-1"}},
+        metadata={"claim": {"ownerId": "make-it-so-managed:managed:card-1:attempt-1"}},
     )
 
     assert OpenClawWorkboardAdapter(config(), runner).recover_ended_workers("board", [card]) == ("card-1",)
     session_command = next(command for command in commands if "sessions" in command)
-    assert "agent:github-coder:captains-chair:worker:card-1:managed:card-1:attempt-1" in session_command
+    assert "agent:github-coder:make-it-so:worker:card-1:managed:card-1:attempt-1" in session_command
 
 
 def test_recover_expired_claim_without_session_lookup() -> None:
@@ -1071,7 +1073,7 @@ def test_managed_dispatch_canonicalizes_canary_style_proof_note(
             summary="completed",
             proof=(
                 {"command": "pwd", "output": "ok"},
-                {"proof_note": "CAPTAINS_CHAIR_CANARY_PROOF:smoke"},
+                {"proof_note": "MAKE_IT_SO_CANARY_PROOF:smoke"},
             ),
         ),
     )
@@ -1081,7 +1083,7 @@ def test_managed_dispatch_canonicalizes_canary_style_proof_note(
     assert result["completed"] == ["card-1"]
     proof = cards["card-1"]["metadata"]["proof"][0]
     assert proof["status"] == "passed"
-    assert proof["note"] == "CAPTAINS_CHAIR_CANARY_PROOF:smoke"
+    assert proof["note"] == "MAKE_IT_SO_CANARY_PROOF:smoke"
 
 
 def test_managed_dispatch_promotes_dependency_ready_card(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1181,7 +1183,7 @@ def test_merge_card_uses_deterministic_gate_without_model_worker(
         input_text: str | None = None,
         timeout: int = 60,
     ) -> CommandResult:
-        if command and command[0] == "captains_chair":
+        if command and command[0] == "make_it_so":
             merge_commands.append(command)
             payload = {
                 "allowed": allowed,
@@ -1208,7 +1210,7 @@ def test_merge_card_uses_deterministic_gate_without_model_worker(
     if allowed:
         proof = cards["merge"]["metadata"]["proof"][0]
         assert proof["model"] == "deterministic/no-model"
-        assert "Model: deterministic/no-model; Provider: captains-chair" in proof["note"]
+        assert "Model: deterministic/no-model; Provider: make-it-so" in proof["note"]
     else:
         assert "missing AUTO_MERGE_ALLOWED" in cards["merge"]["metadata"]["workerProtocol"][
             "detail"
@@ -1299,7 +1301,7 @@ def test_deterministic_merge_command_failure_blocks_claimed_card(outcome: str) -
         input_text: str | None = None,
         timeout: int = 60,
     ) -> CommandResult:
-        if command and command[0] == "captains_chair":
+        if command and command[0] == "make_it_so":
             if outcome == "command_error":
                 raise OSError("merge executable is unavailable")
             return CommandResult(0, "[]", "merge gate returned a non-object payload")
@@ -1459,4 +1461,4 @@ def _patch_worker_executor(
                 raise outcome
             return outcome
 
-    monkeypatch.setattr("captains_chair.openclaw_workboard.CommandWorkerExecutor", FakeExecutor)
+    monkeypatch.setattr("make_it_so.openclaw_workboard.CommandWorkerExecutor", FakeExecutor)

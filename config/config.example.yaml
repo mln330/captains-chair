@@ -1,6 +1,6 @@
 version: 1
-state_dir: /home/example/.local/state/captains-chair
-artifact_dir: /home/example/.local/state/captains-chair/artifacts
+state_dir: /home/example/.local/state/make-it-so
+artifact_dir: /home/example/.local/state/make-it-so/artifacts
 
 harnesses:
   openclaw:
@@ -19,7 +19,7 @@ orchestrators:
   # portable claim/lease protocol through OpenClaw workers instead.
   direct-codex:
     kind: direct
-    database_path: /home/example/.local/state/captains-chair/orchestrators/example-project.db
+    database_path: /home/example/.local/state/make-it-so/orchestrators/example-project.db
     worker_runtime: codex
     executable: codex
     lease_seconds: 3600
@@ -36,8 +36,8 @@ orchestrators:
   openclaw-workers:
     kind: openclaw_workboard
     executable: /home/example/.npm-global/bin/openclaw
-    captains_chair_command: [captains-chair, --config, /home/example/.config/captains-chair/config.yaml]
-    board_prefix: captains-chair
+    make_it_so_command: [make-it-so, --config, /home/example/.config/make-it-so/config.yaml]
+    board_prefix: make-it-so
     workers:
       captain: github-captain
       coder: github-coder
@@ -283,6 +283,6 @@ repos:
     ux_paths: [frontend/, "*.tsx", "*.jsx", "*.css", "*.html"]
     preserved_prs: []
     orchestrator: direct-codex
-    orchestration_board: captains-chair-example-project
+    orchestration_board: make-it-so-example-project
     notification:
       kind: stdout

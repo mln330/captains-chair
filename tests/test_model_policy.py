@@ -1,4 +1,4 @@
-from captains_chair.model_policy import models_match
+from make_it_so.model_policy import models_match
 
 
 def test_models_match_accepts_unqualified_provider_model() -> None:

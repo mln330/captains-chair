@@ -7,12 +7,12 @@ from typing import Any, TypeVar, cast
 import pytest
 from pydantic import BaseModel
 
-from captains_chair.baseline import DeepBaselineCollector
-from captains_chair.command import CommandResult, CommandRunner
-from captains_chair.engine import ControlPlaneEngine
-from captains_chair.github import GitHubProvider, RepositorySnapshot
-from captains_chair.harness import HarnessAdapter
-from captains_chair.models import (
+from make_it_so.baseline import DeepBaselineCollector
+from make_it_so.command import CommandResult, CommandRunner
+from make_it_so.engine import ControlPlaneEngine
+from make_it_so.github import GitHubProvider, RepositorySnapshot
+from make_it_so.harness import HarnessAdapter
+from make_it_so.models import (
     BaselineAnalysis,
     EventRecord,
     HarnessConfig,
@@ -21,7 +21,7 @@ from captains_chair.models import (
     ReasoningEffort,
     RepoConfig,
 )
-from captains_chair.state import StateStore
+from make_it_so.state import StateStore
 from tests.helpers import app_config, model_policy, repo_config
 
 OutputModel = TypeVar("OutputModel", bound=BaseModel)

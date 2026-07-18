@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from captains_chair.engine import select_checks, worktree_check_command
+from make_it_so.engine import select_checks, worktree_check_command
 
 
 def test_check_command_replaces_shared_checkout_with_worktree() -> None:

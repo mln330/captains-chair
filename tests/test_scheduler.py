@@ -6,10 +6,10 @@ from typing import Any
 
 import pytest
 
-import captains_chair.cli as cli
-import captains_chair.scheduler as scheduler
-from captains_chair.command import CommandResult
-from captains_chair.scheduler import (
+import make_it_so.cli as cli
+import make_it_so.scheduler as scheduler
+from make_it_so.command import CommandResult
+from make_it_so.scheduler import (
     InstalledSchedule,
     OpenClawScheduler,
     Scheduler,
@@ -24,8 +24,8 @@ from captains_chair.scheduler import (
 
 def spec(tmp_path: Path) -> ScheduleSpec:
     return ScheduleSpec(
-        name="captains_chair-example-project",
-        argv=("python", "-m", "captains_chair", "cycle", "--shadow"),
+        name="make_it_so-example-project",
+        argv=("python", "-m", "make_it_so", "cycle", "--shadow"),
         cwd=tmp_path,
     )
 
@@ -119,7 +119,7 @@ def test_openclaw_schedule_install_is_idempotent(tmp_path: Path) -> None:
                     "jobs": [
                         {
                             "id": "job-existing",
-                            "name": "captains_chair-example-project",
+                            "name": "make_it_so-example-project",
                             "enabled": False,
                             "schedule": {"kind": "every", "everyMs": 7_200_000},
                             "payload": {
@@ -200,12 +200,12 @@ def test_openclaw_schedule_conflict_fails_closed(tmp_path: Path) -> None:
                     "jobs": [
                         {
                             "id": "job-conflict",
-                            "name": "captains_chair-example-project",
+                            "name": "make_it_so-example-project",
                             "enabled": False,
                             "schedule": {"kind": "every", "everyMs": 300_000},
                             "payload": {
                                 "kind": "command",
-                                "argv": ["python", "-m", "captains_chair", "cycle", "--different"],
+                                "argv": ["python", "-m", "make_it_so", "cycle", "--different"],
                                 "cwd": str(tmp_path),
                             },
                         }
@@ -239,19 +239,19 @@ def test_portable_schedule_renderers(tmp_path: Path) -> None:
     cron = SystemCronScheduler().render(value)
     task = TaskScheduler().render(value)
     assert cron.startswith("0 */2 * * *")
-    assert "python -m captains_chair cycle --shadow" in cron
+    assert "python -m make_it_so cycle --shadow" in cron
     assert task[:3] == ["schtasks", "/Create", "/TN"]
 
 
 def test_watch_schedule_can_run_on_a_short_heartbeat(tmp_path: Path) -> None:
     value = ScheduleSpec(
-        name="captains_chair-watch-example-project",
-        argv=("python", "-m", "captains_chair", "cycle", "--watch", "--live"),
+        name="make_it_so-watch-example-project",
+        argv=("python", "-m", "make_it_so", "cycle", "--watch", "--live"),
         cwd=tmp_path,
         every="10m",
     )
 
-    assert "python -m captains_chair cycle --watch --live" in SystemCronScheduler().render(value)
+    assert "python -m make_it_so cycle --watch --live" in SystemCronScheduler().render(value)
     assert value.every == "10m"
 
 
@@ -266,7 +266,7 @@ def test_scheduler_registry_builds_builtin_and_extension_adapters(tmp_path: Path
 
     adapter = build_scheduler("hermes", registry=registry)
     assert isinstance(adapter, HermesScheduler)
-    assert adapter.install(spec(tmp_path)).identifier == "captains_chair-example-project"
+    assert adapter.install(spec(tmp_path)).identifier == "make_it_so-example-project"
 
 
 def test_scheduler_registry_rejects_unknown_and_duplicate_kinds() -> None:

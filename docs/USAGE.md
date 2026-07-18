@@ -1,6 +1,6 @@
 # Token Usage And Efficiency
 
-Captain's Chair tracks only provider-reported token telemetry. It does not infer
+Make It So tracks only provider-reported token telemetry. It does not infer
 prices, convert tokens into synthetic units, or treat missing data as zero.
 
 ## Recorded Data
@@ -23,9 +23,9 @@ twice. Stale session totals remain labelled as stale evidence.
 Run:
 
 ```bash
-captains-chair --config "$CAPTAINS_CHAIR_CONFIG" usage report
-captains-chair --config "$CAPTAINS_CHAIR_CONFIG" usage report --repo OWNER/REPO --summary
-captains-chair --config "$CAPTAINS_CHAIR_CONFIG" usage sync-openclaw --repo OWNER/REPO
+make-it-so --config "$MAKE_IT_SO_CONFIG" usage report
+make-it-so --config "$MAKE_IT_SO_CONFIG" usage report --repo OWNER/REPO --summary
+make-it-so --config "$MAKE_IT_SO_CONFIG" usage sync-openclaw --repo OWNER/REPO
 ```
 
 The report includes:
@@ -115,8 +115,8 @@ configured model. Deterministic merge cards record `deterministic/no-model` and
 consume no model tokens.
 
 Planning is hybrid by design. Use the dashboard's planning brief, the OpenClaw
-`/captains-chair plan OWNER/REPO COURSE_KEY` command, or the Codex
-`captains_chair_planning_session` MCP tool to hand durable course context to the
+`/make-it-so plan OWNER/REPO COURSE_KEY` command, or the Codex
+`make_it_so_planning_session` MCP tool to hand durable course context to the
 native host conversation. The host agent asks only unresolved questions, answers
 are written through the readiness API, and course approval remains the explicit
 mutation gate.

@@ -9,16 +9,16 @@ from typing import Any, cast
 import pytest
 import yaml
 
-import captains_chair.cli as cli
-from captains_chair.command import CommandResult
-from captains_chair.models import (
+import make_it_so.cli as cli
+from make_it_so.command import CommandResult
+from make_it_so.models import (
     DirectOrchestratorConfig,
     HarnessConfig,
     OperationMode,
     RunState,
     WorkerAssignments,
 )
-from captains_chair.state import StateStore
+from make_it_so.state import StateStore
 from tests.helpers import app_config, repo_config
 from tests.test_cli_orchestration import _write_config  # pyright: ignore[reportPrivateUsage]
 
@@ -109,14 +109,14 @@ def test_cli_helpers_fail_closed_for_unknown_runtime_shapes(
     class Renderer:
         def render(self, value: Any) -> dict[str, str]:
             assert value is spec
-            return {"unit": "captains-chair.service"}
+            return {"unit": "make-it-so.service"}
 
     def renderer(_kind: str, _executable: str) -> Renderer:
         return Renderer()
 
     monkeypatch.setattr(cli, "build_scheduler", renderer)
     cli.print_schedule_result("systemd", spec, "openclaw")
-    assert json.loads(capsys.readouterr().out)["unit"] == "captains-chair.service"
+    assert json.loads(capsys.readouterr().out)["unit"] == "make-it-so.service"
 
     repo = repo_config(tmp_path).model_copy(update={"orchestrator": "missing"})
     config = app_config(tmp_path, repo_config(tmp_path)).model_copy(

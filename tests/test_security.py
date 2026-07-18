@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from captains_chair.security import safe_changed_paths, scan_secrets
+from make_it_so.security import safe_changed_paths, scan_secrets
 
 
 def test_safe_changed_paths_excludes_escape_sensitive_and_generated_paths(tmp_path: Path) -> None:

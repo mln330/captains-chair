@@ -4,20 +4,20 @@ from pathlib import Path
 
 import pytest
 
-from captains_chair.conformance import (
+from make_it_so.conformance import (
     RuntimeConformanceError,
     run_full_autonomous_workflow,
     run_mixed_blocker_isolation,
     run_technical_recovery_isolation,
     run_user_blocker_isolation,
 )
-from captains_chair.models import (
+from make_it_so.models import (
     ActionKind,
     CompletionPolicy,
     OperationMode,
     PlanDecision,
 )
-from captains_chair.orchestration import QueueCard, QueueCardSpec, QueueStatus, WorkflowOrchestrator
+from make_it_so.orchestration import QueueCard, QueueCardSpec, QueueStatus, WorkflowOrchestrator
 from tests.fakes import InMemoryWorkQueue, PersistentWorkQueue, worker_policy
 from tests.helpers import repo_config
 

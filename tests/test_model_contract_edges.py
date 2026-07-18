@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from captains_chair.models import (
+from make_it_so.models import (
     ApplicationSurface,
     HarnessConfig,
     ModelCapability,

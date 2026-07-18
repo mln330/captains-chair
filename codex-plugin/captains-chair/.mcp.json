@@ -1,9 +1,0 @@
-{
-  "mcpServers": {
-    "captains-chair": {
-      "command": "python",
-      "args": ["scripts/mcp_server.py"],
-      "cwd": "."
-    }
-  }
-}

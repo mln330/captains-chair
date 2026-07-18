@@ -1,11 +1,11 @@
-# Captain's Chair Engineering Guide
+# Make It So Engineering Guide
 
 ## Boundaries
 
 - Keep the core deterministic and harness-neutral.
 - GitHub, model harnesses, notifications, and schedulers are adapters.
 - Managed-repository requirements and roadmaps remain in managed repositories.
-- Operational events, leases, model provenance, and run artifacts belong in CAPTAINS_CHAIR state.
+- Operational events, leases, model provenance, and run artifacts belong in MAKE_IT_SO state.
 - Never commit deployment credentials, live channel IDs, private paths, or runtime databases.
 
 ## Safety

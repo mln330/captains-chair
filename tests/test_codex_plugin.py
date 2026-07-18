@@ -15,20 +15,20 @@ from typing import Any, cast
 import pytest
 import yaml
 
-from captains_chair.direct_orchestrator import DirectOrchestrator
-from captains_chair.models import CourseKind, OperationMode, RepositoryProvisioningConfig
-from captains_chair.orchestration import QueueCardSpec, QueueStatus
-from captains_chair.sidecar import SidecarServer
-from captains_chair.state import StateStore
+from make_it_so.direct_orchestrator import DirectOrchestrator
+from make_it_so.models import CourseKind, OperationMode, RepositoryProvisioningConfig
+from make_it_so.orchestration import QueueCardSpec, QueueStatus
+from make_it_so.sidecar import SidecarServer
+from make_it_so.state import StateStore
 from tests.helpers import app_config, repo_config
 from tests.test_courses import ready_course
 
-PLUGIN_ROOT = Path(__file__).parents[1] / "codex-plugin" / "captains-chair"
-CORE_ROOT = Path(__file__).parents[1] / "src" / "captains_chair"
+PLUGIN_ROOT = Path(__file__).parents[1] / "codex-plugin" / "make-it-so"
+CORE_ROOT = Path(__file__).parents[1] / "src" / "make_it_so"
 
 
 def test_runtime_neutral_core_does_not_import_codex_plugin_modules() -> None:
-    forbidden_prefixes = ("codex_plugin", "captains_chair_codex", "mcp_server", "serve_ui")
+    forbidden_prefixes = ("codex_plugin", "make_it_so_codex", "mcp_server", "serve_ui")
 
     for path in CORE_ROOT.rglob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -45,9 +45,9 @@ def test_codex_plugin_manifest_and_mcp_bridge_are_portable() -> None:
     manifest = json.loads((PLUGIN_ROOT / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8"))
     mcp = json.loads((PLUGIN_ROOT / ".mcp.json").read_text(encoding="utf-8"))
 
-    assert manifest["name"] == "captains-chair"
+    assert manifest["name"] == "make-it-so"
     assert manifest["mcpServers"] == "./.mcp.json"
-    assert mcp["mcpServers"]["captains-chair"]["args"] == ["scripts/mcp_server.py"]
+    assert mcp["mcpServers"]["make-it-so"]["args"] == ["scripts/mcp_server.py"]
 
     completed = subprocess.run(
         [sys.executable, str(PLUGIN_ROOT / "scripts" / "mcp_server.py")],
@@ -62,22 +62,22 @@ def test_codex_plugin_manifest_and_mcp_bridge_are_portable() -> None:
     )
     responses = [json.loads(line) for line in completed.stdout.splitlines()]
     assert completed.returncode == 0
-    assert responses[0]["result"]["serverInfo"]["name"] == "captains-chair"
+    assert responses[0]["result"]["serverInfo"]["name"] == "make-it-so"
     assert {tool["name"] for tool in responses[1]["result"]["tools"]} >= {
-        "captains_chair_doctor",
-        "captains_chair_baseline",
-        "captains_chair_cycle",
-        "captains_chair_planning_session",
-        "captains_chair_usage",
-        "captains_chair_course_create",
-        "captains_chair_course_approve",
-        "captains_chair_course_checkpoint",
-        "captains_chair_attention_ack",
-        "captains_chair_worker_discover",
-        "captains_chair_worker_claim",
-        "captains_chair_worker_heartbeat",
-        "captains_chair_worker_complete",
-        "captains_chair_worker_block",
+        "make_it_so_doctor",
+        "make_it_so_baseline",
+        "make_it_so_cycle",
+        "make_it_so_planning_session",
+        "make_it_so_usage",
+        "make_it_so_course_create",
+        "make_it_so_course_approve",
+        "make_it_so_course_checkpoint",
+        "make_it_so_attention_ack",
+        "make_it_so_worker_discover",
+        "make_it_so_worker_claim",
+        "make_it_so_worker_heartbeat",
+        "make_it_so_worker_complete",
+        "make_it_so_worker_block",
     }
     for tool in responses[1]["result"]["tools"]:
         assert tool["inputSchema"]["additionalProperties"] is False
@@ -109,7 +109,7 @@ def test_codex_tools_create_and_control_every_course_type(tmp_path: Path) -> Non
         )
         review = getattr(course, "readiness_review", None)
         if review is not None:
-            readiness_module = importlib.import_module("captains_chair.readiness")
+            readiness_module = importlib.import_module("make_it_so.readiness")
             input_sha = cast(Any, readiness_module).readiness_input_sha(course)
             course = course.model_copy(
                 update={"readiness_review": review.model_copy(update={"input_sha": input_sha})}
@@ -119,15 +119,15 @@ def test_codex_tools_create_and_control_every_course_type(tmp_path: Path) -> Non
             "repo": "example/project",
             "course": course.model_dump(mode="json"),
         }
-        created = run_tool("captains_chair_course_create", arguments)
+        created = run_tool("make_it_so_course_create", arguments)
         assert created["result"]["course"]["kind"] == kind.value
         readiness = run_tool(
-            "captains_chair_course_readiness",
+            "make_it_so_course_readiness",
             {"config_path": str(config_path), "repo": "example/project", "course_key": course.key},
         )
         assert readiness["result"]["readiness"]["ready"] is True
         approved = run_tool(
-            "captains_chair_course_approve",
+            "make_it_so_course_approve",
             {
                 "config_path": str(config_path),
                 "repo": "example/project",
@@ -137,17 +137,17 @@ def test_codex_tools_create_and_control_every_course_type(tmp_path: Path) -> Non
         )
         assert approved["result"]["course"]["status"] == "engaged"
         paused = run_tool(
-            "captains_chair_course_pause",
+            "make_it_so_course_pause",
             {"config_path": str(config_path), "repo": "example/project", "course_key": course.key},
         )
         assert paused["result"]["course"]["status"] == "paused"
         resumed = run_tool(
-            "captains_chair_course_resume",
+            "make_it_so_course_resume",
             {"config_path": str(config_path), "repo": "example/project", "course_key": course.key},
         )
         assert resumed["result"]["course"]["status"] == "engaged"
         answered = run_tool(
-            "captains_chair_course_answer",
+            "make_it_so_course_answer",
             {
                 "config_path": str(config_path),
                 "repo": "example/project",
@@ -160,7 +160,7 @@ def test_codex_tools_create_and_control_every_course_type(tmp_path: Path) -> Non
         )
         assert answered["result"]["course"]["readiness"][0]["status"] == "answered"
         checkpoint = run_tool(
-            "captains_chair_course_checkpoint",
+            "make_it_so_course_checkpoint",
             {
                 "config_path": str(config_path),
                 "repo": "example/project",
@@ -181,7 +181,7 @@ def test_codex_tools_drive_direct_worker_lifecycle_without_a_board(tmp_path: Pat
     config_path = tmp_path / "config.yaml"
     config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
     adapter = DirectOrchestrator(config.state_dir / "orchestrators" / "example-project.db")
-    board_id = "captains-chair-direct-example-project"
+    board_id = "make-it-so-direct-example-project"
     adapter.ensure_board(board_id, "Direct", "Portable direct work", tmp_path)
     card = adapter.create_card(
         board_id,
@@ -195,17 +195,17 @@ def test_codex_tools_drive_direct_worker_lifecycle_without_a_board(tmp_path: Pat
     }
 
     discovered = run_tool(
-        "captains_chair_worker_discover", {"config_path": str(config_path), "repo": "example/project"}
+        "make_it_so_worker_discover", {"config_path": str(config_path), "repo": "example/project"}
     )
     assert card.id in discovered["output"]
-    claimed = run_tool("captains_chair_worker_claim", {**base, "card": card.id})
+    claimed = run_tool("make_it_so_worker_claim", {**base, "card": card.id})
     assert '"status": "running"' in claimed["output"]
     heartbeat = run_tool(
-        "captains_chair_worker_heartbeat", {**base, "card": card.id, "note": "tests running"}
+        "make_it_so_worker_heartbeat", {**base, "card": card.id, "note": "tests running"}
     )
     assert "tests running" in heartbeat["output"]
     completed = run_tool(
-        "captains_chair_worker_complete",
+        "make_it_so_worker_complete",
         {**base, "card": card.id, "summary": "Implemented", "proof_note": "pytest passed"},
     )
     assert '"status": "done"' in completed["output"]
@@ -216,9 +216,9 @@ def test_codex_tools_drive_direct_worker_lifecycle_without_a_board(tmp_path: Pat
         QueueCardSpec(key="package-2", title="Blocked package", notes="Try it", status=QueueStatus.READY),
     )
     blocked_base = {**base, "card": blocked_card.id, "claim_token": "second-claim"}
-    run_tool("captains_chair_worker_claim", blocked_base)
+    run_tool("make_it_so_worker_claim", blocked_base)
     blocked = run_tool(
-        "captains_chair_worker_block",
+        "make_it_so_worker_block",
         {**blocked_base, "reason": "USER_SECRET: test credential is required"},
     )
     assert '"status": "blocked"' in blocked["output"]
@@ -227,7 +227,7 @@ def test_codex_tools_drive_direct_worker_lifecycle_without_a_board(tmp_path: Pat
     state = StateStore(config.state_dir / "state.db")
     state.note_attention("example/project", "attention-1", "ATTENTION_REQUIRED")
     acknowledged = run_tool(
-        "captains_chair_attention_ack",
+        "make_it_so_attention_ack",
         {"config_path": str(config_path), "repo": "example/project", "fingerprint": "attention-1"},
     )
     assert '"count": 1' in acknowledged["output"]
@@ -236,7 +236,7 @@ def test_codex_tools_drive_direct_worker_lifecycle_without_a_board(tmp_path: Pat
 def test_standalone_server_serves_shared_ui_and_sidecar_api(tmp_path: Path) -> None:
     ui_root = tmp_path / "ui"
     ui_root.mkdir()
-    (ui_root / "index.html").write_text("<html>Captain's Chair</html>", encoding="utf-8")
+    (ui_root / "index.html").write_text("<html>Make It So</html>", encoding="utf-8")
     config = app_config(tmp_path, repo_config(tmp_path)).model_copy(update={"repos": ()})
     config_path = tmp_path / "config.yaml"
     config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
@@ -267,7 +267,7 @@ def test_standalone_server_serves_shared_ui_and_sidecar_api(tmp_path: Path) -> N
         with urllib.request.urlopen(f"{base_url}/", timeout=5) as response:
             html = response.read().decode("utf-8")
             assert response.headers["content-security-policy"].startswith("default-src 'self'")
-        assert "Captain's Chair" in html
+        assert "Make It So" in html
         request = urllib.request.Request(
             f"{base_url}/api/portfolio/status",
             data=b"{}",
@@ -313,7 +313,7 @@ def test_standalone_server_serves_shared_ui_and_sidecar_api(tmp_path: Path) -> N
 def test_standalone_server_requires_and_enforces_token_for_remote_binding(tmp_path: Path) -> None:
     ui_root = tmp_path / "ui"
     ui_root.mkdir()
-    (ui_root / "index.html").write_text("<html>Captain's Chair</html>", encoding="utf-8")
+    (ui_root / "index.html").write_text("<html>Make It So</html>", encoding="utf-8")
     config = app_config(tmp_path, repo_config(tmp_path)).model_copy(update={"repos": ()})
     config_path = tmp_path / "config.yaml"
     config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")

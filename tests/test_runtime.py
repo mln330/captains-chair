@@ -4,10 +4,10 @@ from typing import Any, cast
 
 import pytest
 
-import captains_chair.runtime as runtime
-from captains_chair.command import CommandResult, CommandRunner
-from captains_chair.conformance import run_runtime_conformance
-from captains_chair.models import (
+import make_it_so.runtime as runtime
+from make_it_so.command import CommandResult, CommandRunner
+from make_it_so.conformance import run_runtime_conformance
+from make_it_so.models import (
     ActionKind,
     CompletionPolicy,
     ExternalWorkboardConfig,
@@ -17,7 +17,7 @@ from captains_chair.models import (
     PlanDecision,
     WorkerAssignments,
 )
-from captains_chair.orchestration import (
+from make_it_so.orchestration import (
     NullWorkTracker,
     QueueCard,
     WorkerLifecycleAdapter,
@@ -25,8 +25,8 @@ from captains_chair.orchestration import (
     WorkspaceRef,
     WorkTrackerAdapter,
 )
-from captains_chair.plugins import PluginDiscoveryError
-from captains_chair.runtime import (
+from make_it_so.plugins import PluginDiscoveryError
+from make_it_so.runtime import (
     RuntimeAdapterContractError,
     RuntimeAdapterRegistry,
     RuntimeAdapterUnavailable,
@@ -188,7 +188,7 @@ def test_runtime_registry_discovers_packaged_adapter_once() -> None:
     def register_future(target: Any) -> None:
         target.register("future_runtime", build_future)
 
-    entry_point = FakeEntryPoint("future", "captains_chair.runtime_adapters", register_future)
+    entry_point = FakeEntryPoint("future", "make_it_so.runtime_adapters", register_future)
     assert registry.discover(provider=lambda: [entry_point]) == ("future",)
     assert registry.discover(provider=lambda: [entry_point]) == ()
     assert (
@@ -210,7 +210,7 @@ def test_runtime_plugin_registration_failure_is_explicit() -> None:
 
     with pytest.raises(PluginDiscoveryError, match="failed during registration"):
         registry.discover(
-            provider=lambda: [FakeEntryPoint("broken", "captains_chair.runtime_adapters", broken_plugin)]
+            provider=lambda: [FakeEntryPoint("broken", "make_it_so.runtime_adapters", broken_plugin)]
         )
 
 
@@ -268,7 +268,7 @@ def test_future_runtime_shape_runs_the_shared_workflow_conformance_fixture(
     workspace = WorkspaceRef(
         kind="runtime-test",
         path=tmp_path / "workspace",
-        branch="captains_chair/test/work",
+        branch="make_it_so/test/work",
         push_branch="remote/test/work",
     )
     lifecycle_completions: list[str] = []
@@ -311,7 +311,7 @@ def test_future_runtime_shape_runs_the_shared_workflow_conformance_fixture(
     assert len(lifecycle_completions) == 7
     workflow_cards = [
         card
-        for card in queue.list_cards("captains-chair-example-project")
+        for card in queue.list_cards("make-it-so-example-project")
         if "workflow:future-runtime-conformance" in card.labels
     ]
     assert workflow_cards

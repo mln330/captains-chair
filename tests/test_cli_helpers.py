@@ -8,9 +8,9 @@ from typing import Any, cast
 
 import pytest
 
-import captains_chair.cli as cli
-from captains_chair.courses import CourseStore
-from captains_chair.models import (
+import make_it_so.cli as cli
+from make_it_so.courses import CourseStore
+from make_it_so.models import (
     ActionKind,
     EventRecord,
     OpenClawWorkboardConfig,
@@ -18,8 +18,8 @@ from captains_chair.models import (
     PlanDecision,
     WorkerAssignments,
 )
-from captains_chair.orchestration import QueueStatus, ReconcileResult
-from captains_chair.state import StateStore
+from make_it_so.orchestration import QueueStatus, ReconcileResult
+from make_it_so.state import StateStore
 from tests.helpers import app_config, repo_config
 from tests.test_cli_orchestration import _write_config  # pyright: ignore[reportPrivateUsage]
 from tests.test_courses import ready_course
@@ -188,11 +188,11 @@ def test_worker_protocol_preflight_covers_missing_and_invocation_failures(
 ) -> None:
     assert cli._preflight_worker_protocol(SimpleNamespace()) is None  # pyright: ignore[reportPrivateUsage]
     blank = cli._preflight_worker_protocol(  # pyright: ignore[reportPrivateUsage]
-        SimpleNamespace(config=SimpleNamespace(captains_chair_command=("",)))
+        SimpleNamespace(config=SimpleNamespace(make_it_so_command=("",)))
     )
     assert blank == {"status": "failed", "error": "worker lifecycle helper command has no executable"}
     missing = cli._preflight_worker_protocol(  # pyright: ignore[reportPrivateUsage]
-        SimpleNamespace(config=SimpleNamespace(captains_chair_command=("missing-helper",)))
+        SimpleNamespace(config=SimpleNamespace(make_it_so_command=("missing-helper",)))
     )
     assert missing is not None and missing["status"] == "failed"
 
@@ -201,7 +201,7 @@ def test_worker_protocol_preflight_covers_missing_and_invocation_failures(
 
     monkeypatch.setattr(cli, "run_command", failing_command)
     failed = cli._preflight_worker_protocol(  # pyright: ignore[reportPrivateUsage]
-        SimpleNamespace(config=SimpleNamespace(captains_chair_command=(sys.executable,)))
+        SimpleNamespace(config=SimpleNamespace(make_it_so_command=(sys.executable,)))
     )
     assert failed is not None
     assert failed["status"] == "failed"
@@ -211,7 +211,7 @@ def test_worker_protocol_preflight_covers_missing_and_invocation_failures(
 def test_worker_protocol_preflight_accepts_a_working_module_command() -> None:
     result = cli._preflight_worker_protocol(  # pyright: ignore[reportPrivateUsage]
         SimpleNamespace(
-            config=SimpleNamespace(captains_chair_command=(sys.executable, "-m", "captains_chair"))
+            config=SimpleNamespace(make_it_so_command=(sys.executable, "-m", "make_it_so"))
         )
     )
     assert result == {"status": "passed", "executable": sys.executable}
@@ -221,10 +221,10 @@ def test_direct_orchestrator_defaults_are_stable_and_board_free(tmp_path: Path) 
     repo = repo_config(tmp_path)
     config = app_config(tmp_path, repo)
     direct = cli._default_direct_orchestrator_config(config, repo)  # pyright: ignore[reportPrivateUsage]
-    assert direct.board_prefix == "captains-chair-direct"
+    assert direct.board_prefix == "make-it-so-direct"
     assert direct.database_path.parent == config.state_dir / "orchestrators"
-    assert direct.workers.coder.startswith("captains-chair-example-project-coder")
-    assert cli._board_id(config, repo.full_name) == "captains-chair-direct-example-project"  # pyright: ignore[reportPrivateUsage]
+    assert direct.workers.coder.startswith("make-it-so-example-project-coder")
+    assert cli._board_id(config, repo.full_name) == "make-it-so-direct-example-project"  # pyright: ignore[reportPrivateUsage]
 
 
 def _openclaw_config(tmp_path: Path) -> tuple[Any, Any]:
@@ -358,7 +358,7 @@ def test_main_schema_status_and_usage_report_commands(tmp_path: Path, capsys: An
     assert status["events"] == []
 
     assert cli.main(["--config", str(config_path), "usage", "report", "--summary"]) == 0
-    assert "Captain's Chair token audit" in capsys.readouterr().out
+    assert "Make It So token audit" in capsys.readouterr().out
 
 
 def test_main_planning_session_uses_durable_course_context(tmp_path: Path, capsys: Any) -> None:
@@ -498,7 +498,7 @@ def test_main_schedule_commands_build_expected_specs(
         == 0
     )
     assert captured[0][0] == "cron"
-    assert captured[0][1].name.startswith("captains-chair-watch-")
+    assert captured[0][1].name.startswith("make-it-so-watch-")
     assert "--watch" in captured[0][1].argv
     capsys.readouterr()
 
@@ -516,7 +516,7 @@ def test_main_schedule_commands_build_expected_specs(
         )
         == 0
     )
-    assert captured[1][1].name == "captains-chair-dispatch-example-project"
+    assert captured[1][1].name == "make-it-so-dispatch-example-project"
     assert "orchestrate" in captured[1][1].argv
 
 
@@ -529,7 +529,7 @@ def test_main_orchestrate_status_and_diagnostics_are_read_only(
 
     class Adapter:
         def list_cards(self, board_id: str) -> list[Any]:
-            assert board_id == "captains-chair-example-project"
+            assert board_id == "make-it-so-example-project"
             return []
 
         def diagnostics(self) -> dict[str, Any]:

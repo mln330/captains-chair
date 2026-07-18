@@ -43,8 +43,8 @@ describe("shared dashboard components", () => {
         if (path.includes("portfolio/status")) return Promise.resolve(response({ repos: [repo] }));
         if (path.includes("courses/list")) return Promise.resolve(response({ courses: [{ repository: repo.full_name, course, readiness: { ready: true } }] }));
         if (path.includes("models/config")) return Promise.resolve(response({ global_profiles: {}, runtime_profiles: {}, runtimes: ["openclaw"], usage: { daily_token_limit: null, model_daily_token_limits: {}, block_on_unknown: true } }));
-        if (path.includes("schedule/status")) return Promise.resolve(response({ status: "inspected", jobs: [{ name: "captains-chair-course-review", every: "2h", enabled: true, health: "healthy" }, { name: "captains-chair-reconcile", every: "5m", enabled: true, health: "healthy" }] }));
-        if (path.includes("schedule/install")) return Promise.resolve(response({ jobs: [{ name: "captains-chair-course-review" }] }));
+        if (path.includes("schedule/status")) return Promise.resolve(response({ status: "inspected", jobs: [{ name: "make-it-so-course-review", every: "2h", enabled: true, health: "healthy" }, { name: "make-it-so-reconcile", every: "5m", enabled: true, health: "healthy" }] }));
+        if (path.includes("schedule/install")) return Promise.resolve(response({ jobs: [{ name: "make-it-so-course-review" }] }));
         return Promise.resolve(response({ status: "updated" }));
       }),
     );

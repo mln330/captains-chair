@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from captains_chair.command import run_command
-from captains_chair.conformance import run_full_autonomous_workflow
-from captains_chair.models import (
+from make_it_so.command import run_command
+from make_it_so.conformance import run_full_autonomous_workflow
+from make_it_so.models import (
     ActionKind,
     CompletionPolicy,
     NotificationConfig,
@@ -12,8 +12,8 @@ from captains_chair.models import (
     PlanDecision,
     RepoConfig,
 )
-from captains_chair.orchestration import QueueCard, WorkflowOrchestrator, WorkspaceRef
-from captains_chair.worktrees import WorktreeManager
+from make_it_so.orchestration import QueueCard, WorkflowOrchestrator, WorkspaceRef
+from make_it_so.worktrees import WorktreeManager
 from tests.fakes import InMemoryWorkQueue, worker_policy
 
 
@@ -24,7 +24,7 @@ def git(cwd: Path | None, *args: str) -> str:
 
 
 def commit(cwd: Path, message: str) -> None:
-    git(cwd, "-c", "user.name=CAPTAINS_CHAIR Test", "-c", "user.email=captains_chair@example.test", "commit", "-m", message)
+    git(cwd, "-c", "user.name=MAKE_IT_SO Test", "-c", "user.email=make_it_so@example.test", "commit", "-m", message)
 
 
 def test_real_git_worktrees_keep_parallel_lanes_isolated(tmp_path: Path) -> None:
@@ -32,8 +32,8 @@ def test_real_git_worktrees_keep_parallel_lanes_isolated(tmp_path: Path) -> None
     repo_root = tmp_path / "repo"
     git(None, "init", "--bare", str(bare))
     git(None, "init", "--initial-branch=main", str(repo_root))
-    git(repo_root, "config", "user.name", "CAPTAINS_CHAIR Test")
-    git(repo_root, "config", "user.email", "captains_chair@example.test")
+    git(repo_root, "config", "user.name", "MAKE_IT_SO Test")
+    git(repo_root, "config", "user.email", "make_it_so@example.test")
     (repo_root / "README.md").write_text("# Disposable project\n", encoding="utf-8")
     (repo_root / "ISSUES_EXECUTION_PLAN.md").write_text("# Plan\n", encoding="utf-8")
     git(repo_root, "add", "README.md", "ISSUES_EXECUTION_PLAN.md")
@@ -60,20 +60,20 @@ def test_real_git_worktrees_keep_parallel_lanes_isolated(tmp_path: Path) -> None
     )
     git(documentation.path, "add", "ISSUES_EXECUTION_PLAN.md")
     commit(documentation.path, "Update durable plan")
-    git(documentation.path, "push", "origin", "HEAD:refs/heads/captains_chair/docs/plan")
+    git(documentation.path, "push", "origin", "HEAD:refs/heads/make_it_so/docs/plan")
     review = manager.checkout_existing(
         repo,
         "pr-35-head-1",
-        "captains_chair/docs/plan",
+        "make_it_so/docs/plan",
         lane="review",
     )
 
     assert git(repo_root, "branch", "--show-current") == "main"
     assert git(repo_root, "status", "--porcelain") == ""
-    assert git(implementation.path, "branch", "--show-current") == "captains_chair/work/issue-39"
-    assert git(documentation.path, "branch", "--show-current") == "captains_chair/docs/plan-sync"
-    assert git(review.path, "branch", "--show-current") == "captains_chair/review/pr-35-head-1"
-    assert review.push_branch == "captains_chair/docs/plan"
+    assert git(implementation.path, "branch", "--show-current") == "make_it_so/work/issue-39"
+    assert git(documentation.path, "branch", "--show-current") == "make_it_so/docs/plan-sync"
+    assert git(review.path, "branch", "--show-current") == "make_it_so/review/pr-35-head-1"
+    assert review.push_branch == "make_it_so/docs/plan"
     assert not (repo_root / "feature.txt").exists()
     worktrees = git(repo_root, "worktree", "list", "--porcelain")
     normalized_worktrees = worktrees.replace("\\", "/")
@@ -95,8 +95,8 @@ def test_disposable_autonomous_workflow_pushes_and_verifies_default_branch(tmp_p
     repo_root = tmp_path / "repo"
     git(None, "init", "--bare", str(bare))
     git(None, "init", "--initial-branch=main", str(repo_root))
-    git(repo_root, "config", "user.name", "CAPTAINS_CHAIR Test")
-    git(repo_root, "config", "user.email", "captains_chair@example.test")
+    git(repo_root, "config", "user.name", "MAKE_IT_SO Test")
+    git(repo_root, "config", "user.email", "make_it_so@example.test")
     (repo_root / "README.md").write_text("# Disposable project\n", encoding="utf-8")
     (repo_root / "ISSUES_EXECUTION_PLAN.md").write_text("# Plan\n", encoding="utf-8")
     git(repo_root, "add", "README.md", "ISSUES_EXECUTION_PLAN.md")

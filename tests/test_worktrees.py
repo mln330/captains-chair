@@ -3,9 +3,9 @@ from pathlib import Path
 
 import pytest
 
-from captains_chair.command import CommandResult
-from captains_chair.models import NotificationConfig, RepoConfig
-from captains_chair.worktrees import Worktree, WorktreeManager
+from make_it_so.command import CommandResult
+from make_it_so.models import NotificationConfig, RepoConfig
+from make_it_so.worktrees import Worktree, WorktreeManager
 
 
 def test_create_resumes_matching_existing_worktree(tmp_path: Path) -> None:
@@ -27,7 +27,7 @@ def test_create_resumes_matching_existing_worktree(tmp_path: Path) -> None:
         args = list(command)
         commands.append(args)
         if args[-2:] == ["branch", "--show-current"]:
-            return CommandResult(0, "captains_chair/work/issue-6\n", "")
+            return CommandResult(0, "make_it_so/work/issue-6\n", "")
         if args[-2:] == ["rev-parse", "--show-toplevel"] and str(existing) in args:
             return CommandResult(0, str(existing) + "\n", "")
         if args[-2:] in (["rev-parse", "HEAD"], ["rev-parse", "origin/main"]):
@@ -44,7 +44,7 @@ def test_create_resumes_matching_existing_worktree(tmp_path: Path) -> None:
     worktree = WorktreeManager(root, runner).create(repo, "issue-6")
 
     assert worktree.path == existing.resolve()
-    assert worktree.branch == "captains_chair/work/issue-6"
+    assert worktree.branch == "make_it_so/work/issue-6"
     assert not any("worktree" in command and "add" in command for command in commands)
 
 
@@ -73,7 +73,7 @@ def test_create_uses_origin_default_branch_and_isolated_path(tmp_path: Path) -> 
 
     worktree = WorktreeManager(tmp_path / "state" / "worktrees", runner).create(repo, "issue-6")
 
-    assert worktree.branch == "captains_chair/work/issue-6"
+    assert worktree.branch == "make_it_so/work/issue-6"
     add = next(command for command in commands if "worktree" in command and "add" in command)
     assert "origin/main" in add
     assert worktree.path.is_relative_to((tmp_path / "state" / "worktrees").resolve())
@@ -121,10 +121,10 @@ def test_checkout_existing_keeps_local_repair_branch_separate_from_pr_push_branc
     )
 
     add = next(command for command in commands if "worktree" in command and "add" in command)
-    assert worktree.branch == "captains_chair/repair/repair-1"
+    assert worktree.branch == "make_it_so/repair/repair-1"
     assert worktree.push_branch == "feature/current-pr"
     assert worktree.base == "origin/main"
-    assert "captains_chair/repair/repair-1" in add
+    assert "make_it_so/repair/repair-1" in add
     assert "origin/feature/current-pr" in add
 
 
@@ -156,14 +156,14 @@ def test_checkout_existing_supports_a_review_lane_without_changing_pr_push_branc
     worktree = WorktreeManager(tmp_path / "state" / "worktrees", runner).checkout_existing(
         repo,
         "pr-35-head-1",
-        "captains_chair/docs/plan",
+        "make_it_so/docs/plan",
         lane="review",
     )
 
     add = next(command for command in commands if "worktree" in command and "add" in command)
-    assert worktree.branch == "captains_chair/review/pr-35-head-1"
-    assert worktree.push_branch == "captains_chair/docs/plan"
-    assert "captains_chair/review/pr-35-head-1" in add
+    assert worktree.branch == "make_it_so/review/pr-35-head-1"
+    assert worktree.push_branch == "make_it_so/docs/plan"
+    assert "make_it_so/review/pr-35-head-1" in add
 
 
 def test_create_rejects_existing_worktree_with_wrong_branch(tmp_path: Path) -> None:
@@ -185,7 +185,7 @@ def test_create_rejects_existing_worktree_with_wrong_branch(tmp_path: Path) -> N
         if args[-2:] == ["rev-parse", "--show-toplevel"]:
             return CommandResult(0, str(existing) + "\n", "") if str(existing) in args else CommandResult(0, "repo\n", "")
         if args[-2:] == ["branch", "--show-current"]:
-            return CommandResult(0, "captains_chair/work/different\n", "")
+            return CommandResult(0, "make_it_so/work/different\n", "")
         return CommandResult(0, "", "")
 
     repo = RepoConfig(
@@ -218,7 +218,7 @@ def test_create_rejects_matching_existing_worktree_when_dirty(tmp_path: Path) ->
         if args[-2:] == ["rev-parse", "--show-toplevel"]:
             return CommandResult(0, str(existing) + "\n", "") if str(existing) in args else CommandResult(0, "repo\n", "")
         if args[-2:] == ["branch", "--show-current"]:
-            return CommandResult(0, "captains_chair/work/issue-6\n", "")
+            return CommandResult(0, "make_it_so/work/issue-6\n", "")
         if args[-2:] == ["status", "--porcelain"]:
             return CommandResult(0, " M unfinished.txt\n", "")
         return CommandResult(0, "", "")
@@ -253,7 +253,7 @@ def test_create_rejects_clean_existing_worktree_on_stale_head(tmp_path: Path) ->
         if args[-2:] == ["rev-parse", "--show-toplevel"]:
             return CommandResult(0, str(existing) + "\n", "") if str(existing) in args else CommandResult(0, "repo\n", "")
         if args[-2:] == ["branch", "--show-current"]:
-            return CommandResult(0, "captains_chair/work/issue-6\n", "")
+            return CommandResult(0, "make_it_so/work/issue-6\n", "")
         if args[-2:] == ["status", "--porcelain"]:
             return CommandResult(0, "", "")
         if args[-2:] == ["rev-parse", "HEAD"]:
@@ -370,10 +370,10 @@ def test_remove_disposable_only_force_removes_ux_worktrees(tmp_path: Path) -> No
     with pytest.raises(ValueError, match="non-UX"):
         manager.remove_disposable(
             repo,
-            Worktree(path=path, branch="captains_chair/work/ux-1", base="origin/main", push_branch="captains_chair/work/ux-1"),
+            Worktree(path=path, branch="make_it_so/work/ux-1", base="origin/main", push_branch="make_it_so/work/ux-1"),
         )
     manager.remove_disposable(
         repo,
-        Worktree(path=path, branch="captains_chair/repair/ux-1", base="origin/main", push_branch="captains_chair/repair/ux-1"),
+        Worktree(path=path, branch="make_it_so/repair/ux-1", base="origin/main", push_branch="make_it_so/repair/ux-1"),
     )
     assert any("--force" in command for command in commands)

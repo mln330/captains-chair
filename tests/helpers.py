@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from captains_chair.models import (
+from make_it_so.models import (
     AppConfig,
     CompletionPolicy,
     HarnessConfig,

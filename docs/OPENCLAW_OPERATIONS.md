@@ -1,7 +1,7 @@
 # OpenClaw Operations Runbook
 
-This is the V1 operating sequence for CAPTAINS_CHAIR on OpenClaw. Repository plans and
-requirements stay in the managed repository. CAPTAINS_CHAIR state, queue evidence, usage
+This is the V1 operating sequence for MAKE_IT_SO on OpenClaw. Repository plans and
+requirements stay in the managed repository. MAKE_IT_SO state, queue evidence, usage
 records, and leases stay in the configured state directory. OpenClaw Workboard
 is the preferred P0 worker tracker and orchestration adapter, but the core can
 fall back to `DirectOrchestrator` with no board.
@@ -15,10 +15,10 @@ read-only commands `status`, `usage report`, `orchestrate health`, and
 `orchestrate preflight` remain available.
 
 ```bash
-captains_chair --config "$CAPTAINS_CHAIR_CONFIG" status --repo OWNER/REPO
-captains_chair --config "$CAPTAINS_CHAIR_CONFIG" usage report --repo OWNER/REPO --since 2026-01-01T00:00:00Z
-captains_chair --config "$CAPTAINS_CHAIR_CONFIG" orchestrate health --repo OWNER/REPO
-captains_chair --config "$CAPTAINS_CHAIR_CONFIG" orchestrate preflight --repo OWNER/REPO
+make_it_so --config "$MAKE_IT_SO_CONFIG" status --repo OWNER/REPO
+make_it_so --config "$MAKE_IT_SO_CONFIG" usage report --repo OWNER/REPO --since 2026-01-01T00:00:00Z
+make_it_so --config "$MAKE_IT_SO_CONFIG" orchestrate health --repo OWNER/REPO
+make_it_so --config "$MAKE_IT_SO_CONFIG" orchestrate preflight --repo OWNER/REPO
 ```
 
 The preflight may report preserved queue findings while the repository is
@@ -43,7 +43,7 @@ Use **Create from the Chair** in the dashboard for a repository that does not ex
 yet. This creates a local readiness review only. It does not call GitHub, create a
 remote, or push source. The owner answers the course questions and explicitly engages
 the course; only then does `course.approve` seed the README, implementation plan, and
-`.captains-chair/project.yaml`, initialize a committed local source, and ask the GitHub
+`.make-it-so/project.yaml`, initialize a committed local source, and ask the GitHub
 provider to create and verify the remote repository. A failed provider call is reported
 as a greenfield provisioning error and the course remains unengaged for retry or repair.
 
@@ -68,9 +68,9 @@ before unattended work:
    `--run` dispatches a real worker and consumes runtime usage.
 
 ```bash
-captains_chair --config "$CAPTAINS_CHAIR_CONFIG" orchestrate canary --repo OWNER/REPO
-captains_chair --config "$CAPTAINS_CHAIR_CONFIG" orchestrate canary --repo OWNER/REPO --run
-captains_chair --config "$CAPTAINS_CHAIR_CONFIG" orchestrate canary --repo OWNER/REPO --check
+make_it_so --config "$MAKE_IT_SO_CONFIG" orchestrate canary --repo OWNER/REPO
+make_it_so --config "$MAKE_IT_SO_CONFIG" orchestrate canary --repo OWNER/REPO --run
+make_it_so --config "$MAKE_IT_SO_CONFIG" orchestrate canary --repo OWNER/REPO --check
 ```
 
 6. Run one supervised documentation task and one supervised implementation
@@ -82,7 +82,7 @@ captains_chair --config "$CAPTAINS_CHAIR_CONFIG" orchestrate canary --repo OWNER
    `deterministic/no-model`; a model-assigned merge card is configuration drift
    and must not be dispatched.
 8. Install or restore the managed schedules only after the canary and bounded
-   autonomous PR pass. Use the dashboard or `openclaw captains-chair schedule`
+   autonomous PR pass. Use the dashboard or `openclaw make-it-so schedule`
    commands to inspect, edit, pause, resume, remove, or reconcile them. Pausing
    a live OpenClaw cron survives plugin restarts and ordinary reconciliation.
    Keep worker reconciliation frequent enough to claim ready cards; the Captain
@@ -90,7 +90,7 @@ captains_chair --config "$CAPTAINS_CHAIR_CONFIG" orchestrate canary --repo OWNER
 
 ## Existing Queue Migration
 
-When adopting CAPTAINS_CHAIR over an older OpenClaw queue, preserve existing branches,
+When adopting MAKE_IT_SO over an older OpenClaw queue, preserve existing branches,
 PRs, and cards as evidence. A stale card is not proof that its work is safe to
 repeat. Before resuming:
 

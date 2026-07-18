@@ -8,17 +8,17 @@ from typing import Any, Literal, cast
 
 import pytest
 
-import captains_chair.completion_gate as completion_gate
-import captains_chair.direct_orchestrator as direct
-import captains_chair.direct_workers as direct_workers
-from captains_chair.command import CommandResult
-from captains_chair.direct_orchestrator import DirectOrchestrator
-from captains_chair.direct_workers import (
+import make_it_so.completion_gate as completion_gate
+import make_it_so.direct_orchestrator as direct
+import make_it_so.direct_workers as direct_workers
+from make_it_so.command import CommandResult
+from make_it_so.direct_orchestrator import DirectOrchestrator
+from make_it_so.direct_workers import (
     CommandWorkerExecutor,
     WorkerExecutionError,
     WorkerExecutionResult,
 )
-from captains_chair.models import (
+from make_it_so.models import (
     ActionKind,
     ApplicationSurface,
     Checkpoint,
@@ -36,8 +36,8 @@ from captains_chair.models import (
     ReviewVerdict,
     WorkPackage,
 )
-from captains_chair.orchestration import QueueCard, QueueCardSpec, QueueStatus
-from captains_chair.readiness import ReadinessReviewDecision, apply_readiness_review
+from make_it_so.orchestration import QueueCard, QueueCardSpec, QueueStatus
+from make_it_so.readiness import ReadinessReviewDecision, apply_readiness_review
 from tests.helpers import repo_config
 from tests.test_courses import course, ready_course
 from tests.test_readiness_review import decision as readiness_decision

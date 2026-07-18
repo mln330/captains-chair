@@ -1,6 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
 
-const e2ePort = process.env.CAPTAINS_CHAIR_E2E_PORT ?? "4191";
+const e2ePort = process.env.MAKE_IT_SO_E2E_PORT ?? "4191";
 
 export default defineConfig({
   testDir: "./tests-e2e",

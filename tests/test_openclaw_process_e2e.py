@@ -4,14 +4,14 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from captains_chair.canary import (
+from make_it_so.canary import (
     build_canary_spec,
     canary_board_id,
     evaluate_canary_card,
 )
-from captains_chair.command import CommandResult, run_command
-from captains_chair.conformance import run_runtime_conformance
-from captains_chair.models import (
+from make_it_so.command import CommandResult, run_command
+from make_it_so.conformance import run_runtime_conformance
+from make_it_so.models import (
     ActionKind,
     CompletionPolicy,
     OpenClawWorkboardConfig,
@@ -19,8 +19,8 @@ from captains_chair.models import (
     PlanDecision,
     WorkerAssignments,
 )
-from captains_chair.openclaw_workboard import OpenClawWorkboardAdapter
-from captains_chair.orchestration import QueueStatus, WorkflowOrchestrator, WorkspaceRef
+from make_it_so.openclaw_workboard import OpenClawWorkboardAdapter
+from make_it_so.orchestration import QueueStatus, WorkflowOrchestrator, WorkspaceRef
 from tests.helpers import repo_config
 
 FAKE_OPENCLAW = r'''
@@ -73,7 +73,7 @@ if args[:4] == ["config", "get", "agents.defaults.subagents", "--json"]:
 
 if args and args[0] == "agent":
     message = args[args.index("--message") + 1]
-    marker = "CAPTAINS_CHAIR_CANARY_PROOF:"
+    marker = "MAKE_IT_SO_CANARY_PROOF:"
     suffix = "process-e2e"
     if marker in message:
         suffix = message.split(marker, 1)[1].split("`", 1)[0].split()[0]
@@ -350,7 +350,7 @@ def test_openclaw_adapter_crosses_real_process_boundary_for_canary(tmp_path: Pat
     executable.write_text(FAKE_OPENCLAW, encoding="utf-8")
     config = OpenClawWorkboardConfig(
         executable=sys.executable,
-        captains_chair_command=(
+        make_it_so_command=(
             sys.executable,
             "-c",
             (
@@ -416,7 +416,7 @@ def test_openclaw_adapter_crosses_real_process_boundary_for_full_conformance(
     executable.write_text(FAKE_OPENCLAW_WORKBOARD, encoding="utf-8")
     config = OpenClawWorkboardConfig(
         executable=sys.executable,
-        captains_chair_command=(
+        make_it_so_command=(
             sys.executable,
             "-c",
             (
@@ -455,7 +455,7 @@ def test_openclaw_adapter_crosses_real_process_boundary_for_full_conformance(
     adapter = OpenClawWorkboardAdapter(config, process_runner)
     orchestrator = WorkflowOrchestrator(adapter, config)
     repo = repo_config(tmp_path, mode=OperationMode.AUTONOMOUS, completion=CompletionPolicy.AUTO_MERGE).model_copy(
-        update={"orchestration_board": "captains-chair-process-e2e"}
+        update={"orchestration_board": "make-it-so-process-e2e"}
     )
     decision = PlanDecision(
         action=ActionKind.IMPLEMENT,
@@ -467,8 +467,8 @@ def test_openclaw_adapter_crosses_real_process_boundary_for_full_conformance(
     workspace = WorkspaceRef(
         kind="worktree",
         path=tmp_path / "process-worktree",
-        branch="captains_chair/process-work",
-        push_branch="captains_chair/process-work",
+        branch="make_it_so/process-work",
+        push_branch="make_it_so/process-work",
     )
 
     report = run_runtime_conformance(
