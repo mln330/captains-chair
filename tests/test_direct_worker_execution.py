@@ -79,7 +79,21 @@ class StructuredWorkerRunner:
         if len(argv) > 1 and argv[1] == "exec":
             output_path = Path(argv[argv.index("--output-last-message") + 1])
             output_path.write_text(json.dumps(payload), encoding="utf-8")
-            return CommandResult(0, json.dumps({"type": "turn.completed"}), "")
+            return CommandResult(
+                0,
+                json.dumps(
+                    {
+                        "type": "turn.completed",
+                        "usage": {
+                            "input_tokens": 120,
+                            "cached_input_tokens": 40,
+                            "output_tokens": 12,
+                            "reasoning_output_tokens": 3,
+                        },
+                    }
+                ),
+                "",
+            )
         envelope = {"result": {"payloads": [{"text": json.dumps(payload)}]}}
         return CommandResult(0, json.dumps(envelope), "")
 
@@ -135,17 +149,14 @@ def test_direct_runtime_completes_workflow_without_workboard(
     assert runner.commands
     assert all("Attempt ID / idempotency key:" in prompt for prompt in runner.prompts)
     assert all(f"Exact working directory: {workspace.resolve()}" in prompt for prompt in runner.prompts)
-    assert all("Do not call Workboard tools or lifecycle helper commands" in prompt for prompt in runner.prompts)
+    assert all(
+        "Do not call Workboard tools or lifecycle helper commands" in prompt for prompt in runner.prompts
+    )
     assert all("returning the JSON object requested below" in prompt for prompt in runner.prompts)
     if runtime == "codex":
         assert all("workspace-write" in command for command in runner.commands)
-        routed_models = [
-            command[command.index("--model") + 1] for command in runner.commands
-        ]
-        assert all(
-            not model.startswith("codex/")
-            for model in routed_models
-        )
+        routed_models = [command[command.index("--model") + 1] for command in runner.commands]
+        assert all(not model.startswith("codex/") for model in routed_models)
         assert "gpt-5.3-codex-spark" in routed_models
     else:
         assert all(command[1:3] == ["agent", "--agent"] for command in runner.commands)
@@ -212,6 +223,35 @@ def test_merge_worker_prompt_allows_only_explicit_merge_stage_action(tmp_path: P
     assert "Do not merge, release, deploy, expose secrets" not in prompt
 
 
+def test_codex_worker_captures_provider_usage_for_workboard_audit(tmp_path: Path) -> None:
+    runner = StructuredWorkerRunner()
+    executor = CommandWorkerExecutor("codex", "codex", runner)
+    card = QueueCard(
+        id="implementation-1",
+        title="Implement the bounded change",
+        status=QueueStatus.READY,
+        labels=("stage:implementation",),
+        notes="Implement and test the requested change.",
+    )
+
+    result = executor.execute(
+        card,
+        attempt_id="attempt-spark-1",
+        workspace=tmp_path,
+        model="codex/gpt-5.3-codex-spark",
+        timeout_seconds=60,
+    )
+
+    assert result.telemetry is not None
+    assert result.telemetry.runtime == "codex"
+    assert result.telemetry.requested_model == "gpt-5.3-codex-spark"
+    assert result.telemetry.attempt_id == "attempt-spark-1"
+    assert result.telemetry.usage.input_tokens == 120
+    assert result.telemetry.usage.cached_input_tokens == 40
+    assert result.telemetry.usage.reasoning_tokens == 3
+    assert result.telemetry.usage.output_tokens == 12
+
+
 def test_direct_claims_are_atomic_under_overlapping_workers(tmp_path: Path) -> None:
     adapter = DirectOrchestrator(tmp_path / "direct.db")
     adapter.ensure_board("board", "Board", "Concurrent claim fixture", tmp_path)
@@ -255,9 +295,7 @@ def test_expired_leases_retry_then_block_and_cancellation_rejects_late_results(
     adapter.dispatch("board")
     first = adapter.claim_card(card.id, owner_id="worker-1", token="token-1")
     first_expiry = datetime.fromisoformat(first.metadata["claim"]["expiresAt"])
-    assert adapter.recover_expired_claims(
-        "board", now=first_expiry + timedelta(seconds=1)
-    ) == (card.id,)
+    assert adapter.recover_expired_claims("board", now=first_expiry + timedelta(seconds=1)) == (card.id,)
     assert adapter.list_cards("board")[0].status == QueueStatus.READY
 
     adapter.claim_card(card.id, owner_id="worker-2", token="token-2")
@@ -269,10 +307,7 @@ def test_expired_leases_retry_then_block_and_cancellation_rejects_late_results(
     assert cancelled.status == QueueStatus.BLOCKED
     assert cancelled.metadata["workerProtocol"]["state"] == "cancelled"
     assert cancelled.metadata["workerProtocol"]["detail"].startswith("CANCELLED:")
-    assert (
-        classify_blocker(cancelled.metadata["workerProtocol"]["detail"])
-        == BlockerKind.CANCELLATION
-    )
+    assert classify_blocker(cancelled.metadata["workerProtocol"]["detail"]) == BlockerKind.CANCELLATION
     with pytest.raises(PermissionError, match="no active claim"):
         adapter.complete_claimed_card(
             card.id,
@@ -298,9 +333,7 @@ def test_expired_claim_cannot_complete_before_recovery_and_technical_block_count
 ) -> None:
     adapter = DirectOrchestrator(tmp_path / "direct.db")
     adapter.ensure_board("board", "Board", "Late completion fixture", tmp_path)
-    card = adapter.create_card(
-        "board", QueueCardSpec(key="card", title="Card", notes="Reject stale proof")
-    )
+    card = adapter.create_card("board", QueueCardSpec(key="card", title="Card", notes="Reject stale proof"))
     adapter.dispatch("board")
     claimed = adapter.claim_card(card.id, owner_id="worker", token="token")
     metadata = dict(claimed.metadata)
@@ -359,9 +392,7 @@ def test_openclaw_retry_uses_fresh_attempt_session_key(tmp_path: Path) -> None:
         timeout_seconds=60,
     )
 
-    session_keys = [
-        command[command.index("--session-key") + 1] for command in runner.commands
-    ]
+    session_keys = [command[command.index("--session-key") + 1] for command in runner.commands]
     assert session_keys[0] != session_keys[1]
     assert session_keys[0].endswith(":attempt-one")
     assert session_keys[1].endswith(":attempt-two")

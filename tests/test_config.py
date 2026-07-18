@@ -25,6 +25,7 @@ from make_it_so.models import (
     TokenUsageRecord,
     UsageConfig,
     WorkerAssignments,
+    WorkerRuntimeAssignments,
 )
 from tests.helpers import app_config, model_policy, repo_config
 
@@ -51,6 +52,23 @@ def test_openclaw_workboard_rejects_model_worker_merge_execution() -> None:
                 merger="merger",
                 verifier="verifier",
             ),
+        )
+
+
+def test_openclaw_workboard_requires_executable_for_direct_codex_worker() -> None:
+    with pytest.raises(ValueError, match="require codex_executable"):
+        OpenClawWorkboardConfig(
+            workers=WorkerAssignments(
+                captain="captain",
+                coder="coder",
+                reviewer="reviewer",
+                tester="tester",
+                ux_reviewer="ux",
+                final_reviewer="final",
+                merger="merger",
+                verifier="verifier",
+            ),
+            worker_runtimes=WorkerRuntimeAssignments(coder="codex"),
         )
 
 
@@ -136,9 +154,7 @@ def test_config_helpers_reject_non_object_yaml(tmp_path: Path) -> None:
     "field_value",
     ("../outside.md", "/tmp/outside.md", "C:\\outside.md", "."),
 )
-def test_repository_document_paths_cannot_escape_checkout(
-    tmp_path: Path, field_value: str
-) -> None:
+def test_repository_document_paths_cannot_escape_checkout(tmp_path: Path, field_value: str) -> None:
     with pytest.raises(ValidationError, match="repository document paths"):
         RepoConfig(
             full_name="example/project",
@@ -374,7 +390,10 @@ def test_public_example_uses_documented_balanced_model_routes() -> None:
     assert openclaw.profiles["strategist"].primary.agent == "github-final"
     assert openclaw.profiles["fast_coder"].primary.model == "codex/gpt-5.6-terra"
     assert openclaw.profiles["qa_assistant"].primary.model == "codex/gpt-5.6-luna"
-    assert configured.model_policy("openclaw").profiles["readiness_reviewer"].primary.model == "codex/gpt-5.6-terra"
+    assert (
+        configured.model_policy("openclaw").profiles["readiness_reviewer"].primary.model
+        == "codex/gpt-5.6-terra"
+    )
     documented_profiles = {
         "strategist": ("codex/gpt-5.6-sol", "high"),
         "course_verifier": ("codex/gpt-5.6-sol", "high"),
@@ -401,16 +420,23 @@ def test_public_example_uses_documented_balanced_model_routes() -> None:
     assert configured.models.comment_adjudicator is not None
     assert configured.models.comment_adjudicator.primary.model == "codex/gpt-5.6-terra"
 
-    worker_models = configured.orchestrators["openclaw-workers"].worker_models
+    worker_orchestrator = configured.orchestrators["openclaw-workers"]
+    assert isinstance(worker_orchestrator, OpenClawWorkboardConfig)
+    worker_models = worker_orchestrator.worker_models
     assert worker_models.model_dump() == {
         "captain": "codex/gpt-5.6-terra",
-        "coder": "codex/gpt-5.6-terra",
+        "coder": "codex/gpt-5.3-codex-spark",
         "reviewer": "codex/gpt-5.6-terra",
         "tester": "codex/gpt-5.6-luna",
         "ux_reviewer": "codex/gpt-5.6-terra",
         "final_reviewer": "codex/gpt-5.6-sol",
         "merger": "codex/gpt-5.6-terra",
         "verifier": "codex/gpt-5.6-terra",
+    }
+    worker_runtimes = worker_orchestrator.worker_runtimes
+    assert worker_runtimes.coder == "codex"
+    assert {runtime for role, runtime in worker_runtimes.model_dump().items() if role != "coder"} == {
+        "openclaw"
     }
 
 

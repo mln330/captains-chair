@@ -195,13 +195,59 @@ def test_workboard_history_preserves_build_review_and_completion_runs() -> None:
         "superseded",
         "completed",
     ]
-    implementation = next(
-        row for row in summary["stage_history"] if row["stage"] == "implementation"
-    )
+    implementation = next(row for row in summary["stage_history"] if row["stage"] == "implementation")
     assert implementation["models"] == ["codex/gpt-5.6-terra"]
     assert implementation["active"] == 0
     assert summary["total_loop_count"] == 1
     assert summary["pr_count"] == 1
+
+
+def test_sidecar_imports_direct_codex_workboard_usage(tmp_path: Path) -> None:
+    state = sidecar_module.StateStore(tmp_path / "state.db")
+    card = QueueCard(
+        id="spark-card",
+        title="Implement with Spark",
+        status=QueueStatus.DONE,
+        labels=("workflow:spark", "stage:implementation"),
+        agent_id="coder",
+        metadata={
+            "comments": [{"createdAt": 1_784_408_000_000}],
+            "proof": [
+                {
+                    "status": "passed",
+                    "note": "tests passed",
+                    "execution": {
+                        "runtime": "codex",
+                        "requested_model": "gpt-5.3-codex-spark",
+                        "attempt_id": "attempt-1",
+                        "duration_ms": 1234,
+                        "usage": {
+                            "input_tokens": 100,
+                            "cached_input_tokens": 25,
+                            "output_tokens": 10,
+                            "prompt_bytes": 500,
+                            "response_bytes": 100,
+                        },
+                    },
+                }
+            ],
+        },
+    )
+
+    first = sidecar_module._sync_workboard_worker_usage(  # pyright: ignore[reportPrivateUsage]
+        state, repo="mln330/example", cards=[card]
+    )
+    second = sidecar_module._sync_workboard_worker_usage(  # pyright: ignore[reportPrivateUsage]
+        state, repo="mln330/example", cards=[card]
+    )
+    summary = state.usage_summary(repo="mln330/example")
+
+    assert first == {"imported": 1}
+    assert second == {"imported": 1}
+    assert summary["external_sessions"]["calls"] == 1
+    assert summary["external_sessions"]["input_tokens"] == 100
+    assert summary["external_sessions"]["output_tokens"] == 10
+    assert summary["external_groups"][0]["model"] == "gpt-5.3-codex-spark"
 
 
 def test_sidecar_does_not_mark_workboard_with_active_cards_completed(
@@ -361,9 +407,7 @@ def test_sidecar_correlates_workboard_sessions_and_reports_execution_facts(
     assert result["workboard_status"]["loop_count"] == 0
     assert result["workboard_status"]["pr_count"] == 1
     assert result["workboard_status"]["pr_numbers"] == [42]
-    assert result["workboard_status"]["pr_urls"] == [
-        "https://github.com/mln330/make-it-so/pull/42"
-    ]
+    assert result["workboard_status"]["pr_urls"] == ["https://github.com/mln330/make-it-so/pull/42"]
     assert result["github_status"]["open_prs"] == 1
     assert result["github_status"]["checks"] == {"recent": 1, "failed": 0, "pending": 0, "passed": 1}
 
@@ -497,22 +541,28 @@ def test_sidecar_cached_workboard_status_projects_the_durable_card_mirror(
         merger="merger",
         verifier="verifier",
     )
-    config = app_config(tmp_path, repo_config(tmp_path)).model_copy(update={
-        "repos": (repo,),
-        "orchestrators": {
-            "openclaw": OpenClawWorkboardConfig(
-                workers=workers,
-                require_live_completion_validation=False,
-            )
-        },
-    })
+    config = app_config(tmp_path, repo_config(tmp_path)).model_copy(
+        update={
+            "repos": (repo,),
+            "orchestrators": {
+                "openclaw": OpenClawWorkboardConfig(
+                    workers=workers,
+                    require_live_completion_validation=False,
+                )
+            },
+        }
+    )
     config_path = tmp_path / "config.yaml"
     config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
     server = SidecarServer(config_path)
     card = _workboard_card("review", QueueStatus.DONE, 1).model_dump(mode="json")
-    monkeypatch.setattr(server.state, "orchestration_card_payloads", lambda _repo: [card])
 
-    result = server._cached_workboard_status(repo)
+    def cached_cards(_repo: str) -> list[dict[str, Any]]:
+        return [card]
+
+    monkeypatch.setattr(server.state, "orchestration_card_payloads", cached_cards)
+
+    result = server._cached_workboard_status(repo)  # pyright: ignore[reportPrivateUsage]
 
     assert result is not None
     assert result["status"] == "blocked"
@@ -639,7 +689,10 @@ def test_sidecar_reads_and_updates_global_and_runtime_model_layers(tmp_path: Pat
         },
     )
     assert runtime_update["runtime_profiles"]["test"]["coder"]["primary"]["model"] == "runtime-coder"
-    assert load_config(config_path).harness_model_overrides["test"].profiles["coder"].primary.model == "runtime-coder"
+    assert (
+        load_config(config_path).harness_model_overrides["test"].profiles["coder"].primary.model
+        == "runtime-coder"
+    )
 
     usage_update = server.request(
         "usage.update",
@@ -772,11 +825,7 @@ def test_greenfield_repo_creation_defaults_to_configured_openclaw_orchestrator(
     )
     root_config = app_config(tmp_path, repo_config(tmp_path))
     config = root_config.model_copy(
-        update={
-            "orchestrators": {
-                "openclaw-workers": OpenClawWorkboardConfig(workers=workers)
-            }
-        }
+        update={"orchestrators": {"openclaw-workers": OpenClawWorkboardConfig(workers=workers)}}
     )
     config_path = tmp_path / "config.yaml"
     config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
@@ -1036,7 +1085,10 @@ def test_sidecar_updates_course_and_work_package_model_routes(tmp_path: Path) ->
         },
     )
     assert stage_update["stage_name"] == "implementation"
-    assert stage_update["course"]["model_profiles"]["stage:implementation"]["primary"]["model"] == "codex/stage-coder"
+    assert (
+        stage_update["course"]["model_profiles"]["stage:implementation"]["primary"]["model"]
+        == "codex/stage-coder"
+    )
 
     package_stage = server.request(
         "course.models",
@@ -1147,22 +1199,28 @@ def test_sidecar_course_validation_errors_are_actionable(tmp_path: Path) -> None
         {"full_name": "example/project", "course": ready_course().model_dump(mode="json")},
     )
     with pytest.raises(SidecarError, match="requires requirement_key and status"):
-        server.request(
-            "course.requirement", {"full_name": "example/project", "course_key": "feature-search"}
-        )
+        server.request("course.requirement", {"full_name": "example/project", "course_key": "feature-search"})
     with pytest.raises(SidecarError, match="requires checkpoint_key and status"):
-        server.request(
-            "course.checkpoint", {"full_name": "example/project", "course_key": "feature-search"}
-        )
+        server.request("course.checkpoint", {"full_name": "example/project", "course_key": "feature-search"})
     with pytest.raises(SidecarError):
         server.request(
             "course.requirement",
-            {"full_name": "example/project", "course_key": "feature-search", "requirement_key": "success", "status": "invalid"},
+            {
+                "full_name": "example/project",
+                "course_key": "feature-search",
+                "requirement_key": "success",
+                "status": "invalid",
+            },
         )
     with pytest.raises(SidecarError):
         server.request(
             "course.checkpoint",
-            {"full_name": "example/project", "course_key": "feature-search", "checkpoint_key": "ui-demo", "status": "invalid"},
+            {
+                "full_name": "example/project",
+                "course_key": "feature-search",
+                "checkpoint_key": "ui-demo",
+                "status": "invalid",
+            },
         )
 
 
@@ -1208,7 +1266,9 @@ def test_sidecar_covers_stage_and_package_route_validation_errors(tmp_path: Path
         )
 
 
-def test_sidecar_reports_dirty_git_and_one_shot_failures(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_sidecar_reports_dirty_git_and_one_shot_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     repo_path = tmp_path / "repo"
     (repo_path / ".git").mkdir(parents=True)
     server = _sidecar(tmp_path, repo=repo_config(repo_path))

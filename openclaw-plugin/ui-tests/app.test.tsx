@@ -16,7 +16,8 @@ const repo = {
   notification_route: "notifications",
   surfaces: ["web_ui"],
   tokens: { total_tokens: 1200, accounted_tokens: 1200 },
-  worker_models: { coder: "codex/gpt-5.6-terra", reviewer: "codex/gpt-5.6-terra" },
+  worker_models: { coder: "codex/gpt-5.3-codex-spark", reviewer: "codex/gpt-5.6-terra" },
+  worker_runtimes: { coder: "codex", reviewer: "openclaw" },
   github_status: { status: "available", open_prs: 0, checks: { passed: 4, pending: 0, failed: 0 }, prs: [] },
   usage_detail: {
     dimensions: [
@@ -129,7 +130,8 @@ describe("shared dashboard components", () => {
     expect(screen.getByText("FLIGHT RECORDER")).toBeTruthy();
     expect(screen.getByText("Workflow runs")).toBeTruthy();
     expect(screen.getByText("1 feedback loop")).toBeTruthy();
-    expect(screen.getByText("OpenClaw coding route: gpt-5.6-terra")).toBeTruthy();
+    expect(screen.getByText("Coding route: gpt-5.3-codex-spark via direct Codex")).toBeTruthy();
+    expect(screen.getByText(/OpenClaw owns the Workboard lifecycle/)).toBeTruthy();
     expect(screen.getByText("Implemented search")).toBeTruthy();
     expect(screen.getByText("Addressed review finding")).toBeTruthy();
     expect(screen.getAllByText("Build").length).toBeGreaterThan(0);

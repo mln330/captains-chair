@@ -695,6 +695,31 @@
           "title": "Executable",
           "type": "string"
         },
+        "worker_runtimes": {
+          "$ref": "#/$defs/WorkerRuntimeAssignments",
+          "default": {
+            "captain": "openclaw",
+            "coder": "openclaw",
+            "reviewer": "openclaw",
+            "tester": "openclaw",
+            "ux_reviewer": "openclaw",
+            "final_reviewer": "openclaw",
+            "merger": "openclaw",
+            "verifier": "openclaw"
+          }
+        },
+        "codex_executable": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Codex Executable"
+        },
         "make_it_so_command": {
           "default": [
             "make_it_so"
@@ -1234,6 +1259,86 @@
         }
       },
       "title": "WorkerModelAssignments",
+      "type": "object"
+    },
+    "WorkerRuntimeAssignments": {
+      "additionalProperties": false,
+      "description": "Select the process boundary for each OpenClaw Workboard role.",
+      "properties": {
+        "captain": {
+          "default": "openclaw",
+          "enum": [
+            "openclaw",
+            "codex"
+          ],
+          "title": "Captain",
+          "type": "string"
+        },
+        "coder": {
+          "default": "openclaw",
+          "enum": [
+            "openclaw",
+            "codex"
+          ],
+          "title": "Coder",
+          "type": "string"
+        },
+        "reviewer": {
+          "default": "openclaw",
+          "enum": [
+            "openclaw",
+            "codex"
+          ],
+          "title": "Reviewer",
+          "type": "string"
+        },
+        "tester": {
+          "default": "openclaw",
+          "enum": [
+            "openclaw",
+            "codex"
+          ],
+          "title": "Tester",
+          "type": "string"
+        },
+        "ux_reviewer": {
+          "default": "openclaw",
+          "enum": [
+            "openclaw",
+            "codex"
+          ],
+          "title": "Ux Reviewer",
+          "type": "string"
+        },
+        "final_reviewer": {
+          "default": "openclaw",
+          "enum": [
+            "openclaw",
+            "codex"
+          ],
+          "title": "Final Reviewer",
+          "type": "string"
+        },
+        "merger": {
+          "default": "openclaw",
+          "enum": [
+            "openclaw",
+            "codex"
+          ],
+          "title": "Merger",
+          "type": "string"
+        },
+        "verifier": {
+          "default": "openclaw",
+          "enum": [
+            "openclaw",
+            "codex"
+          ],
+          "title": "Verifier",
+          "type": "string"
+        }
+      },
+      "title": "WorkerRuntimeAssignments",
       "type": "object"
     }
   },

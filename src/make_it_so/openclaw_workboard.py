@@ -6,7 +6,7 @@ import time
 from contextlib import suppress
 from pathlib import Path
 from threading import Event, Thread
-from typing import Any, cast
+from typing import Any, Literal, cast
 from uuid import uuid4
 
 from make_it_so.command import CommandRunner, run_command
@@ -390,6 +390,8 @@ class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
         # reconstruct and inspect the exact OpenClaw session after a crash.
         owner_id = f"make-it-so-managed:{attempt_id}"
         claimed = self.claim_card(ready.id, owner_id=owner_id, token=token, attempt_id=attempt_id)
+        model = _worker_models(self.config).get(claimed.agent_id or "")
+        runtime = _worker_runtimes(self.config).get(claimed.agent_id or "", "openclaw")
         completed = False
         blocked = False
         stop = Event()
@@ -400,8 +402,7 @@ class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
         )
         heartbeat.start()
         try:
-            executor = CommandWorkerExecutor("openclaw", self.config.executable, self.runner)
-            model = _worker_models(self.config).get(claimed.agent_id or "")
+            executable = self.config.codex_executable if runtime == "codex" else self.config.executable
             if not model:
                 self.block_claimed_card(
                     claimed.id,
@@ -410,7 +411,16 @@ class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
                     reason=f"TECHNICAL: no OpenClaw worker model is configured for agent {claimed.agent_id or '(none)'}",
                 )
                 blocked = True
+            elif not executable:
+                self.block_claimed_card(
+                    claimed.id,
+                    owner_id=owner_id,
+                    token=token,
+                    reason=f"TECHNICAL: no {runtime} worker executable is configured",
+                )
+                blocked = True
             else:
+                executor = CommandWorkerExecutor(runtime, executable, self.runner)
                 workspace = (
                     claimed.workspace.path
                     if claimed.workspace is not None and claimed.workspace.path is not None
@@ -429,7 +439,15 @@ class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
                         owner_id=owner_id,
                         token=token,
                         summary=result.summary,
-                        proof=_managed_completion_proof(result.proof, result.summary),
+                        proof=_managed_completion_proof(
+                            result.proof,
+                            result.summary,
+                            execution=(
+                                result.telemetry.model_dump(mode="json")
+                                if result.telemetry is not None
+                                else None
+                            ),
+                        ),
                     )
                     completed = True
                 else:
@@ -460,6 +478,8 @@ class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
             "completed": [claimed.id] if completed else [],
             "blocked": [claimed.id] if blocked else [],
             "count": len(set(promoted) | {claimed.id}),
+            "runtime": runtime,
+            "model": model,
         }
 
     def _promote_dependency_ready_cards(self, cards: list[QueueCard]) -> list[str]:
@@ -470,8 +490,7 @@ class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
                 continue
             parents = _parent_ids(card)
             if parents and not all(
-                parent in by_id and by_id[parent].status == QueueStatus.DONE
-                for parent in parents
+                parent in by_id and by_id[parent].status == QueueStatus.DONE for parent in parents
             ):
                 continue
             promoted_card = self.reclaim_card(
@@ -531,9 +550,7 @@ class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
             metadata_value = card_row.get("metadata")
             metadata = cast(dict[str, Any], metadata_value) if isinstance(metadata_value, dict) else {}
             automation_value = metadata.get("automation")
-            automation = (
-                cast(dict[str, Any], automation_value) if isinstance(automation_value, dict) else {}
-            )
+            automation = cast(dict[str, Any], automation_value) if isinstance(automation_value, dict) else {}
             candidate = automation.get("boardId")
             if str(candidate or "").lower() == board_id.lower():
                 filtered.append(entry)
@@ -574,9 +591,7 @@ class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
                 )
                 recovered.append(card.id)
             except Exception as exc:
-                self._recovery_warnings.append(
-                    f"Worker recovery failed for card {card.id}: {str(exc)[:800]}"
-                )
+                self._recovery_warnings.append(f"Worker recovery failed for card {card.id}: {str(exc)[:800]}")
         return tuple(recovered)
 
     def recovery_warnings(self) -> tuple[str, ...]:
@@ -600,8 +615,7 @@ class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
         if result.returncode:
             normalized = output.lower()
             if any(
-                marker in normalized
-                for marker in ("session not found", "unknown session", "no such session")
+                marker in normalized for marker in ("session not found", "unknown session", "no such session")
             ):
                 return True
             self._recovery_warnings.append(
@@ -630,6 +644,7 @@ class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
             if row.get("id"):
                 observed[str(row["id"])] = row.get("model")
         expected = _worker_models(self.config)
+        runtimes = _worker_runtimes(self.config)
         mismatches = [
             {
                 "agent_id": agent_id,
@@ -639,9 +654,28 @@ class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
             }
             for agent_id, model in expected.items()
             if agent_id not in observed
-            or not isinstance(observed.get(agent_id), str)
-            or not models_match(model, str(observed[agent_id]))
+            or (
+                runtimes.get(agent_id, "openclaw") == "openclaw"
+                and (
+                    not isinstance(observed.get(agent_id), str)
+                    or not models_match(model, str(observed[agent_id]))
+                )
+            )
         ]
+        codex_check: dict[str, Any] = {"required": False, "status": "not_required"}
+        if "codex" in runtimes.values():
+            codex_check = {"required": True, "status": "unavailable"}
+            if self.config.codex_executable:
+                codex_result = self.runner([self.config.codex_executable, "--version"], timeout=60)
+                codex_check = {
+                    "required": True,
+                    "status": "ok" if codex_result.returncode == 0 else "unavailable",
+                    "executable": self.config.codex_executable,
+                    "version": codex_result.stdout.strip()[:200] or None,
+                    "error": (codex_result.stderr or codex_result.stdout).strip()[:500]
+                    if codex_result.returncode
+                    else None,
+                }
         tools = self._config_object("tools")
         allow_value = tools.get("allow")
         allowed = (
@@ -650,9 +684,7 @@ class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
             else None
         )
         missing_tools = (
-            [tool for tool in REQUIRED_WORKER_TOOLS if tool not in allowed]
-            if allowed is not None
-            else []
+            [tool for tool in REQUIRED_WORKER_TOOLS if tool not in allowed] if allowed is not None else []
         )
         subagents = self._config_object("agents.defaults.subagents")
         observed_concurrency = subagents.get("maxConcurrent", 8)
@@ -662,9 +694,13 @@ class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
             and observed_concurrency <= self.config.max_concurrent_subagents
         )
         return {
-            "status": "degraded" if mismatches or missing_tools or not concurrency_valid else "ok",
+            "status": "degraded"
+            if mismatches or missing_tools or not concurrency_valid or codex_check["status"] == "unavailable"
+            else "ok",
             "checked_agents": len(expected),
             "mismatches": mismatches,
+            "worker_runtimes": runtimes,
+            "codex": codex_check,
             "missing_worker_tools": missing_tools,
             "max_concurrent_subagents": {
                 "expected_max": self.config.max_concurrent_subagents,
@@ -683,10 +719,9 @@ class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
             raise OpenClawWorkboardError(f"OpenClaw runtime safety check failed for {path}: {detail}")
         raw = decode_openclaw_json(result.stdout)
         if not isinstance(raw, dict):
-            raise OpenClawWorkboardError(
-                f"OpenClaw runtime safety check for {path} did not return an object"
-            )
+            raise OpenClawWorkboardError(f"OpenClaw runtime safety check for {path} did not return an object")
         return cast(dict[str, Any], raw)
+
     @staticmethod
     def _completion_proof(proof: tuple[dict[str, Any], ...]) -> dict[str, Any] | None:
         if len(proof) > 1:
@@ -724,9 +759,9 @@ class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
             timeout=timeout + 10,
         )
         if result.returncode:
-            detail = "\n".join(
-                value.strip() for value in (result.stdout, result.stderr) if value.strip()
-            )[:3000]
+            detail = "\n".join(value.strip() for value in (result.stdout, result.stderr) if value.strip())[
+                :3000
+            ]
             raise OpenClawWorkboardError(f"{method} failed: {detail}")
         payload = decode_openclaw_json(result.stdout)
         if not isinstance(payload, dict):
@@ -763,9 +798,7 @@ class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
             }
             workspace_value.pop("pushBranch", None)
         workspace = (
-            WorkspaceRef.model_validate(workspace_value)
-            if isinstance(workspace_value, dict)
-            else None
+            WorkspaceRef.model_validate(workspace_value) if isinstance(workspace_value, dict) else None
         )
         raw_labels = raw.get("labels", [])
         if raw_labels is None:
@@ -872,9 +905,7 @@ def _is_cancelled_card(card: QueueCard) -> bool:
     comments = card.metadata.get("comments")
     return isinstance(comments, list) and any(
         isinstance(item, dict)
-        and str(cast(dict[str, object], item).get("body") or "")
-        .upper()
-        .startswith("CANCELLED:")
+        and str(cast(dict[str, object], item).get("body") or "").upper().startswith("CANCELLED:")
         for item in cast(list[object], comments)
     )
 
@@ -889,7 +920,7 @@ def _runtime_limit(card: QueueCard, default: int) -> int:
 
 
 def _managed_completion_proof(
-    proof: tuple[dict[str, Any], ...], summary: str = ""
+    proof: tuple[dict[str, Any], ...], summary: str = "", execution: dict[str, Any] | None = None
 ) -> tuple[dict[str, Any], ...]:
     """Collapse model-supplied evidence to the single proof record OpenClaw accepts."""
     if not proof:
@@ -923,6 +954,7 @@ def _managed_completion_proof(
             "status": str(primary.get("status") or "passed"),
             "note": note,
             **({"evidence": list(proof)} if len(proof) > 1 else {}),
+            **({"execution": execution} if execution is not None else {}),
         },
     )
 
@@ -944,11 +976,7 @@ def _latest_attempt_ended(card: QueueCard) -> bool:
 
 def _repository_name(cards: list[QueueCard]) -> str | None:
     pattern = re.compile(r"(?m)^Repository:\s*([^/\s]+/[^\s]+)\s*$")
-    values = {
-        match.group(1).strip()
-        for card in cards
-        for match in pattern.finditer(card.notes or "")
-    }
+    values = {match.group(1).strip() for card in cards for match in pattern.finditer(card.notes or "")}
     return next(iter(values)) if len(values) == 1 else None
 
 
@@ -992,4 +1020,21 @@ def _worker_models(config: OpenClawWorkboardConfig) -> dict[str, str]:
         workers.final_reviewer: models.final_reviewer,
         workers.merger: models.merger,
         workers.verifier: models.verifier,
+    }
+
+
+def _worker_runtimes(
+    config: OpenClawWorkboardConfig,
+) -> dict[str, Literal["openclaw", "codex"]]:
+    workers = config.workers
+    runtimes = config.worker_runtimes
+    return {
+        workers.captain: runtimes.captain,
+        workers.coder: runtimes.coder,
+        workers.reviewer: runtimes.reviewer,
+        workers.tester: runtimes.tester,
+        workers.ux_reviewer: runtimes.ux_reviewer,
+        workers.final_reviewer: runtimes.final_reviewer,
+        workers.merger: runtimes.merger,
+        workers.verifier: runtimes.verifier,
     }

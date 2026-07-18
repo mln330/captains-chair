@@ -126,6 +126,7 @@ type Repo = {
   orchestrator?: string;
   orchestration_board?: string | null;
   worker_models?: Record<string, string>;
+  worker_runtimes?: Record<string, string>;
   notification_route?: string | null;
   model_profiles?: Record<string, ModelRoute>;
   qa_profiles?: QAProfile[];
@@ -333,6 +334,7 @@ function ExecutionPath({ repo }: { repo: Repo }) {
   const terminal = workboard.terminal || workboard.status === "completed" || repo.state === "merged";
   const totalLoops = workboard.total_loop_count ?? workboard.loop_count ?? 0;
   const coderRoute = repo.worker_models?.coder;
+  const coderRuntime = repo.worker_runtimes?.coder ?? "openclaw";
   return <section className="execution-console" aria-label={`Execution evidence for ${repo.full_name}`}>
     <div className="console-heading">
       <div><p className="eyebrow">MISSION TELEMETRY</p><h4>How the work moved</h4><span>Every recorded build, review, repair, test, and completion workflow.</span></div>
@@ -358,7 +360,7 @@ function ExecutionPath({ repo }: { repo: Repo }) {
       <div><strong>{totalLoops} feedback loop{totalLoops === 1 ? "" : "s"}</strong><span>Review findings and failed gates route work back through repair, then forward through independent verification.</span></div>
       <div className="feedback-counts"><span><b>{workboard.review_cycles ?? 0}</b> reviews</span><span><b>{workboard.historical_blockers ?? 0}</b> historical blockers</span><span><b>{workboard.current_blockers ?? workboard.blockers ?? 0}</b> current blockers</span></div>
     </div>
-    {coderRoute && <div className="model-route-note"><Cpu size={17} aria-hidden="true" /><div><strong>OpenClaw coding route: {shortModel(coderRoute)}</strong><span>Direct Codex and OpenClaw use separate provider routes. Spark remains configured for direct Codex; this OpenClaw worker used its compatible configured route.</span></div></div>}
+    {coderRoute && <div className="model-route-note"><Cpu size={17} aria-hidden="true" /><div><strong>Coding route: {shortModel(coderRoute)} via {coderRuntime === "codex" ? "direct Codex" : "OpenClaw"}</strong><span>{coderRuntime === "codex" ? "OpenClaw owns the Workboard lifecycle; the coding card executes through your ChatGPT-authenticated Codex CLI and records provider token telemetry." : "This coding card executes through the OpenClaw agent route configured for the repository."}</span></div></div>}
     <div className="run-history">
       <div className="run-history-heading"><div><p className="eyebrow">FLIGHT RECORDER</p><h5>Workflow runs</h5></div><span>{runs.length} recorded run{runs.length === 1 ? "" : "s"}</span></div>
       {runs.length ? runs.map((run) => <article className={`workflow-run ${run.status ?? "unknown"}`} key={run.workflow ?? run.index}>
@@ -395,11 +397,8 @@ const STAGE_ROUTE_DEFAULTS: Record<string, EditableRoute> = {
   baseline: { model: "codex/gpt-5.6-terra", effort: "high" },
   planning: { model: "codex/gpt-5.6-terra", effort: "medium" },
   decomposition: { model: "codex/gpt-5.6-terra", effort: "medium" },
-  // The OpenClaw plugin runs through the gateway. Its ChatGPT-account Codex
-  // route rejects Spark, so bounded coding uses Terra here; direct Codex
-  // keeps Spark through the portable runtime mapping.
-  implementation: { model: "codex/gpt-5.6-terra", effort: "medium" },
-  repair: { model: "codex/gpt-5.6-terra", effort: "medium" },
+  implementation: { model: "codex/gpt-5.3-codex-spark", effort: "medium" },
+  repair: { model: "codex/gpt-5.3-codex-spark", effort: "medium" },
   review: { model: "codex/gpt-5.6-terra", effort: "high" },
   comment_adjudication: { model: "codex/gpt-5.6-terra", effort: "high" },
   test: { model: "codex/gpt-5.6-luna", effort: "medium" },

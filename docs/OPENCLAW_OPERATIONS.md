@@ -67,6 +67,12 @@ before unattended work:
 5. Run the no-repository-mutation Workboard canary. The plan phase is safe;
    `--run` dispatches a real worker and consumes runtime usage.
 
+For a hybrid Workboard/Codex configuration, confirm `worker_runtimes.coder` is
+`codex`, `worker_models.coder` is `codex/gpt-5.3-codex-spark`, and
+`codex_executable` points to the ChatGPT-authenticated Codex CLI. The canary must
+retain a direct-Codex execution receipt on its completed card and the usage report
+must show the same Spark model and stage before autonomous implementation resumes.
+
 ```bash
 make_it_so --config "$MAKE_IT_SO_CONFIG" orchestrate canary --repo OWNER/REPO
 make_it_so --config "$MAKE_IT_SO_CONFIG" orchestrate canary --repo OWNER/REPO --run

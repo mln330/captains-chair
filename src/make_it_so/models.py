@@ -25,7 +25,9 @@ def _repository_relative_path(value: str) -> str:
         or ".." in posix.parts
         or normalized == "."
     ):
-        raise ValueError("repository document paths must be non-empty relative paths without parent traversal")
+        raise ValueError(
+            "repository document paths must be non-empty relative paths without parent traversal"
+        )
     return str(posix)
 
 
@@ -390,6 +392,19 @@ class WorkerModelAssignments(StrictModel):
     verifier: str = "codex/gpt-5.6-terra"
 
 
+class WorkerRuntimeAssignments(StrictModel):
+    """Select the process boundary for each OpenClaw Workboard role."""
+
+    captain: Literal["openclaw", "codex"] = "openclaw"
+    coder: Literal["openclaw", "codex"] = "openclaw"
+    reviewer: Literal["openclaw", "codex"] = "openclaw"
+    tester: Literal["openclaw", "codex"] = "openclaw"
+    ux_reviewer: Literal["openclaw", "codex"] = "openclaw"
+    final_reviewer: Literal["openclaw", "codex"] = "openclaw"
+    merger: Literal["openclaw", "codex"] = "openclaw"
+    verifier: Literal["openclaw", "codex"] = "openclaw"
+
+
 class WorkerOrchestrationConfig(StrictModel):
     """Runtime-neutral worker topology and bounded execution policy."""
 
@@ -406,6 +421,8 @@ class OpenClawWorkboardConfig(WorkerOrchestrationConfig):
     kind: Literal["openclaw_workboard"] = "openclaw_workboard"
     merge_execution: Literal["worker", "deterministic"] = "deterministic"
     executable: str = "openclaw"
+    worker_runtimes: WorkerRuntimeAssignments = WorkerRuntimeAssignments()
+    codex_executable: str | None = None
     make_it_so_command: tuple[str, ...] = ("make_it_so",)
     auth_source_agent: str | None = None
     dispatch_timeout_seconds: int = Field(default=120, ge=10, le=900)
@@ -419,6 +436,11 @@ class OpenClawWorkboardConfig(WorkerOrchestrationConfig):
             raise ValueError("make_it_so_command must contain non-empty argv items")
         if self.merge_execution != "deterministic":
             raise ValueError("OpenClaw Workboard requires deterministic merge execution")
+        if (
+            "codex" in self.worker_runtimes.model_dump().values()
+            and not (self.codex_executable or "").strip()
+        ):
+            raise ValueError("OpenClaw Workboard Codex workers require codex_executable")
         return self
 
 
@@ -676,9 +698,7 @@ class ReadinessRequirement(StrictModel):
             or self.verified_at is None
             or not self.verification_model
         ):
-            raise ValueError(
-                f"readiness requirement {self.key!r} needs independent verification provenance"
-            )
+            raise ValueError(f"readiness requirement {self.key!r} needs independent verification provenance")
         return self
 
 
@@ -735,7 +755,10 @@ class Checkpoint(StrictModel):
 
     @model_validator(mode="after")
     def validate_owner_policy(self) -> Checkpoint:
-        if self.kind in {CheckpointKind.COURSE_APPROVAL, CheckpointKind.HUMAN_DECISION} and not self.owner_decision_required:
+        if (
+            self.kind in {CheckpointKind.COURSE_APPROVAL, CheckpointKind.HUMAN_DECISION}
+            and not self.owner_decision_required
+        ):
             raise ValueError(f"checkpoint {self.key!r} requires owner_decision_required=true")
         if (
             self.status in {CheckpointStatus.APPROVED, CheckpointStatus.RESOLVED, CheckpointStatus.WAIVED}

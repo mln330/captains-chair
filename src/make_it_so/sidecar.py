@@ -136,11 +136,65 @@ def _attempt_count(card: QueueCard) -> int:
 
 
 def _card_model(card: QueueCard, worker_models: dict[str, str]) -> str | None:
+    execution = _card_execution(card)
+    if execution is not None and execution.get("requested_model"):
+        return str(execution["requested_model"])
     if card.agent_id and card.agent_id in worker_models:
         return worker_models[card.agent_id]
     if str(card.agent_id or "").startswith("make-it-so-managed:deterministic-merge:"):
         return "deterministic gate"
     return None
+
+
+def _card_execution(card: QueueCard) -> dict[str, Any] | None:
+    proof = card.metadata.get("proof")
+    if not isinstance(proof, list):
+        return None
+    for raw in reversed(cast(list[object], proof)):
+        if not isinstance(raw, dict):
+            continue
+        execution = cast(dict[str, Any], raw).get("execution")
+        if isinstance(execution, dict):
+            return cast(dict[str, Any], execution)
+    return None
+
+
+def _sync_workboard_worker_usage(state: StateStore, *, repo: str, cards: list[QueueCard]) -> dict[str, int]:
+    imported = 0
+    for card in cards:
+        execution = _card_execution(card)
+        if execution is None or execution.get("runtime") != "codex":
+            continue
+        usage_value = execution.get("usage")
+        usage = cast(dict[str, Any], usage_value) if isinstance(usage_value, dict) else {}
+        attempt_id = str(execution.get("attempt_id") or "").strip()
+        if not attempt_id:
+            continue
+        state.record_external_usage(
+            {
+                "source": "make-it-so-worker",
+                "external_id": f"{card.id}:{attempt_id}",
+                "repo": repo,
+                "role": card.agent_id or _workflow_stage(card) or "worker",
+                "stage": _workflow_stage(card) or "worker",
+                "status": "completed" if card.status == QueueStatus.DONE else card.status.value,
+                "provider": "codex",
+                "model": execution.get("requested_model"),
+                "input_tokens": usage.get("input_tokens"),
+                "cached_input_tokens": usage.get("cached_input_tokens"),
+                "cache_write_tokens": usage.get("cache_write_tokens"),
+                "reasoning_tokens": usage.get("reasoning_tokens"),
+                "output_tokens": usage.get("output_tokens"),
+                "total_tokens": usage.get("total_tokens"),
+                "prompt_bytes": usage.get("prompt_bytes", 0),
+                "response_bytes": usage.get("response_bytes", 0),
+                "duration_ms": execution.get("duration_ms", 0),
+                "updated_at": _card_activity_time(card) or datetime.now(UTC).isoformat(),
+                "payload": execution,
+            }
+        )
+        imported += 1
+    return {"imported": imported}
 
 
 def _is_loop_card(card: QueueCard) -> bool:
@@ -171,8 +225,7 @@ def _card_context_rows(cards: list[QueueCard]) -> list[dict[str, Any]]:
 def _expected_worker_models(configured: OpenClawWorkboardConfig) -> dict[str, str]:
     roles = ("captain", "coder", "reviewer", "tester", "ux_reviewer", "final_reviewer", "merger", "verifier")
     return {
-        str(getattr(configured.workers, role)): str(getattr(configured.worker_models, role))
-        for role in roles
+        str(getattr(configured.workers, role)): str(getattr(configured.worker_models, role)) for role in roles
     }
 
 
@@ -284,20 +337,14 @@ def _summarize_workboard(
     )[-16:]
     loop_count = sum(int(bool(item["loop"])) for item in timeline)
     review_cards = [
-        card
-        for card in all_workflow_cards
-        if _workflow_stage(card) in {"review", "final_review"}
+        card for card in all_workflow_cards if _workflow_stage(card) in {"review", "final_review"}
     ]
     current_review_cards = [
-        card
-        for card in latest_cards
-        if _workflow_stage(card) in {"review", "final_review"}
+        card for card in latest_cards if _workflow_stage(card) in {"review", "final_review"}
     ]
     review_active = any(card.status in _WORKBOARD_ACTIVE_STATUSES for card in current_review_cards)
     review_blocked = any(card.status == QueueStatus.BLOCKED for card in current_review_cards)
-    historical_review_blockers = sum(
-        card.status == QueueStatus.BLOCKED for card in review_cards
-    )
+    historical_review_blockers = sum(card.status == QueueStatus.BLOCKED for card in review_cards)
     review_status = (
         "passed"
         if terminal and any(card.status == QueueStatus.DONE for card in review_cards)
@@ -309,15 +356,9 @@ def _summarize_workboard(
         if review_cards and any(card.status == QueueStatus.DONE for card in review_cards)
         else "not_run"
     )
-    test_cards = [
-        card
-        for card in all_workflow_cards
-        if _workflow_stage(card) in {"test", "qa", "ux_review"}
-    ]
+    test_cards = [card for card in all_workflow_cards if _workflow_stage(card) in {"test", "qa", "ux_review"}]
     current_test_cards = [
-        card
-        for card in latest_cards
-        if _workflow_stage(card) in {"test", "qa", "ux_review"}
+        card for card in latest_cards if _workflow_stage(card) in {"test", "qa", "ux_review"}
     ]
     test_active = any(card.status in _WORKBOARD_ACTIVE_STATUSES for card in current_test_cards)
     test_blocked = any(card.status == QueueStatus.BLOCKED for card in current_test_cards)
@@ -356,12 +397,7 @@ def _summarize_workboard(
         if not stage_cards:
             continue
         models = sorted(
-            {
-                model
-                for card in stage_cards
-                for model in (_card_model(card, configured_models),)
-                if model
-            }
+            {model for card in stage_cards for model in (_card_model(card, configured_models),) if model}
         )
         stage_history.append(
             {
@@ -449,9 +485,7 @@ def _summarize_workboard(
                 "loops": sum(_is_loop_card(card) for card in workflow_cards),
                 "blocked": sum(card.status == QueueStatus.BLOCKED for card in workflow_cards),
                 "done": sum(card.status == QueueStatus.DONE for card in workflow_cards),
-                "updated_at": max(
-                    (_card_activity_time(card) or "" for card in workflow_cards), default=""
-                )
+                "updated_at": max((_card_activity_time(card) or "" for card in workflow_cards), default="")
                 or None,
                 "timeline": run_timeline[-18:],
             }
@@ -535,9 +569,7 @@ class SidecarServer:
         self.interaction = interaction or NativeInteractionAdapter()
         self.github = github or GhGitHubProvider()
 
-    def _workboard_status(
-        self, repo: RepoConfig, *, sync_usage: bool = True
-    ) -> dict[str, Any] | None:
+    def _workboard_status(self, repo: RepoConfig, *, sync_usage: bool = True) -> dict[str, Any] | None:
         """Read Workboard progress and reconcile worker telemetry for the dashboard."""
         if not repo.orchestrator or not repo.orchestration_board:
             return None
@@ -550,8 +582,10 @@ class SidecarServer:
             self.state.sync_orchestration_cards(repo.full_name, _card_context_rows(cards))
             if sync_usage:
                 try:
+                    direct_usage = _sync_workboard_worker_usage(self.state, repo=repo.full_name, cards=cards)
                     usage_sync = {
                         "status": "ok",
+                        "direct_workers": direct_usage,
                         **sync_openclaw_sessions(
                             self.state,
                             repo=repo.full_name,
@@ -585,9 +619,7 @@ class SidecarServer:
             return None
         configured = self.config.orchestrators.get(repo.orchestrator)
         worker_models = (
-            _expected_worker_models(configured)
-            if isinstance(configured, OpenClawWorkboardConfig)
-            else {}
+            _expected_worker_models(configured) if isinstance(configured, OpenClawWorkboardConfig) else {}
         )
         payloads = self.state.orchestration_card_payloads(repo.full_name)
         cards: list[QueueCard] = []
@@ -618,9 +650,7 @@ class SidecarServer:
             snapshot = self.github.snapshot(repo)
             runs = snapshot.workflow_runs
             failed_conclusions = {"failure", "cancelled", "timed_out", "action_required", "stale"}
-            failed_runs = sum(
-                str(run.get("conclusion") or "").lower() in failed_conclusions for run in runs
-            )
+            failed_runs = sum(str(run.get("conclusion") or "").lower() in failed_conclusions for run in runs)
             pending_runs = sum(str(run.get("status") or "").lower() != "completed" for run in runs)
             return {
                 "status": "available",
@@ -676,9 +706,7 @@ class SidecarServer:
             with ThreadPoolExecutor(max_workers=min(8, len(repos))) as executor:
                 if fast:
                     return {
-                        "repos": list(
-                            executor.map(self._fast_repo_status, repos)
-                        ),
+                        "repos": list(executor.map(self._fast_repo_status, repos)),
                         "freshness": "github_workboard_live_usage_cached",
                     }
                 return {"repos": list(executor.map(self._repo_status, repos))}
@@ -762,9 +790,13 @@ class SidecarServer:
             if isinstance(configured_orchestrator, OpenClawWorkboardConfig)
             else {}
         )
+        worker_runtimes = (
+            configured_orchestrator.worker_runtimes.model_dump(mode="json")
+            if isinstance(configured_orchestrator, OpenClawWorkboardConfig)
+            else {}
+        )
         events = [
-            event.model_dump(mode="json")
-            for event in self.state.recent_events(repo.full_name, limit=12)
+            event.model_dump(mode="json") for event in self.state.recent_events(repo.full_name, limit=12)
         ]
         local_path = repo.local_path
         dirty = False
@@ -795,6 +827,7 @@ class SidecarServer:
             "orchestrator": repo.orchestrator or "direct",
             "orchestration_board": repo.orchestration_board,
             "worker_models": worker_models,
+            "worker_runtimes": worker_runtimes,
             "schedule_enabled": repo.schedule_enabled,
             "notification_route": repo.notification.route,
             "surfaces": sorted(surface.value for surface in repo.surfaces),
@@ -832,7 +865,9 @@ class SidecarServer:
             canonical_docs=tuple(str(item) for item in _list_value(payload.get("canonical_docs"))),
             checks=tuple(str(item) for item in _list_value(payload.get("checks"))),
             docs_checks=tuple(str(item) for item in _list_value(payload.get("docs_checks"))),
-            surfaces=frozenset(ApplicationSurface(str(item)) for item in _list_value(payload.get("surfaces"))),
+            surfaces=frozenset(
+                ApplicationSurface(str(item)) for item in _list_value(payload.get("surfaces"))
+            ),
             operation_mode=OperationMode(str(payload.get("operation_mode") or "advisory")),
             completion_policy=CompletionPolicy(str(payload.get("completion_policy") or "owner_approval")),
             allow_autonomous_merge=bool(payload.get("allow_autonomous_merge", False)),
@@ -867,9 +902,7 @@ class SidecarServer:
         if visibility not in {"private", "public"}:
             raise SidecarError("repo.create visibility must be private or public")
         configured_orchestrator = str(payload.get("orchestrator") or "").strip()
-        default_orchestrator = (
-            "openclaw-workers" if "openclaw-workers" in self.config.orchestrators else None
-        )
+        default_orchestrator = "openclaw-workers" if "openclaw-workers" in self.config.orchestrators else None
         repo = RepoConfig(
             full_name=full_name,
             local_path=local_path,
@@ -878,11 +911,11 @@ class SidecarServer:
             canonical_docs=tuple(str(item) for item in _list_value(payload.get("canonical_docs"))),
             checks=tuple(str(item) for item in _list_value(payload.get("checks"))),
             docs_checks=tuple(str(item) for item in _list_value(payload.get("docs_checks"))),
-            surfaces=frozenset(ApplicationSurface(str(item)) for item in _list_value(payload.get("surfaces"))),
-            orchestrator=configured_orchestrator or default_orchestrator,
-            orchestration_board=(
-                str(payload.get("orchestration_board") or "").strip() or None
+            surfaces=frozenset(
+                ApplicationSurface(str(item)) for item in _list_value(payload.get("surfaces"))
             ),
+            orchestrator=configured_orchestrator or default_orchestrator,
+            orchestration_board=(str(payload.get("orchestration_board") or "").strip() or None),
             require_project_manifest=True,
             provisioning=RepositoryProvisioningConfig(
                 enabled=True,
@@ -910,7 +943,8 @@ class SidecarServer:
         allowed = {
             key: value
             for key, value in payload.items()
-            if key in {
+            if key
+            in {
                 "local_path",
                 "default_branch",
                 "planning_doc",
@@ -1042,9 +1076,7 @@ class SidecarServer:
             if key in payload
         }
         try:
-            usage = UsageConfig.model_validate(
-                {**self.config.usage.model_dump(mode="python"), **allowed}
-            )
+            usage = UsageConfig.model_validate({**self.config.usage.model_dump(mode="python"), **allowed})
         except ValueError as exc:
             raise SidecarError(f"invalid usage configuration: {exc}") from exc
         self._write_config(self.config.model_copy(update={"usage": usage}))
@@ -1313,11 +1345,18 @@ class SidecarServer:
         )
         plan_path = repo.local_path / repo.planning_doc
         plan_path.parent.mkdir(parents=True, exist_ok=True)
-        package_lines = "\n".join(
-            f"- `{package.key}`: {package.objective}" for package in course.work_packages
-        ) or "- The Captain will decompose the first implementation package after baseline review."
-        acceptance = "\n".join(f"- {item}" for item in course.acceptance_criteria) or "- Define acceptance criteria during planning."
-        exit_criteria = "\n".join(f"- {item}" for item in course.exit_criteria) or "- Define exit criteria during planning."
+        package_lines = (
+            "\n".join(f"- `{package.key}`: {package.objective}" for package in course.work_packages)
+            or "- The Captain will decompose the first implementation package after baseline review."
+        )
+        acceptance = (
+            "\n".join(f"- {item}" for item in course.acceptance_criteria)
+            or "- Define acceptance criteria during planning."
+        )
+        exit_criteria = (
+            "\n".join(f"- {item}" for item in course.exit_criteria)
+            or "- Define exit criteria during planning."
+        )
         plan_path.write_text(
             "# Implementation Plan\n\n"
             f"## Goal\n{course.goal}\n\n"
@@ -1328,7 +1367,9 @@ class SidecarServer:
         )
         manifest_path = repo.local_path / repo.project_manifest
         manifest_path.parent.mkdir(parents=True, exist_ok=True)
-        manifest_path.write_text(yaml.safe_dump(manifest.model_dump(mode="json"), sort_keys=False), encoding="utf-8")
+        manifest_path.write_text(
+            yaml.safe_dump(manifest.model_dump(mode="json"), sort_keys=False), encoding="utf-8"
+        )
 
     def _ready_work(self, payload: dict[str, Any]) -> dict[str, Any]:
         repo, _store, course = self._course_context(payload)
@@ -1338,7 +1379,9 @@ class SidecarServer:
         return {
             "repository": repo.full_name,
             "course_key": course.key,
-            "work_packages": [item.model_dump(mode="json") for item in eligible_work_packages(course, completed)],
+            "work_packages": [
+                item.model_dump(mode="json") for item in eligible_work_packages(course, completed)
+            ],
         }
 
     def _resolve_checkpoint(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -1407,17 +1450,11 @@ class SidecarServer:
                 },
             ],
             "install_requires_operator_action": True,
-            "repository_enablement": {
-                repo.full_name: repo.schedule_enabled for repo in self.config.repos
-            },
+            "repository_enablement": {repo.full_name: repo.schedule_enabled for repo in self.config.repos},
         }
 
     def _configure_schedules(self, payload: dict[str, Any]) -> dict[str, Any]:
-        allowed = {
-            key: payload[key]
-            for key in ("reconcile_every", "review_every")
-            if key in payload
-        }
+        allowed = {key: payload[key] for key in ("reconcile_every", "review_every") if key in payload}
         try:
             schedules = ScheduleConfig.model_validate(
                 {**self.config.schedules.model_dump(mode="python"), **allowed}

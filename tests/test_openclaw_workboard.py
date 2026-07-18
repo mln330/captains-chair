@@ -8,8 +8,17 @@ from typing import Any
 import pytest
 
 from make_it_so.command import CommandResult
-from make_it_so.direct_workers import WorkerExecutionError, WorkerExecutionResult
-from make_it_so.models import OpenClawWorkboardConfig, WorkerAssignments
+from make_it_so.direct_workers import (
+    WorkerExecutionError,
+    WorkerExecutionResult,
+    WorkerExecutionTelemetry,
+)
+from make_it_so.models import (
+    ModelUsage,
+    OpenClawWorkboardConfig,
+    WorkerAssignments,
+    WorkerRuntimeAssignments,
+)
 from make_it_so.openclaw_workboard import (
     OpenClawWorkboardAdapter,
     OpenClawWorkboardError,
@@ -46,9 +55,7 @@ def test_managed_completion_proof_preserves_policy_marker_from_summary() -> None
         "Final review passed. AUTO_MERGE_ALLOWED:749a3a45de43fc2d6eeaf1cb2d2a91b549fd04b3",
     )
 
-    assert proof[0]["note"].endswith(
-        "AUTO_MERGE_ALLOWED:749a3a45de43fc2d6eeaf1cb2d2a91b549fd04b3"
-    )
+    assert proof[0]["note"].endswith("AUTO_MERGE_ALLOWED:749a3a45de43fc2d6eeaf1cb2d2a91b549fd04b3")
 
 
 @pytest.mark.parametrize(
@@ -431,9 +438,7 @@ def test_claimed_worker_lifecycle_uses_typed_runtime_boundary(
 
     adapter = OpenClawWorkboardAdapter(config(), runner)
     if operation == "heartbeat":
-        adapter.heartbeat_card(
-            "card-1", owner_id="tester", token="claim-token", note="still working"
-        )
+        adapter.heartbeat_card("card-1", owner_id="tester", token="claim-token", note="still working")
     else:
         adapter.block_claimed_card(
             "card-1", owner_id="tester", token="claim-token", reason="TECHNICAL: test failed"
@@ -616,9 +621,7 @@ def test_recover_ended_worker_reclaims_running_card_for_fresh_retry() -> None:
         id="card-1",
         title="Test",
         status=QueueStatus.RUNNING,
-        metadata={
-            "attempts": [{"sessionKey": "agent:tester:subagent:card-1", "status": "running"}]
-        },
+        metadata={"attempts": [{"sessionKey": "agent:tester:subagent:card-1", "status": "running"}]},
     )
 
     assert adapter.recover_ended_workers("printhub", [card]) == ("card-1",)
@@ -731,9 +734,7 @@ def test_recover_stopped_attempt_without_session_lookup() -> None:
         },
     )
 
-    assert OpenClawWorkboardAdapter(config(), runner).recover_ended_workers("board", [card]) == (
-        "card-1",
-    )
+    assert OpenClawWorkboardAdapter(config(), runner).recover_ended_workers("board", [card]) == ("card-1",)
     assert not any("sessions" in command for command in commands)
 
 
@@ -777,9 +778,7 @@ def test_worker_model_health_accepts_codex_route_reported_by_openai_provider() -
         if list(command)[1:4] == ["agents", "list", "--json"]:
             return CommandResult(
                 0,
-                json.dumps(
-                    [{"id": agent_id, "model": model} for agent_id, model in observed.items()]
-                ),
+                json.dumps([{"id": agent_id, "model": model} for agent_id, model in observed.items()]),
                 "",
             )
         if list(command)[3] == "tools":
@@ -840,9 +839,7 @@ def test_worker_health_fails_closed_on_missing_tools_and_unsafe_concurrency() ->
         if list(command)[1:4] == ["agents", "list", "--json"]:
             return CommandResult(
                 0,
-                json.dumps(
-                    [{"id": agent_id, "model": model} for agent_id, model in observed.items()]
-                ),
+                json.dumps([{"id": agent_id, "model": model} for agent_id, model in observed.items()]),
                 "",
             )
         if list(command)[3] == "tools":
@@ -885,9 +882,7 @@ def test_worker_health_accepts_unrestricted_tool_policy() -> None:
         if list(command)[1:4] == ["agents", "list", "--json"]:
             return CommandResult(
                 0,
-                json.dumps(
-                    [{"id": agent_id, "model": model} for agent_id, model in observed.items()]
-                ),
+                json.dumps([{"id": agent_id, "model": model} for agent_id, model in observed.items()]),
                 "",
             )
         if list(command)[3] == "tools":
@@ -925,9 +920,7 @@ def test_worker_health_rejects_bool_concurrency() -> None:
         if list(command)[1:4] == ["agents", "list", "--json"]:
             return CommandResult(
                 0,
-                json.dumps(
-                    [{"id": agent_id, "model": model} for agent_id, model in observed.items()]
-                ),
+                json.dumps([{"id": agent_id, "model": model} for agent_id, model in observed.items()]),
                 "",
             )
         if list(command)[3] == "tools":
@@ -965,9 +958,7 @@ def test_worker_health_fails_closed_when_runtime_config_read_fails() -> None:
         if list(command)[1:4] == ["agents", "list", "--json"]:
             return CommandResult(
                 0,
-                json.dumps(
-                    [{"id": agent_id, "model": model} for agent_id, model in observed.items()]
-                ),
+                json.dumps([{"id": agent_id, "model": model} for agent_id, model in observed.items()]),
                 "",
             )
         return CommandResult(1, "", "config unavailable")
@@ -1001,9 +992,7 @@ def test_worker_health_fails_closed_when_runtime_config_is_not_object() -> None:
         if list(command)[1:4] == ["agents", "list", "--json"]:
             return CommandResult(
                 0,
-                json.dumps(
-                    [{"id": agent_id, "model": model} for agent_id, model in observed.items()]
-                ),
+                json.dumps([{"id": agent_id, "model": model} for agent_id, model in observed.items()]),
                 "",
             )
         return CommandResult(0, "[]", "")
@@ -1035,6 +1024,52 @@ def test_managed_dispatch_completes_one_ready_card(monkeypatch: pytest.MonkeyPat
     assert cards["card-1"]["status"] == "done"
     assert cards["card-2"]["status"] == "ready"
     assert "workboard.cards.dispatch" not in calls
+
+
+def test_managed_dispatch_routes_coder_through_direct_codex(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cards = {"card-1": _managed_card("card-1", status="ready", agent_id="coder")}
+    constructed: list[tuple[str, str]] = []
+    outcome = WorkerExecutionResult(
+        status="completed",
+        summary="implemented",
+        proof=({"status": "passed", "note": "tests passed"},),
+    )
+    outcome.attach_telemetry(
+        WorkerExecutionTelemetry(
+            runtime="codex",
+            requested_model="gpt-5.3-codex-spark",
+            attempt_id="spark-attempt",
+            duration_ms=25,
+            usage=ModelUsage(input_tokens=100, cached_input_tokens=20, output_tokens=10, source="codex"),
+        )
+    )
+
+    class FakeExecutor:
+        def __init__(self, runtime: str, executable: str, _runner: object) -> None:
+            constructed.append((runtime, executable))
+
+        def execute(self, *args: object, **kwargs: object) -> WorkerExecutionResult:
+            return outcome
+
+    monkeypatch.setattr("make_it_so.openclaw_workboard.CommandWorkerExecutor", FakeExecutor)
+    configured = config().model_copy(
+        update={
+            "codex_executable": "/opt/codex",
+            "worker_runtimes": WorkerRuntimeAssignments(coder="codex"),
+        }
+    )
+
+    result = OpenClawWorkboardAdapter(configured, _managed_runner(cards, [])).dispatch("board")
+
+    assert result["completed"] == ["card-1"]
+    assert result["runtime"] == "codex"
+    assert result["model"] == "codex/gpt-5.3-codex-spark"
+    assert constructed == [("codex", "/opt/codex")]
+    execution = cards["card-1"]["metadata"]["proof"][0]["execution"]
+    assert execution["runtime"] == "codex"
+    assert execution["usage"]["input_tokens"] == 100
 
 
 def test_managed_dispatch_collapses_multiple_worker_proof_records(
@@ -1142,19 +1177,13 @@ def test_merge_card_uses_deterministic_gate_without_model_worker(
                 "proof": [
                     {
                         "status": "passed",
-                        "note": (
-                            f"AUTO_MERGE_ALLOWED:{head}"
-                            if allowed
-                            else f"READY_FOR_OWNER:{head}"
-                        ),
+                        "note": (f"AUTO_MERGE_ALLOWED:{head}" if allowed else f"READY_FOR_OWNER:{head}"),
                     }
                 ]
             },
         },
         "merge": {
-            **_managed_card(
-                "merge", status=merge_status, agent_id=merge_agent, parents=("final",)
-            ),
+            **_managed_card("merge", status=merge_status, agent_id=merge_agent, parents=("final",)),
             "notes": "Repository: mln330/canary",
             "labels": ["workflow:current", "stage:merge"],
         },
@@ -1212,9 +1241,7 @@ def test_merge_card_uses_deterministic_gate_without_model_worker(
         assert proof["model"] == "deterministic/no-model"
         assert "Model: deterministic/no-model; Provider: make-it-so" in proof["note"]
     else:
-        assert "missing AUTO_MERGE_ALLOWED" in cards["merge"]["metadata"]["workerProtocol"][
-            "detail"
-        ]
+        assert "missing AUTO_MERGE_ALLOWED" in cards["merge"]["metadata"]["workerProtocol"]["detail"]
 
 
 def test_assigned_merge_card_never_falls_through_to_model_dispatch() -> None:
@@ -1274,9 +1301,7 @@ def test_deterministic_merge_waits_for_active_repair() -> None:
 def test_deterministic_merge_waits_for_unambiguous_context(missing: str) -> None:
     final_labels = ["workflow:current", "stage:final_review"]
     notes = "Repository: mln330/canary"
-    proof: list[dict[str, str]] = [
-        {"status": "passed", "url": "https://github.com/mln330/canary/pull/1"}
-    ]
+    proof: list[dict[str, str]] = [{"status": "passed", "url": "https://github.com/mln330/canary/pull/1"}]
     if missing == "repository":
         notes = "Repository context is unavailable"
     elif missing == "pull_request":

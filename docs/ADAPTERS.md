@@ -94,14 +94,16 @@ idempotency key. Both must return the portable `WorkerExecutionResult` contract.
 
 Runtime model mappings are intentionally separate. The portable `models` and
 `harness_model_overrides.codex` sections describe direct Codex execution, where
-`gpt-5.3-codex-spark` is the economical coding route. The OpenClaw
-`openclaw-workers.worker_models` section describes models passed through the
-OpenClaw Gateway. On a ChatGPT-account gateway, the OpenClaw worker route must
-use a gateway-compatible Codex model such as `codex/gpt-5.6-terra`; Spark is
-rejected by that gateway even though standalone Codex OAuth accepts it. This is
-still Codex-provider execution, not an OpenAI API-key path. Runtime-specific
-capability checks must be performed before dispatch and the requested, reported,
-provider, and authentication route must be retained in usage evidence.
+`gpt-5.3-codex-spark` is the economical coding route. OpenClaw Workboard also
+supports typed per-role execution through `worker_runtimes`: Workboard retains
+the claim, heartbeat, dependency, retry, and proof lifecycle while a coding card
+may run through `codex exec`. The resulting execution receipt, including the
+requested model and provider token telemetry, is retained in Workboard proof and
+imported idempotently into the portable usage store. OpenClaw-only roles continue
+to use the configured gateway model. Direct Codex uses ChatGPT OAuth, not an
+OpenAI API-key path. Runtime-specific capability checks must be performed before
+dispatch and the requested, reported, provider, and authentication route must be
+retained in usage evidence.
 An `external` direct runtime leaves cards ready for a third-party worker to claim
 through the same lifecycle API.
 
