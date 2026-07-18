@@ -100,6 +100,11 @@ def test_sidecar_projects_terminal_workboard_proof_into_completed_state(
     assert result["workboard_status"]["status"] == "completed"
     assert result["workboard_status"]["active_cards"] == 0
     assert result["workboard_status"]["current_stage"] == "post_merge"
+    assert result["workboard_status"]["review_cycles"] == 1
+    assert result["workboard_status"]["reviews_passed"] == 1
+    assert result["workboard_status"]["review_status"] == "passed"
+    assert result["workboard_status"]["test_status"] == "not_run"
+    assert result["workboard_status"]["blockers"] == 1
 
 
 def test_sidecar_does_not_mark_workboard_with_active_cards_completed(
@@ -377,6 +382,28 @@ def test_sidecar_collects_github_and_workboard_status_concurrently(
     repo_result = result["repos"][0]
     assert repo_result["workboard_status"]["status"] == "ready"
     assert repo_result["github_status"]["status"] == "available"
+
+
+def test_sidecar_fast_portfolio_status_skips_expensive_usage_sync(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = repo_config(tmp_path)
+    config = app_config(tmp_path, repo)
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+    server = SidecarServer(config_path)
+    sync_flags: list[bool] = []
+
+    def repo_status(_repo: RepoConfig, *, sync_usage: bool = True) -> dict[str, Any]:
+        sync_flags.append(sync_usage)
+        return {"full_name": _repo.full_name}
+
+    monkeypatch.setattr(server, "_repo_status", repo_status)
+
+    result = server.request("portfolio.status", {"fast": True})
+
+    assert result["freshness"] == "github_workboard_live_usage_cached"
+    assert sync_flags == [False]
 
 
 def test_sidecar_registers_and_updates_repositories_atomically(tmp_path: Path) -> None:

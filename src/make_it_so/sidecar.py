@@ -259,6 +259,38 @@ def _summarize_workboard(
         key=lambda item: str(item["updated_at"] or ""),
     )[-16:]
     loop_count = sum(int(bool(item["loop"])) for item in timeline)
+    review_cards = [
+        card
+        for card in latest_cards
+        if _workflow_stage(card) in {"review", "final_review"}
+    ]
+    review_active = any(card.status in _WORKBOARD_ACTIVE_STATUSES for card in review_cards)
+    review_blocked = any(card.status == QueueStatus.BLOCKED for card in review_cards)
+    review_status = (
+        "blocked"
+        if review_blocked
+        else "in_review"
+        if review_active
+        else "passed"
+        if review_cards and all(card.status == QueueStatus.DONE for card in review_cards)
+        else "not_run"
+    )
+    test_cards = [
+        card
+        for card in latest_cards
+        if _workflow_stage(card) in {"test", "qa", "ux_review"}
+    ]
+    test_active = any(card.status in _WORKBOARD_ACTIVE_STATUSES for card in test_cards)
+    test_blocked = any(card.status == QueueStatus.BLOCKED for card in test_cards)
+    test_status = (
+        "blocked"
+        if test_blocked
+        else "running"
+        if test_active
+        else "passed"
+        if test_cards and all(card.status == QueueStatus.DONE for card in test_cards)
+        else "not_run"
+    )
     active_stage = next(
         (
             _workflow_stage(card) or "unknown"
@@ -312,6 +344,11 @@ def _summarize_workboard(
         "stages": stage_rows,
         "timeline": timeline,
         "loop_count": loop_count,
+        "review_cycles": len(review_cards),
+        "reviews_passed": sum(card.status == QueueStatus.DONE for card in review_cards),
+        "review_status": review_status,
+        "test_status": test_status,
+        "blockers": counts.get(QueueStatus.BLOCKED.value, 0),
         "pr_count": max(len(pr_numbers), len(pr_urls)),
         "pr_numbers": sorted(pr_numbers),
         "pr_urls": pr_urls,
@@ -336,7 +373,9 @@ class SidecarServer:
         self.interaction = interaction or NativeInteractionAdapter()
         self.github = github or GhGitHubProvider()
 
-    def _workboard_status(self, repo: RepoConfig) -> dict[str, Any] | None:
+    def _workboard_status(
+        self, repo: RepoConfig, *, sync_usage: bool = True
+    ) -> dict[str, Any] | None:
         """Read Workboard progress and reconcile worker telemetry for the dashboard."""
         if not repo.orchestrator or not repo.orchestration_board:
             return None
@@ -347,20 +386,23 @@ class SidecarServer:
             adapter = build_work_queue_adapter(configured)
             cards = adapter.list_cards(repo.orchestration_board)
             self.state.sync_orchestration_cards(repo.full_name, _card_context_rows(cards))
-            try:
-                usage_sync = {
-                    "status": "ok",
-                    **sync_openclaw_sessions(
-                        self.state,
-                        repo=repo.full_name,
-                        executable=configured.executable,
-                        expected_models=_expected_worker_models(configured),
-                        session_context=self.state.openclaw_session_context(repo.full_name),
-                        session_limit=configured.session_limit,
-                    ),
-                }
-            except Exception as exc:
-                usage_sync = {"status": "unavailable", "error": str(exc)[:500]}
+            if sync_usage:
+                try:
+                    usage_sync = {
+                        "status": "ok",
+                        **sync_openclaw_sessions(
+                            self.state,
+                            repo=repo.full_name,
+                            executable=configured.executable,
+                            expected_models=_expected_worker_models(configured),
+                            session_context=self.state.openclaw_session_context(repo.full_name),
+                            session_limit=configured.session_limit,
+                        ),
+                    }
+                except Exception as exc:
+                    usage_sync = {"status": "unavailable", "error": str(exc)[:500]}
+            else:
+                usage_sync = {"status": "cached"}
             return _summarize_workboard(
                 cards,
                 repo.orchestration_board,
@@ -415,6 +457,10 @@ class SidecarServer:
         except Exception as exc:
             return {"status": "unavailable", "error": str(exc)[:500]}
 
+    def _fast_repo_status(self, repo: RepoConfig) -> dict[str, Any]:
+        """Build a dashboard status without blocking on provider session import."""
+        return self._repo_status(repo, sync_usage=False)
+
     def request(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         payload = params or {}
         if method == "health":
@@ -430,7 +476,15 @@ class SidecarServer:
             repos = self.config.repos
             if not repos:
                 return {"repos": []}
+            fast = bool(payload.get("fast", False))
             with ThreadPoolExecutor(max_workers=min(8, len(repos))) as executor:
+                if fast:
+                    return {
+                        "repos": list(
+                            executor.map(self._fast_repo_status, repos)
+                        ),
+                        "freshness": "github_workboard_live_usage_cached",
+                    }
                 return {"repos": list(executor.map(self._repo_status, repos))}
         if method == "repo.register":
             return self._register_repo(payload)
@@ -484,10 +538,14 @@ class SidecarServer:
             return self._run_once(str(payload.get("kind") or "reconcile"))
         raise SidecarError(f"unknown sidecar method: {method}")
 
-    def _repo_status(self, repo: RepoConfig) -> dict[str, Any]:
+    def _repo_status(self, repo: RepoConfig, *, sync_usage: bool = True) -> dict[str, Any]:
         with ThreadPoolExecutor(max_workers=1) as executor:
             github_future = executor.submit(self._github_status, repo)
-            workboard = self._workboard_status(repo)
+            workboard = (
+                self._workboard_status(repo, sync_usage=False)
+                if not sync_usage
+                else self._workboard_status(repo)
+            )
             summary = self.state.usage_summary(repo=repo.full_name)
             usage = build_usage_report(summary, self.config.usage)
             github = github_future.result()

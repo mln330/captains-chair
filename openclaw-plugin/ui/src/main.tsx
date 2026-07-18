@@ -39,6 +39,11 @@ type WorkboardStatus = {
   stages?: Array<{ stage?: string; total?: number; done?: number; active?: number; blocked?: number; loops?: number }>;
   timeline?: WorkflowTimelineItem[];
   loop_count?: number;
+  review_cycles?: number;
+  reviews_passed?: number;
+  review_status?: "not_run" | "in_review" | "passed" | "blocked" | string;
+  test_status?: "not_run" | "running" | "passed" | "blocked" | string;
+  blockers?: number;
   pr_count?: number;
   pr_numbers?: number[];
   pr_urls?: string[];
@@ -204,19 +209,62 @@ function stageLabel(stage?: string | null): string {
   return (stage || "unknown").split("_").join(" ");
 }
 
+function statusLabel(value?: string | null): string {
+  return (value || "not available").split("_").join(" ");
+}
+
+function checkStatus(github?: GitHubStatus): string {
+  if (!github || github.status !== "available") return "not available";
+  if ((github.checks?.failed ?? 0) > 0) return "failing";
+  if ((github.checks?.pending ?? 0) > 0) return "running";
+  if ((github.checks?.passed ?? 0) > 0) return "passing";
+  return "not run";
+}
+
+function Metric({ label, value, tone = "neutral" }: { label: string; value: string | number; tone?: string }) {
+  return <div className={`metric metric-${tone}`}><strong>{value}</strong><span>{label}</span></div>;
+}
+
+function PortfolioSummary({ repos }: { repos: Repo[] }) {
+  const openPrs = repos.reduce((total, repo) => total + (repo.github_status?.open_prs ?? 0), 0);
+  const trackedPrs = repos.reduce((total, repo) => total + (repo.workboard_status?.pr_count ?? 0), 0);
+  const reviewCycles = repos.reduce((total, repo) => total + (repo.workboard_status?.review_cycles ?? 0), 0);
+  const failedChecks = repos.reduce((total, repo) => total + (repo.github_status?.checks?.failed ?? 0), 0);
+  const pendingChecks = repos.reduce((total, repo) => total + (repo.github_status?.checks?.pending ?? 0), 0);
+  const blockers = repos.reduce((total, repo) => total + (repo.workboard_status?.blockers ?? repo.workboard_status?.counts?.blocked ?? 0), 0);
+  const tokens = repos.reduce((total, repo) => total + (repo.tokens.accounted_tokens ?? repo.tokens.total_tokens ?? 0), 0);
+  const active = repos.filter((repo) => repo.operation_mode !== "disabled" && repo.state !== "merged").length;
+  return <section className="portfolio-summary" aria-label="Portfolio summary">
+    <div className="summary-heading"><div><p className="eyebrow">COMMAND DECK</p><h3>Fleet at a glance</h3></div><span className="summary-note">Live GitHub and Workboard facts</span></div>
+    <div className="portfolio-kpis">
+      <Metric label="registered" value={repos.length} />
+      <Metric label="active courses" value={active} tone={active ? "accent" : "neutral"} />
+      <Metric label="open PRs" value={openPrs} tone={openPrs ? "accent" : "neutral"} />
+      <Metric label="PRs in runs" value={trackedPrs} />
+      <Metric label="review cycles" value={reviewCycles} />
+      <Metric label="checks" value={failedChecks ? `${failedChecks} failing` : pendingChecks ? `${pendingChecks} running` : "passing"} tone={failedChecks ? "danger" : pendingChecks ? "warn" : "good"} />
+      <Metric label="blockers" value={blockers} tone={blockers ? "danger" : "good"} />
+      <Metric label="tokens recorded" value={tokens.toLocaleString()} />
+    </div>
+  </section>;
+}
+
 function ExecutionPath({ repo }: { repo: Repo }) {
   const workboard = repo.workboard_status;
   if (!workboard || workboard.status === "unknown" || workboard.status === "unavailable") return null;
   const timeline = (workboard.timeline ?? []).slice(-12);
   const dimensions = (repo.usage_detail?.dimensions ?? []).slice(0, 5);
-  return <section className="execution-panel" aria-label={`Execution evidence for ${repo.full_name}`}>
+  return <details className="execution-details" aria-label={`Execution evidence for ${repo.full_name}`}>
+    <summary><span>Execution details</span><strong>{workboard.current_stage ? `Current: ${stageLabel(workboard.current_stage)}` : "No active stage"} · {workboard.loop_count ?? 0} loops</strong></summary>
+    <section className="execution-panel">
     <div className="execution-heading"><div><h4>Execution path</h4><span>{workboard.current_stage ? `Current: ${stageLabel(workboard.current_stage)}` : "No active stage"}</span></div><strong>{workboard.loop_count ?? 0} retry/repair loops</strong></div>
     {timeline.length ? <div className="execution-path" role="list">{timeline.map((item, index) => <div className={`path-step ${item.status ?? "unknown"} ${item.loop ? "loop" : ""}`} role="listitem" key={`${item.stage}-${item.updated_at}-${index}`}>
       <span className="path-dot" aria-hidden="true" /><div><strong>{stageLabel(item.stage)}</strong><span>{item.status ?? "unknown"}</span><small title={item.summary ?? item.title}>{item.summary ?? item.title ?? "Workboard transition"}</small>{item.pr_url && <a href={item.pr_url} target="_blank" rel="noreferrer">PR</a>}</div>
     </div>)}</div> : <p className="muted">No stage transitions recorded yet.</p>}
     {workboard.stages?.length ? <div className="stage-summary">{workboard.stages.map((stage) => <span key={stage.stage}><strong>{stageLabel(stage.stage)}</strong><small>{stage.done ?? 0}/{stage.total ?? 0} done{stage.blocked ? ` | ${stage.blocked} blocked` : ""}</small></span>)}</div> : null}
     {dimensions.length ? <div className="token-breakdown"><h5>Usage by stage and model</h5>{dimensions.map((row, index) => <div key={`${row.date}-${row.stage}-${row.model}-${index}`}><span>{stageLabel(row.stage)} | {row.model ?? "model unknown"}</span><strong>{(row.tokens ?? 0).toLocaleString()}</strong></div>)}</div> : <p className="muted usage-note">No correlated provider usage recorded for this repository yet.</p>}
-  </section>;
+    </section>
+  </details>;
 }
 
 function routeValue(repo: Repo, role: string, fallbackModel: string, fallbackEffort: string) {
@@ -356,13 +404,25 @@ function RepoPanel({ repo, onSave }: { repo: Repo; onSave: (name: string, payloa
   const usagePending = recordedTokens === 0 && usageSync?.status !== "ok" && (usageSync?.sessions_with_usage ?? 0) === 0;
   const usageLabel = usagePending ? "Usage not correlated" : `${recordedTokens.toLocaleString()} tokens recorded`;
   const github = repo.github_status;
-  const trackedPrs = repo.workboard_status?.pr_count ?? repo.workboard_status?.pr_urls?.length ?? 0;
+  const workboard = repo.workboard_status;
+  const trackedPrs = workboard?.pr_count ?? workboard?.pr_urls?.length ?? 0;
+  const reviewCycles = workboard?.review_cycles ?? 0;
+  const reviewStatus = statusLabel(workboard?.review_status);
+  const testStatus = statusLabel(workboard?.test_status);
+  const checks = checkStatus(github);
+  const blockers = workboard?.blockers ?? workboard?.counts?.blocked ?? 0;
   return <article className="repo-panel">
     <div className="repo-heading"><div><h3>{repo.full_name}</h3><p>{repo.local_path}</p></div><span className={`mode ${repo.operation_mode}`}>{repo.operation_mode}</span></div>
     <Flow state={repo.state} />
     <div className="repo-meta"><span>{repo.state.split("_").join(" ")}</span><span className={usagePending ? "usage-pending" : ""}>{usageLabel}</span><span>{repo.dirty ? "Uncommitted changes" : "Clean checkout"}</span></div>
     <div className="repo-stats" aria-label={`Repository facts for ${repo.full_name}`}>
-      <span><strong>{github?.open_prs ?? "-"}</strong> open PRs</span><span><strong>{trackedPrs}</strong> PRs in run</span><span><strong>{github?.open_issues ?? "-"}</strong> issues</span><span><strong>{github?.branches ?? "-"}</strong> branches</span><span><strong>{github?.checks?.failed ?? 0}</strong> failed checks</span><span><strong>{repo.workboard_status?.cards ?? 0}</strong> work cards</span>
+      <Metric label="open PRs" value={github?.open_prs ?? "-"} />
+      <Metric label="PRs in run" value={trackedPrs} />
+      <Metric label="review cycles" value={reviewCycles} />
+      <Metric label="reviews" value={reviewStatus} tone={reviewStatus === "blocked" ? "danger" : reviewStatus === "passed" ? "good" : "neutral"} />
+      <Metric label="tests" value={testStatus} tone={testStatus === "blocked" ? "danger" : testStatus === "passed" ? "good" : "neutral"} />
+      <Metric label="checks" value={checks} tone={checks === "failing" ? "danger" : checks === "passing" ? "good" : checks === "running" ? "warn" : "neutral"} />
+      <Metric label="blockers" value={blockers} tone={blockers ? "danger" : "good"} />
     </div>
     <ExecutionPath repo={repo} />
     {github?.prs?.length ? <div className="pr-list"><h4>Open pull requests</h4>{github.prs.slice(0, 4).map((pr) => <a href={pr.url} target="_blank" rel="noreferrer" key={pr.number}><strong>#{pr.number}</strong><span>{pr.title ?? "Untitled PR"}</span><small>{pr.isDraft ? "draft" : pr.reviewDecision ?? pr.mergeStateStatus ?? "open"}</small></a>)}</div> : null}
@@ -675,17 +735,28 @@ function ActivityPanel({ repos, onRefresh }: { repos: Repo[]; onRefresh: () => v
 
 export function App() {
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null); const [courses, setCourses] = useState<Courses | null>(null); const [modelConfig, setModelConfig] = useState<ModelConfig | null>(null); const [scheduleStatus, setScheduleStatus] = useState<ScheduleStatus | null>(null); const [error, setError] = useState<string | null>(null); const [refreshing, setRefreshing] = useState(false);
-  const refresh = () => { setRefreshing(true); setError(null); Promise.all([callGateway<Portfolio>("portfolio/status"), callGateway<Courses>("courses/list"), callGateway<ModelConfig>("models/config"), callGateway<ScheduleStatus>("schedule/status")]).then(([nextPortfolio, nextCourses, nextModelConfig, nextScheduleStatus]) => { setPortfolio(nextPortfolio); setCourses(nextCourses); setModelConfig(nextModelConfig); setScheduleStatus(nextScheduleStatus); }).catch((reason: unknown) => setError(String(reason))).finally(() => setRefreshing(false)); };
+  const refresh = () => {
+    setRefreshing(true);
+    setError(null);
+    const reportError = (reason: unknown) => setError(String(reason));
+    const requests = [
+      callGateway<Portfolio>("portfolio/status", { fast: true }).then(setPortfolio).catch(reportError),
+      callGateway<Courses>("courses/list").then(setCourses).catch(reportError),
+      callGateway<ModelConfig>("models/config").then(setModelConfig).catch(reportError),
+      callGateway<ScheduleStatus>("schedule/status").then(setScheduleStatus).catch(reportError),
+    ];
+    void Promise.allSettled(requests).finally(() => setRefreshing(false));
+  };
   const updateRepo = async (fullName: string, payload: UpdatePayload) => { await callGateway("repos/update", { full_name: fullName, ...payload }); refresh(); };
   const courseAction = async (path: string, params: Record<string, unknown>) => { try { await callGateway(path, params); refresh(); } catch (reason) { setError(String(reason)); } };
   useEffect(refresh, []);
   const repos = portfolio?.repos ?? [];
   return <main className="shell"><header className="topbar"><div><p className="eyebrow">FLIGHT CONTROL</p><h1>Make It So</h1><p className="subtitle">Set the course. Engage the crew.</p></div><div className="action-row"><button className="secondary" onClick={refresh} disabled={refreshing} aria-label="Refresh portfolio">{refreshing ? "Refreshing..." : "Refresh"}</button></div></header>
     {error && <div className="alert" role="alert">{error}</div>}
-    <section className="overview" aria-labelledby="overview-title"><div className="section-heading"><div><p className="eyebrow">MISSION OVERVIEW</p><h2 id="overview-title">Current courses</h2></div><span className="status-pill">{portfolio ? `${repos.length} registered` : "Connecting"}</span></div>{repos.length ? <div className="repo-grid">{repos.map((repo) => <RepoPanel key={repo.full_name} repo={repo} onSave={updateRepo} />)}</div> : <div className="empty"><h3>No repositories registered</h3><p>Register a repository to begin a readiness review.</p></div>}</section>
+     <section className="overview" aria-labelledby="overview-title"><div className="section-heading"><div><p className="eyebrow">MISSION OVERVIEW</p><h2 id="overview-title">Current courses</h2></div><span className="status-pill">{portfolio ? `${repos.length} registered` : "Loading"}</span></div>{portfolio === null ? <div className="loading-state" role="status"><strong>Loading fleet status...</strong><span>Course charters and repository facts are arriving independently.</span></div> : repos.length ? <><PortfolioSummary repos={repos} /><div className="repo-grid">{repos.map((repo) => <RepoPanel key={repo.full_name} repo={repo} onSave={updateRepo} />)}</div></> : <div className="empty"><h3>No repositories registered</h3><p>Register a repository to begin a readiness review.</p></div>}</section>
     <SchedulePanel status={scheduleStatus} onRefresh={refresh} />
     {modelConfig && <><ModelPolicyPanel config={modelConfig} onSaved={refresh} /><UsagePolicyPanel config={modelConfig} onSaved={refresh} /></>}
-    <section className="courses" aria-labelledby="courses-title"><div className="section-heading"><div><p className="eyebrow">COURSE CHARTER</p><h2 id="courses-title">Readiness and work packages</h2></div><span className="status-pill">{courses?.courses.length ?? 0} courses</span></div>{courses?.courses.length ? <div className="course-list">{courses.courses.map((item) => <CoursePanel key={`${item.repository}:${item.course.key}`} item={item} repo={repos.find((repo) => repo.full_name === item.repository)} onAction={courseAction} onRefresh={refresh} />)}</div> : <p className="muted">No course charter has been saved yet.</p>}</section>
+     <section className="courses" aria-labelledby="courses-title"><div className="section-heading"><div><p className="eyebrow">COURSE CHARTER</p><h2 id="courses-title">Readiness and work packages</h2></div><span className="status-pill">{courses ? `${courses.courses.length} courses` : "Loading"}</span></div>{courses === null ? <div className="loading-state" role="status"><strong>Loading course charters...</strong><span>This stays independent of GitHub and token reconciliation.</span></div> : courses.courses.length ? <div className="course-list">{courses.courses.map((item) => <CoursePanel key={`${item.repository}:${item.course.key}`} item={item} repo={repos.find((repo) => repo.full_name === item.repository)} onAction={courseAction} onRefresh={refresh} />)}</div> : <p className="muted">No course charter has been saved yet.</p>}</section>
     <CourseCreatePanel repos={repos} onCreated={refresh} /><ActivityPanel repos={repos} onRefresh={refresh} /><GreenfieldPanel onCreated={refresh} /><RegisterPanel onRegistered={refresh} />
   </main>;
 }

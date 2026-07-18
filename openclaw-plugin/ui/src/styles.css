@@ -41,10 +41,25 @@ h3 { font-size: 17px; margin-bottom: 5px; }
 .flow-stage span:last-child:not(.flow-line) { margin-top: 9px; white-space: nowrap; }
 .repo-meta { border-top: 1px solid #2e3b3e; color: #9eb0b2; font-size: 12px; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding-top: 14px; }
 .usage-pending { color: #f0d393; }
-.repo-stats { border-bottom: 1px solid #2e3b3e; display: flex; flex-wrap: wrap; gap: 7px 14px; padding: 12px 0; }
-.repo-stats span { color: #9eb0b2; font-size: 11px; }
-.repo-stats strong { color: #d9e8e7; font-size: 14px; margin-right: 3px; }
+.portfolio-summary { border-bottom: 1px solid #2e3b3e; border-top: 1px solid #2e3b3e; margin: 22px 0 16px; padding: 16px 0; }
+.summary-heading { align-items: baseline; display: flex; gap: 16px; justify-content: space-between; }
+.summary-heading h3 { margin: 0; }
+.summary-note { color: #9eb0b2; font-size: 11px; }
+.portfolio-kpis { display: grid; gap: 8px; grid-template-columns: repeat(8, minmax(0, 1fr)); margin-top: 14px; }
+.metric { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.metric strong { color: #d9e8e7; font-size: 16px; font-weight: 700; overflow-wrap: anywhere; }
+.metric span { color: #9eb0b2; font-size: 10px; line-height: 1.25; text-transform: uppercase; }
+.metric-accent strong { color: #8bd0c6; }
+.metric-good strong { color: #b8dca8; }
+.metric-warn strong { color: #f0d393; }
+.metric-danger strong { color: #f0bfc6; }
+.repo-stats { border-bottom: 1px solid #2e3b3e; display: grid; gap: 12px 10px; grid-template-columns: repeat(4, minmax(0, 1fr)); padding: 14px 0; }
+.repo-stats .metric strong { font-size: 14px; }
 .execution-panel { border-bottom: 1px solid #2e3b3e; padding: 14px 0 4px; }
+.execution-details { border-bottom: 1px solid #2e3b3e; }
+.execution-details > summary { align-items: center; color: #d9e8e7; cursor: pointer; display: flex; font-size: 12px; font-weight: 650; gap: 10px; justify-content: space-between; list-style-position: inside; padding: 13px 0; }
+.execution-details > summary strong { color: #9eb0b2; font-size: 11px; font-weight: 500; }
+.execution-details[open] > summary { color: #8bd0c6; }
 .execution-heading { align-items: center; display: flex; gap: 12px; justify-content: space-between; }
 .execution-heading h4, .pr-list h4, .token-breakdown h5 { color: #7fc7c0; font-size: 11px; letter-spacing: .8px; margin: 0; text-transform: uppercase; }
 .execution-heading span { color: #9eb0b2; display: block; font-size: 11px; margin-top: 3px; }
@@ -175,8 +190,12 @@ legend { color: #7fc7c0; font-size: 12px; padding: 0 5px; }
 .readiness.ready { background: #254436; color: #cce6bc; }
 .readiness.waiting { background: #473c22; color: #f2d993; }
 .muted { color: #9eb0b2; margin: 20px 0 0; }
+.loading-state { align-items: baseline; border: 1px dashed #405154; display: flex; gap: 12px; justify-content: space-between; margin-top: 22px; padding: 18px; }
+.loading-state strong { color: #d9e8e7; }
+.loading-state span { color: #9eb0b2; font-size: 12px; }
 @media (max-width: 900px) { .activity-grid { grid-template-columns: 1fr; } }
-@media (max-width: 720px) { .register-form, .settings-grid, .route-grid, .route-preview { grid-template-columns: 1fr; } .course-heading, .requirement, .checkpoint, .schedule-row { align-items: start; grid-template-columns: 1fr; } .course-form .wide { grid-column: auto; } .check-label { padding-top: 0; } .plan-diff div { grid-template-columns: 1fr; gap: 2px; } }
+@media (max-width: 1000px) { .portfolio-kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@media (max-width: 720px) { .register-form, .settings-grid, .route-grid, .route-preview { grid-template-columns: 1fr; } .course-heading, .requirement, .checkpoint, .schedule-row { align-items: start; grid-template-columns: 1fr; } .course-form .wide { grid-column: auto; } .check-label { padding-top: 0; } .plan-diff div { grid-template-columns: 1fr; gap: 2px; } .repo-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } .loading-state, .summary-heading { align-items: flex-start; flex-direction: column; } }
 @media (max-width: 620px) { .shell { padding-top: 22px; } h1 { font-size: 34px; } .topbar { align-items: flex-start; flex-direction: column; } .repo-meta { align-items: flex-start; flex-direction: column; } }
 
 /* OpenClaw's default Control UI is light. The plugin frame is sandboxed, so
@@ -200,6 +219,17 @@ legend { color: #7fc7c0; font-size: 12px; padding: 0 5px; }
   .repo-stats, .execution-panel, .stage-summary, .token-breakdown, .token-breakdown > div, .pr-list, .pr-list a { border-color: #ded8d0; }
   .repo-stats span, .repo-meta, .execution-heading span, .path-step span, .path-step small, .stage-summary small, .token-breakdown span, .pr-list a small { color: #6f6a63; }
   .repo-stats strong, .path-step strong, .pr-list a span { color: #292724; }
+  .portfolio-summary { border-color: #ded8d0; }
+  .summary-note, .metric span, .loading-state span { color: #6f6a63; }
+  .metric strong, .loading-state strong { color: #292724; }
+  .metric-accent strong { color: #a83324; }
+  .metric-good strong { color: #32602b; }
+  .metric-warn strong { color: #7b5b12; }
+  .metric-danger strong { color: #8d2f36; }
+  .loading-state { border-color: #cfc8bf; }
+  .execution-details { border-color: #ded8d0; }
+  .execution-details > summary { color: #292724; }
+  .execution-details > summary strong { color: #6f6a63; }
   .execution-heading h4, .pr-list h4, .token-breakdown h5 { color: #a83324; }
   .execution-heading > strong, .usage-pending { color: #7b5b12; }
   .path-step:not(:last-child)::after { background: #d2cbc2; }

@@ -59,6 +59,8 @@ describe("shared dashboard components", () => {
     render(<App />);
 
     await waitFor(() => expect(screen.getByText("example/project")).toBeTruthy());
+    expect(screen.getByText("Fleet at a glance")).toBeTruthy();
+    expect(screen.getAllByText("open PRs").length).toBeGreaterThan(0);
     expect(screen.getByText("Search feature")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Reconcile" }));
 
