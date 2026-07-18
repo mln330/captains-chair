@@ -12,6 +12,17 @@ const repo = {
   notification_route: "notifications",
   surfaces: ["web_ui"],
   tokens: { total_tokens: 1250 },
+  worker_models: { coder: "codex/gpt-5.6-terra" },
+  github_status: { status: "available", open_prs: 0, checks: { passed: 1, pending: 0, failed: 0 }, prs: [] },
+  workboard_status: {
+    status: "ready",
+    current_stage: "planning",
+    review_cycles: 0,
+    historical_blockers: 0,
+    current_blockers: 0,
+    stage_history: [],
+    workflow_runs: [],
+  },
   warnings: [],
   events: [],
 };
@@ -55,7 +66,7 @@ test("dashboard renders the course map and planning brief", async ({ page }, tes
   await page.getByRole("button", { name: "Open planning brief" }).click();
   await expect(page.getByRole("heading", { name: "Plan and charter review" })).toBeVisible();
   await expect(page.getByText("Which search users are in scope?")).toBeVisible();
-  await expect(page.getByRole("region", { name: "SDLC progress" })).toHaveAttribute("tabindex", "0");
+  await expect(page.getByRole("region", { name: "Execution evidence for example/project" })).toBeVisible();
   const accessibility = await new AxeBuilder({ page }).analyze();
   expect(accessibility.violations).toEqual([]);
   const screenshot = await page.screenshot({ fullPage: true, path: testInfo.outputPath("dashboard-planning-brief.png") });

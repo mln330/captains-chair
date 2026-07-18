@@ -1,5 +1,23 @@
 import { StrictMode, useEffect, useMemo, useState, type FormEvent } from "react";
 import { createRoot } from "react-dom/client";
+import {
+  Activity,
+  BadgeCheck,
+  CheckCircle2,
+  CircleDot,
+  Code2,
+  Cpu,
+  ExternalLink,
+  FlaskConical,
+  GitMerge,
+  GitPullRequest,
+  RefreshCw,
+  Rocket,
+  RotateCcw,
+  ShieldCheck,
+  Wrench,
+  XCircle,
+} from "lucide-react";
 import "./styles.css";
 
 type ModelRoute = { primary?: { model?: string; thinking?: string }; allow_fallback?: boolean };
@@ -19,14 +37,41 @@ type UsageDetail = {
   dimensions?: Array<{ date?: string; course_key?: string | null; work_package_key?: string | null; stage?: string; model?: string; tokens?: number; calls?: number; input_tokens?: number; cached_input_tokens?: number; cache_write_tokens?: number; reasoning_tokens?: number; output_tokens?: number; total_tokens?: number }>;
 };
 type WorkflowTimelineItem = {
+  id?: string;
   stage?: string;
   status?: string;
   title?: string;
   summary?: string;
   agent?: string | null;
+  model?: string | null;
+  attempts?: number;
+  workflow?: string;
   pr_url?: string | null;
   updated_at?: string | null;
   loop?: boolean;
+};
+type WorkflowRun = {
+  workflow?: string;
+  index?: number;
+  title?: string;
+  kind?: "build" | "review" | "completion" | string;
+  status?: string;
+  current?: boolean;
+  cards?: number;
+  loops?: number;
+  blocked?: number;
+  done?: number;
+  updated_at?: string | null;
+  timeline?: WorkflowTimelineItem[];
+};
+type StageHistory = {
+  stage?: string;
+  total?: number;
+  done?: number;
+  active?: number;
+  blocked?: number;
+  loops?: number;
+  models?: string[];
 };
 type WorkboardStatus = {
   status?: string;
@@ -37,8 +82,11 @@ type WorkboardStatus = {
   active_cards?: number;
   current_stage?: string | null;
   stages?: Array<{ stage?: string; total?: number; done?: number; active?: number; blocked?: number; loops?: number }>;
+  stage_history?: StageHistory[];
   timeline?: WorkflowTimelineItem[];
+  workflow_runs?: WorkflowRun[];
   loop_count?: number;
+  total_loop_count?: number;
   review_cycles?: number;
   reviews_passed?: number;
   review_status?: "not_run" | "in_review" | "passed" | "blocked" | string;
@@ -77,6 +125,7 @@ type Repo = {
   state: string;
   orchestrator?: string;
   orchestration_board?: string | null;
+  worker_models?: Record<string, string>;
   notification_route?: string | null;
   model_profiles?: Record<string, ModelRoute>;
   qa_profiles?: QAProfile[];
@@ -195,23 +244,45 @@ function callGateway<T>(path: string, params: Record<string, unknown> = {}): Pro
   });
 }
 
-function Flow({ state }: { state: string }) {
-  const stages = ["Course", "Ready", "Build", "Review", "Verify", "Complete"];
-  const active = state === "unbaselined" || state === "baseline_review"
-    ? 0 : state === "ready" || state === "planning" ? 1
-      : state.includes("review") || state === "pr_open" || state === "repairing" ? 3
-        : state === "completion_ready" || state === "post_merge_verification" ? 4
-          : state === "merged" ? 5 : 2;
-  return <div className="flow" role="region" aria-label="SDLC progress" tabIndex={0}>
-    {stages.map((stage, index) => <div className={`flow-stage ${index <= active ? "active" : ""}`} key={stage}>
-      <span className="flow-dot" aria-hidden="true" /><span>{stage}</span>
-      {index < stages.length - 1 && <span className="flow-line" aria-hidden="true" />}
-    </div>)}
-  </div>;
-}
-
 function stageLabel(stage?: string | null): string {
   return (stage || "unknown").split("_").join(" ");
+}
+
+function compactTokens(value: number): string {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 1_000) return `${Math.round(value / 1_000)}k`;
+  return value.toLocaleString();
+}
+
+function shortModel(value?: string | null): string {
+  return (value || "model unknown").replace(/^codex\//, "").replace(/^openai-codex\//, "");
+}
+
+const EXECUTION_LANES = [
+  { stage: "implementation", label: "Build", icon: Code2 },
+  { stage: "review", label: "Review", icon: ShieldCheck },
+  { stage: "repair", label: "Repair", icon: Wrench },
+  { stage: "test", label: "Test", icon: FlaskConical },
+  { stage: "final_review", label: "Final", icon: BadgeCheck },
+  { stage: "merge", label: "Merge", icon: GitMerge },
+  { stage: "post_merge", label: "Verify", icon: Rocket },
+] as const;
+
+function stageTelemetry(repo: Repo, stage: string) {
+  const rows = (repo.usage_detail?.dimensions ?? []).filter((row) => row.stage === stage);
+  return {
+    tokens: rows.reduce((total, row) => total + (row.tokens ?? 0), 0),
+    models: [...new Set(rows.map((row) => row.model).filter((model): model is string => Boolean(model)))],
+  };
+}
+
+function stageTone(stage?: StageHistory, terminal = false): string {
+  if (!stage) return "idle";
+  if ((stage.active ?? 0) > 0) return "active";
+  if (terminal && (stage.done ?? 0) > 0) return "done";
+  if ((stage.blocked ?? 0) > 0 && (stage.done ?? 0) === 0) return "blocked";
+  if ((stage.done ?? 0) > 0) return "done";
+  return "idle";
 }
 
 function statusLabel(value?: string | null): string {
@@ -241,7 +312,7 @@ function PortfolioSummary({ repos }: { repos: Repo[] }) {
   const active = repos.filter((repo) => repo.operation_mode !== "disabled" && repo.state !== "merged").length;
   return <section className="portfolio-summary" aria-label="Portfolio summary">
     <div className="summary-heading"><div><p className="eyebrow">COMMAND DECK</p><h3>Fleet at a glance</h3></div><span className="summary-note">Live GitHub and Workboard facts</span></div>
-    <div className="portfolio-kpis">
+    <div className="portfolio-kpis" tabIndex={0} aria-label="Portfolio metrics">
       <Metric label="registered" value={repos.length} />
       <Metric label="active courses" value={active} tone={active ? "accent" : "neutral"} />
       <Metric label="open PRs" value={openPrs} tone={openPrs ? "accent" : "neutral"} />
@@ -257,21 +328,55 @@ function PortfolioSummary({ repos }: { repos: Repo[] }) {
 function ExecutionPath({ repo }: { repo: Repo }) {
   const workboard = repo.workboard_status;
   if (!workboard || workboard.status === "unknown" || workboard.status === "unavailable") return null;
-  const timeline = (workboard.timeline ?? []).slice(-12);
-  const dimensions = (repo.usage_detail?.dimensions ?? []).slice(0, 5);
+  const runs = workboard.workflow_runs ?? [];
+  const stageHistory: StageHistory[] = workboard.stage_history ?? workboard.stages ?? [];
   const terminal = workboard.terminal || workboard.status === "completed" || repo.state === "merged";
-  return <details className="execution-details" aria-label={`Execution evidence for ${repo.full_name}`}>
-    <summary><span>Execution details</span><strong>{workboard.current_stage ? `Current: ${stageLabel(workboard.current_stage)}` : "No active stage"} · {workboard.loop_count ?? 0} loops</strong></summary>
-    <section className="execution-panel">
-    {terminal && <p className="completion-note">Implementation merged and post-merge verification passed. Historical blocked cards below are audit history, not current blockers. Production delivery is a separate step.</p>}
-    <div className="execution-heading"><div><h4>Execution path</h4><span>{workboard.current_stage ? `Current: ${stageLabel(workboard.current_stage)}` : "No active stage"}</span></div><strong>{workboard.loop_count ?? 0} retry/repair loops</strong></div>
-    {timeline.length ? <div className="execution-path" role="list">{timeline.map((item, index) => <div className={`path-step ${item.status ?? "unknown"} ${item.loop ? "loop" : ""}`} role="listitem" key={`${item.stage}-${item.updated_at}-${index}`}>
-      <span className="path-dot" aria-hidden="true" /><div><strong>{stageLabel(item.stage)}</strong><span>{item.status ?? "unknown"}</span><small title={item.summary ?? item.title}>{item.summary ?? item.title ?? "Workboard transition"}</small>{item.pr_url && <a href={item.pr_url} target="_blank" rel="noreferrer">PR</a>}</div>
-    </div>)}</div> : <p className="muted">No stage transitions recorded yet.</p>}
-    {workboard.stages?.length ? <div className="stage-summary">{workboard.stages.map((stage) => <span key={stage.stage}><strong>{stageLabel(stage.stage)}</strong><small>{stage.done ?? 0}/{stage.total ?? 0} done{stage.blocked ? ` | ${stage.blocked} blocked` : ""}</small></span>)}</div> : null}
-    {dimensions.length ? <div className="token-breakdown"><h5>Usage by stage and model</h5>{dimensions.map((row, index) => <div key={`${row.date}-${row.stage}-${row.model}-${index}`}><span>{stageLabel(row.stage)} | {row.model ?? "model unknown"}</span><strong>{(row.tokens ?? 0).toLocaleString()}</strong></div>)}</div> : <p className="muted usage-note">No correlated provider usage recorded for this repository yet.</p>}
-    </section>
-  </details>;
+  const totalLoops = workboard.total_loop_count ?? workboard.loop_count ?? 0;
+  const coderRoute = repo.worker_models?.coder;
+  return <section className="execution-console" aria-label={`Execution evidence for ${repo.full_name}`}>
+    <div className="console-heading">
+      <div><p className="eyebrow">MISSION TELEMETRY</p><h4>How the work moved</h4><span>Every recorded build, review, repair, test, and completion workflow.</span></div>
+      <div className={`completion-beacon ${terminal ? "complete" : "active"}`}><Activity size={15} aria-hidden="true" /><span>{terminal ? "Course verified" : workboard.current_stage ? `Active: ${stageLabel(workboard.current_stage)}` : "Awaiting next transition"}</span></div>
+    </div>
+    <div className="stage-map" role="list" aria-label="SDLC stage evidence" tabIndex={0}>
+      {EXECUTION_LANES.map(({ stage, label, icon: Icon }, index) => {
+        const history = stageHistory.find((item) => item.stage === stage);
+        const telemetry = stageTelemetry(repo, stage);
+        const models = telemetry.models.length ? telemetry.models : history?.models ?? [];
+        const tone = stageTone(history, terminal);
+        return <div className={`stage-node ${tone}`} role="listitem" key={stage}>
+          <div className="stage-node-top"><span className="stage-icon"><Icon size={16} aria-hidden="true" /></span><span className="stage-count">{history ? `${history.done ?? 0}/${history.total ?? 0}` : "--"}</span></div>
+          <strong>{label}</strong>
+          <span className="stage-model" title={models.join(", ")}>{models.length ? models.map(shortModel).join(", ") : "No recorded model"}</span>
+          <span className="stage-tokens">{telemetry.tokens ? `${compactTokens(telemetry.tokens)} tokens` : history ? `${history.loops ?? 0} loops` : "No run"}</span>
+          {index < EXECUTION_LANES.length - 1 && <span className="stage-connector" aria-hidden="true" />}
+        </div>;
+      })}
+    </div>
+    <div className="feedback-band">
+      <div className="feedback-icon"><RotateCcw size={18} aria-hidden="true" /></div>
+      <div><strong>{totalLoops} feedback loop{totalLoops === 1 ? "" : "s"}</strong><span>Review findings and failed gates route work back through repair, then forward through independent verification.</span></div>
+      <div className="feedback-counts"><span><b>{workboard.review_cycles ?? 0}</b> reviews</span><span><b>{workboard.historical_blockers ?? 0}</b> historical blockers</span><span><b>{workboard.current_blockers ?? workboard.blockers ?? 0}</b> current blockers</span></div>
+    </div>
+    {coderRoute && <div className="model-route-note"><Cpu size={17} aria-hidden="true" /><div><strong>OpenClaw coding route: {shortModel(coderRoute)}</strong><span>Direct Codex and OpenClaw use separate provider routes. Spark remains available to direct Codex; this OpenClaw worker used its compatible configured route.</span></div></div>}
+    <div className="run-history">
+      <div className="run-history-heading"><div><p className="eyebrow">FLIGHT RECORDER</p><h5>Workflow runs</h5></div><span>{runs.length} recorded run{runs.length === 1 ? "" : "s"}</span></div>
+      {runs.length ? runs.map((run) => <article className={`workflow-run ${run.status ?? "unknown"}`} key={run.workflow ?? run.index}>
+        <div className="run-label"><span>RUN {String(run.index ?? 0).padStart(2, "0")}</span><strong>{run.kind ?? "workflow"}</strong><em>{statusLabel(run.status)}</em></div>
+        <div className="run-body">
+          <div className="run-title"><div><strong>{run.title ?? "Workboard workflow"}</strong><span>{run.done ?? 0}/{run.cards ?? 0} cards complete{run.loops ? ` | ${run.loops} loops` : ""}</span></div>{run.current && <span className="current-run">current</span>}</div>
+          <div className="run-steps" role="list">
+            {(run.timeline ?? []).slice(-12).map((item, index) => <div className={`run-step ${item.status ?? "unknown"} ${item.loop ? "loop" : ""}`} role="listitem" key={item.id ?? `${run.workflow}-${item.stage}-${index}`}>
+              <span className="run-step-marker" aria-hidden="true">{item.status === "done" ? <CheckCircle2 size={14} /> : item.status === "blocked" ? <XCircle size={14} /> : <CircleDot size={14} />}</span>
+              <div><strong>{stageLabel(item.stage)}</strong><span>{item.model ? shortModel(item.model) : item.agent ?? "deterministic"}</span><small title={item.summary ?? item.title}>{item.summary ?? item.title ?? "Workboard transition"}</small></div>
+              {item.pr_url && <a href={item.pr_url} target="_blank" rel="noreferrer" aria-label={`Open PR for ${item.title ?? item.stage}`}><GitPullRequest size={14} /><span>PR</span><ExternalLink size={11} /></a>}
+            </div>)}
+          </div>
+        </div>
+      </article>) : <p className="muted">No durable Workboard workflow history has been recorded yet.</p>}
+    </div>
+    {terminal && <div className="completion-strip"><BadgeCheck size={18} aria-hidden="true" /><div><strong>Implementation complete</strong><span>Merged and post-merge verification passed. Historical blocked cards above are audit evidence, not active blockers. Production deployment remains a separately verified outcome.</span></div></div>}
+  </section>;
 }
 
 function routeValue(repo: Repo, role: string, fallbackModel: string, fallbackEffort: string) {
@@ -374,6 +479,26 @@ function profileForEditing(profile: QAProfile): QAProfile {
   };
 }
 
+function repoActivity(repo: Repo): string {
+  const runs = repo.workboard_status?.workflow_runs ?? [];
+  return runs.at(-1)?.updated_at ?? repo.events?.[0]?.created_at ?? "";
+}
+
+function RepoSelector({ repos, selected, onSelect }: { repos: Repo[]; selected: string; onSelect: (name: string) => void }) {
+  return <nav className="repo-switcher" aria-label="Registered repositories" role="tablist">
+    <div className="repo-switcher-heading"><span>COURSE INDEX</span><strong>{repos.length}</strong></div>
+    {repos.map((repo) => {
+      const workboard = repo.workboard_status;
+      const checks = checkStatus(repo.github_status);
+      const loops = workboard?.total_loop_count ?? workboard?.loop_count ?? 0;
+      return <button className={`repo-tab ${selected === repo.full_name ? "selected" : ""}`} type="button" role="tab" aria-selected={selected === repo.full_name} onClick={() => onSelect(repo.full_name)} key={repo.full_name}>
+        <span className="repo-tab-title"><strong>{repo.full_name}</strong><em className={repo.state}>{statusLabel(repo.state)}</em></span>
+        <span className="repo-tab-facts"><span><GitPullRequest size={13} aria-hidden="true" />{repo.github_status?.open_prs ?? 0} open</span><span><RotateCcw size={13} aria-hidden="true" />{loops} loops</span><span className={`check-${checks.replace(" ", "-")}`}>{checks}</span></span>
+      </button>;
+    })}
+  </nav>;
+}
+
 function RepoPanel({ repo, onSave }: { repo: Repo; onSave: (name: string, payload: UpdatePayload) => Promise<void> }) {
   const [mode, setMode] = useState(repo.operation_mode);
   const [completion, setCompletion] = useState(repo.completion_policy);
@@ -420,11 +545,10 @@ function RepoPanel({ repo, onSave }: { repo: Repo; onSave: (name: string, payloa
   const terminal = workboard?.terminal || workboard?.status === "completed" || repo.state === "merged";
   const blockers = workboard?.current_blockers ?? workboard?.blockers ?? (terminal ? 0 : workboard?.counts?.blocked ?? 0);
   const historicalBlockers = workboard?.historical_blockers ?? 0;
-  return <article className="repo-panel">
+  return <section className="repo-panel">
     <div className="repo-heading"><div><h3>{repo.full_name}</h3><p>{repo.local_path}</p></div><span className={`mode ${repo.operation_mode}`}>{repo.operation_mode}</span></div>
-    <Flow state={repo.state} />
     <div className="repo-meta"><span>{repo.state.split("_").join(" ")}</span><span className={usagePending ? "usage-pending" : ""}>{usageLabel}</span><span>{repo.dirty ? "Uncommitted changes" : "Clean checkout"}</span></div>
-    <div className="repo-stats" aria-label={`Repository facts for ${repo.full_name}`}>
+    <div className="repo-stats" aria-label={`Repository facts for ${repo.full_name}`} tabIndex={0}>
       <Metric label="open PRs" value={github?.open_prs ?? "-"} />
       <Metric label="PRs in workflow" value={trackedPrs} />
       <Metric label="review cycles" value={reviewCycles} />
@@ -451,7 +575,7 @@ function RepoPanel({ repo, onSave }: { repo: Repo; onSave: (name: string, payloa
       <div className="route-grid">{ROUTE_DEFAULTS.map(({ role, label }) => <fieldset key={role}><legend>{label}</legend><label>Model<input value={routes[role].model} onChange={(event) => setRoutes({ ...routes, [role]: { ...routes[role], model: event.target.value } })} /></label><label>Reasoning<select value={routes[role].effort} onChange={(event) => setRoutes({ ...routes, [role]: { ...routes[role], effort: event.target.value } })}><option>low</option><option>medium</option><option>high</option><option>xhigh</option></select></label></fieldset>)}</div>
       <button className="primary compact" onClick={save} disabled={saving}>{saving ? "Saving..." : "Save controls"}</button>
     </details>
-  </article>;
+  </section>;
 }
 
 function ModelPolicyPanel({ config, onSaved }: { config: ModelConfig; onSaved: () => void }) {
@@ -745,6 +869,7 @@ function ActivityPanel({ repos, onRefresh }: { repos: Repo[]; onRefresh: () => v
 
 export function App() {
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null); const [courses, setCourses] = useState<Courses | null>(null); const [modelConfig, setModelConfig] = useState<ModelConfig | null>(null); const [scheduleStatus, setScheduleStatus] = useState<ScheduleStatus | null>(null); const [error, setError] = useState<string | null>(null); const [refreshing, setRefreshing] = useState(false);
+  const [selectedRepoName, setSelectedRepoName] = useState("");
   const refresh = () => {
     setRefreshing(true);
     setError(null);
@@ -761,9 +886,15 @@ export function App() {
   const courseAction = async (path: string, params: Record<string, unknown>) => { try { await callGateway(path, params); refresh(); } catch (reason) { setError(String(reason)); } };
   useEffect(refresh, []);
   const repos = portfolio?.repos ?? [];
-  return <main className="shell"><header className="topbar"><div><p className="eyebrow">FLIGHT CONTROL</p><h1>Make It So</h1><p className="subtitle">Set the course. Engage the crew.</p></div><div className="action-row"><button className="secondary" onClick={refresh} disabled={refreshing} aria-label="Refresh portfolio">{refreshing ? "Refreshing..." : "Refresh"}</button></div></header>
+  useEffect(() => {
+    if (!repos.length || repos.some((repo) => repo.full_name === selectedRepoName)) return;
+    const latest = [...repos].sort((left, right) => repoActivity(right).localeCompare(repoActivity(left)))[0];
+    setSelectedRepoName(latest.full_name);
+  }, [repos, selectedRepoName]);
+  const selectedRepo = repos.find((repo) => repo.full_name === selectedRepoName) ?? repos[0];
+  return <main className="shell"><header className="topbar"><div><p className="eyebrow">FLIGHT CONTROL</p><h1>Make It So</h1><p className="subtitle">Set the course. Engage the crew.</p></div><div className="action-row"><button className="secondary icon-label" onClick={refresh} disabled={refreshing} aria-label="Refresh portfolio"><RefreshCw size={16} aria-hidden="true" className={refreshing ? "spinning" : ""} />{refreshing ? "Refreshing" : "Refresh"}</button></div></header>
     {error && <div className="alert" role="alert">{error}</div>}
-     <section className="overview" aria-labelledby="overview-title"><div className="section-heading"><div><p className="eyebrow">MISSION OVERVIEW</p><h2 id="overview-title">Current courses</h2></div><span className="status-pill">{portfolio ? `${repos.length} registered` : "Loading"}</span></div>{portfolio === null ? <div className="loading-state" role="status"><strong>Loading fleet status...</strong><span>Course charters and repository facts are arriving independently.</span></div> : repos.length ? <><PortfolioSummary repos={repos} /><div className="repo-grid">{repos.map((repo) => <RepoPanel key={repo.full_name} repo={repo} onSave={updateRepo} />)}</div></> : <div className="empty"><h3>No repositories registered</h3><p>Register a repository to begin a readiness review.</p></div>}</section>
+     <section className="overview" aria-labelledby="overview-title"><div className="section-heading"><div><p className="eyebrow">MISSION OVERVIEW</p><h2 id="overview-title">Current courses</h2></div><span className="status-pill">{portfolio ? `${repos.length} registered` : "Loading"}</span></div>{portfolio === null ? <div className="loading-state" role="status"><strong>Loading fleet status...</strong><span>Course charters and repository facts are arriving independently.</span></div> : repos.length ? <><PortfolioSummary repos={repos} /><div className="mission-layout"><RepoSelector repos={repos} selected={selectedRepo?.full_name ?? ""} onSelect={setSelectedRepoName} />{selectedRepo && <RepoPanel key={selectedRepo.full_name} repo={selectedRepo} onSave={updateRepo} />}</div></> : <div className="empty"><h3>No repositories registered</h3><p>Register a repository to begin a readiness review.</p></div>}</section>
     <SchedulePanel status={scheduleStatus} onRefresh={refresh} />
     {modelConfig && <><ModelPolicyPanel config={modelConfig} onSaved={refresh} /><UsagePolicyPanel config={modelConfig} onSaved={refresh} /></>}
      <section className="courses" aria-labelledby="courses-title"><div className="section-heading"><div><p className="eyebrow">COURSE CHARTER</p><h2 id="courses-title">Readiness and work packages</h2></div><span className="status-pill">{courses ? `${courses.courses.length} courses` : "Loading"}</span></div>{courses === null ? <div className="loading-state" role="status"><strong>Loading course charters...</strong><span>This stays independent of GitHub and token reconciliation.</span></div> : courses.courses.length ? <div className="course-list">{courses.courses.map((item) => <CoursePanel key={`${item.repository}:${item.course.key}`} item={item} repo={repos.find((repo) => repo.full_name === item.repository)} onAction={courseAction} onRefresh={refresh} />)}</div> : <p className="muted">No course charter has been saved yet.</p>}</section>

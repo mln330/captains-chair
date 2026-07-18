@@ -135,6 +135,24 @@ def _attempt_count(card: QueueCard) -> int:
     return len(cast(list[Any], attempts)) if isinstance(attempts, list) else 0
 
 
+def _card_model(card: QueueCard, worker_models: dict[str, str]) -> str | None:
+    if card.agent_id and card.agent_id in worker_models:
+        return worker_models[card.agent_id]
+    if str(card.agent_id or "").startswith("make-it-so-managed:deterministic-merge:"):
+        return "deterministic gate"
+    return None
+
+
+def _is_loop_card(card: QueueCard) -> bool:
+    title = card.title.lower()
+    return (
+        _workflow_stage(card) == "repair"
+        or title.startswith("retry ")
+        or any(label.startswith(("retry:", "retry-for:")) for label in card.labels)
+        or _attempt_count(card) > 1
+    )
+
+
 def _card_context_rows(cards: list[QueueCard]) -> list[dict[str, Any]]:
     return [
         {
@@ -164,6 +182,7 @@ def _summarize_workboard(
     *,
     usage_sync: dict[str, Any] | None = None,
     repo_full_name: str | None = None,
+    worker_models: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Project Workboard cards into a read-only dashboard status.
 
@@ -187,6 +206,12 @@ def _summarize_workboard(
             "counts": {},
         }
 
+    configured_models = worker_models or {}
+    ordered_workflows = sorted(
+        workflows.items(),
+        key=lambda item: max((_card_activity_timestamp(card) for card in item[1]), default=0),
+    )
+    all_workflow_cards = [card for _label, workflow_cards in ordered_workflows for card in workflow_cards]
     latest_label, latest_cards = max(
         workflows.items(),
         key=lambda item: (
@@ -246,13 +271,12 @@ def _summarize_workboard(
                 "title": card.title,
                 "summary": _card_summary(card),
                 "agent": card.agent_id,
+                "model": _card_model(card, configured_models),
+                "attempts": _attempt_count(card),
+                "workflow": latest_label.removeprefix("workflow:"),
                 "pr_url": card.source_url if "/pull/" in str(card.source_url or "") else None,
                 "updated_at": _card_activity_time(card),
-                "loop": (
-                    _workflow_stage(card) == "repair"
-                    or any(label.startswith("retry:") for label in card.labels)
-                    or _attempt_count(card) > 1
-                ),
+                "loop": _is_loop_card(card),
             }
             for card in latest_cards
         ),
@@ -261,39 +285,49 @@ def _summarize_workboard(
     loop_count = sum(int(bool(item["loop"])) for item in timeline)
     review_cards = [
         card
+        for card in all_workflow_cards
+        if _workflow_stage(card) in {"review", "final_review"}
+    ]
+    current_review_cards = [
+        card
         for card in latest_cards
         if _workflow_stage(card) in {"review", "final_review"}
     ]
-    review_active = any(card.status in _WORKBOARD_ACTIVE_STATUSES for card in review_cards)
-    review_blocked = any(card.status == QueueStatus.BLOCKED for card in review_cards)
+    review_active = any(card.status in _WORKBOARD_ACTIVE_STATUSES for card in current_review_cards)
+    review_blocked = any(card.status == QueueStatus.BLOCKED for card in current_review_cards)
     historical_review_blockers = sum(
         card.status == QueueStatus.BLOCKED for card in review_cards
     )
     review_status = (
         "passed"
-        if terminal and review_cards
+        if terminal and any(card.status == QueueStatus.DONE for card in review_cards)
         else "blocked"
         if review_blocked
         else "in_review"
         if review_active
         else "passed"
-        if review_cards and all(card.status == QueueStatus.DONE for card in review_cards)
+        if review_cards and any(card.status == QueueStatus.DONE for card in review_cards)
         else "not_run"
     )
     test_cards = [
         card
+        for card in all_workflow_cards
+        if _workflow_stage(card) in {"test", "qa", "ux_review"}
+    ]
+    current_test_cards = [
+        card
         for card in latest_cards
         if _workflow_stage(card) in {"test", "qa", "ux_review"}
     ]
-    test_active = any(card.status in _WORKBOARD_ACTIVE_STATUSES for card in test_cards)
-    test_blocked = any(card.status == QueueStatus.BLOCKED for card in test_cards)
+    test_active = any(card.status in _WORKBOARD_ACTIVE_STATUSES for card in current_test_cards)
+    test_blocked = any(card.status == QueueStatus.BLOCKED for card in current_test_cards)
     test_status = (
         "blocked"
         if test_blocked
         else "running"
         if test_active
         else "passed"
-        if test_cards and all(card.status == QueueStatus.DONE for card in test_cards)
+        if test_cards and any(card.status == QueueStatus.DONE for card in test_cards)
         else "not_run"
     )
     active_stage = next(
@@ -313,12 +347,115 @@ def _summarize_workboard(
         if timeline
         else None
     )
-    historical_blockers = counts.get(QueueStatus.BLOCKED.value, 0)
-    current_blockers = 0 if terminal else historical_blockers
+    historical_blockers = sum(card.status == QueueStatus.BLOCKED for card in all_workflow_cards)
+    current_blockers = 0 if terminal else counts.get(QueueStatus.BLOCKED.value, 0)
+    stage_history: list[dict[str, Any]] = []
+    for stage_name in stage_names:
+        stage_cards = [card for card in all_workflow_cards if _workflow_stage(card) == stage_name]
+        if not stage_cards:
+            continue
+        models = sorted(
+            {
+                model
+                for card in stage_cards
+                for model in (_card_model(card, configured_models),)
+                if model
+            }
+        )
+        stage_history.append(
+            {
+                "stage": stage_name,
+                "total": len(stage_cards),
+                "done": sum(card.status == QueueStatus.DONE for card in stage_cards),
+                "active": sum(card.status in _WORKBOARD_ACTIVE_STATUSES for card in stage_cards),
+                "blocked": sum(card.status == QueueStatus.BLOCKED for card in stage_cards),
+                "loops": sum(_is_loop_card(card) for card in stage_cards),
+                "models": models,
+            }
+        )
+
+    workflow_runs: list[dict[str, Any]] = []
+    for run_index, (workflow_label, workflow_cards) in enumerate(ordered_workflows, start=1):
+        run_active = [card for card in workflow_cards if card.status in _WORKBOARD_ACTIVE_STATUSES]
+        run_done_stages = {
+            stage
+            for card in workflow_cards
+            if card.status == QueueStatus.DONE
+            for stage in (_workflow_stage(card),)
+            if stage is not None
+        }
+        run_terminal = not run_active and {"merge", "post_merge"}.issubset(run_done_stages)
+        run_is_latest = workflow_label == latest_label
+        run_status = (
+            "completed"
+            if run_terminal
+            else "in_progress"
+            if run_is_latest and run_active
+            else "blocked"
+            if run_is_latest
+            else "superseded"
+        )
+        run_stage_names = {
+            stage for card in workflow_cards for stage in (_workflow_stage(card),) if stage is not None
+        }
+        run_kind = (
+            "build"
+            if "implementation" in run_stage_names
+            else "completion"
+            if {"merge", "post_merge"} & run_stage_names
+            else "review"
+        )
+        root_card = next(
+            (card for card in workflow_cards if _workflow_stage(card) == "orchestration"),
+            workflow_cards[0],
+        )
+        run_timeline = sorted(
+            (
+                {
+                    "id": card.id,
+                    "stage": _workflow_stage(card) or "unknown",
+                    "status": card.status.value,
+                    "title": card.title,
+                    "summary": _card_summary(card),
+                    "agent": card.agent_id,
+                    "model": _card_model(card, configured_models),
+                    "attempts": _attempt_count(card),
+                    "pr_url": card.source_url if "/pull/" in str(card.source_url or "") else None,
+                    "updated_at": _card_activity_time(card),
+                    "loop": _is_loop_card(card),
+                }
+                for card in workflow_cards
+                if card.status in {QueueStatus.DONE, QueueStatus.BLOCKED}
+                or card.status in _WORKBOARD_ACTIVE_STATUSES
+            ),
+            key=lambda item: (
+                str(item["updated_at"] or ""),
+                stage_names.index(str(item["stage"])) if item["stage"] in stage_names else len(stage_names),
+            ),
+        )
+        workflow_runs.append(
+            {
+                "workflow": workflow_label.removeprefix("workflow:"),
+                "index": run_index,
+                "title": root_card.title,
+                "kind": run_kind,
+                "status": run_status,
+                "current": run_is_latest,
+                "cards": len(workflow_cards),
+                "loops": sum(_is_loop_card(card) for card in workflow_cards),
+                "blocked": sum(card.status == QueueStatus.BLOCKED for card in workflow_cards),
+                "done": sum(card.status == QueueStatus.DONE for card in workflow_cards),
+                "updated_at": max(
+                    (_card_activity_time(card) or "" for card in workflow_cards), default=""
+                )
+                or None,
+                "timeline": run_timeline[-18:],
+            }
+        )
     pr_numbers: set[int] = set()
     explicit_pr_numbers: set[int] = set()
     pr_urls_set: set[str] = set()
-    for card in latest_cards:
+    for card in all_workflow_cards:
         source_url = str(card.source_url or "")
         source_match = re.search(r"https?://[^\s]+/pull/(\d+)", source_url)
         if source_match:
@@ -349,8 +486,11 @@ def _summarize_workboard(
         "terminal_stages": sorted(done_stages & {"merge", "post_merge"}),
         "current_stage": current_stage,
         "stages": stage_rows,
+        "stage_history": stage_history,
         "timeline": timeline,
+        "workflow_runs": workflow_runs[-6:],
         "loop_count": loop_count,
+        "total_loop_count": sum(_is_loop_card(card) for card in all_workflow_cards),
         "review_cycles": len(review_cards),
         "reviews_passed": sum(card.status == QueueStatus.DONE for card in review_cards),
         "review_status": review_status,
@@ -426,6 +566,7 @@ class SidecarServer:
                 repo.orchestration_board,
                 usage_sync=usage_sync,
                 repo_full_name=repo.full_name,
+                worker_models=_expected_worker_models(configured),
             )
         except Exception as exc:
             return {
@@ -438,6 +579,12 @@ class SidecarServer:
         """Project the durable Workboard mirror without a slow OpenClaw RPC."""
         if not repo.orchestrator or not repo.orchestration_board:
             return None
+        configured = self.config.orchestrators.get(repo.orchestrator)
+        worker_models = (
+            _expected_worker_models(configured)
+            if isinstance(configured, OpenClawWorkboardConfig)
+            else {}
+        )
         payloads = self.state.orchestration_card_payloads(repo.full_name)
         cards: list[QueueCard] = []
         for payload in payloads:
@@ -458,6 +605,7 @@ class SidecarServer:
             repo.orchestration_board,
             usage_sync={"status": "cached"},
             repo_full_name=repo.full_name,
+            worker_models=worker_models,
         )
 
     def _github_status(self, repo: RepoConfig) -> dict[str, Any]:
@@ -604,6 +752,12 @@ class SidecarServer:
         state = self.state.current_state(repo.full_name).value
         if workboard is not None and workboard.get("status") == "completed":
             state = "merged"
+        configured_orchestrator = self.config.orchestrators.get(repo.orchestrator or "")
+        worker_models = (
+            configured_orchestrator.worker_models.model_dump(mode="json")
+            if isinstance(configured_orchestrator, OpenClawWorkboardConfig)
+            else {}
+        )
         events = [
             event.model_dump(mode="json")
             for event in self.state.recent_events(repo.full_name, limit=12)
@@ -636,6 +790,7 @@ class SidecarServer:
             "github_status": github,
             "orchestrator": repo.orchestrator or "direct",
             "orchestration_board": repo.orchestration_board,
+            "worker_models": worker_models,
             "schedule_enabled": repo.schedule_enabled,
             "notification_route": repo.notification.route,
             "surfaces": sorted(surface.value for surface in repo.surfaces),

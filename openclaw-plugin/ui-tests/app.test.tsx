@@ -15,7 +15,62 @@ const repo = {
   schedule_enabled: true,
   notification_route: "notifications",
   surfaces: ["web_ui"],
-  tokens: { total_tokens: 1200 },
+  tokens: { total_tokens: 1200, accounted_tokens: 1200 },
+  worker_models: { coder: "codex/gpt-5.6-terra", reviewer: "codex/gpt-5.6-terra" },
+  github_status: { status: "available", open_prs: 0, checks: { passed: 4, pending: 0, failed: 0 }, prs: [] },
+  usage_detail: {
+    dimensions: [
+      { stage: "implementation", model: "codex/gpt-5.6-terra", tokens: 800 },
+      { stage: "review", model: "codex/gpt-5.6-terra", tokens: 400 },
+    ],
+  },
+  workboard_status: {
+    status: "completed",
+    terminal: true,
+    pr_count: 1,
+    review_cycles: 1,
+    reviews_passed: 1,
+    review_status: "passed",
+    test_status: "passed",
+    blockers: 0,
+    current_blockers: 0,
+    historical_blockers: 1,
+    total_loop_count: 1,
+    stage_history: [
+      { stage: "implementation", total: 1, done: 1, active: 0, blocked: 0, loops: 0, models: ["codex/gpt-5.6-terra"] },
+      { stage: "review", total: 1, done: 1, active: 0, blocked: 0, loops: 0, models: ["codex/gpt-5.6-terra"] },
+      { stage: "repair", total: 1, done: 1, active: 0, blocked: 0, loops: 1, models: ["codex/gpt-5.6-terra"] },
+      { stage: "test", total: 1, done: 1, active: 0, blocked: 0, loops: 0, models: ["codex/gpt-5.6-luna"] },
+      { stage: "final_review", total: 1, done: 1, active: 0, blocked: 0, loops: 0, models: ["codex/gpt-5.6-sol"] },
+      { stage: "merge", total: 1, done: 1, active: 0, blocked: 0, loops: 0, models: [] },
+      { stage: "post_merge", total: 1, done: 1, active: 0, blocked: 0, loops: 0, models: ["codex/gpt-5.6-terra"] },
+    ],
+    workflow_runs: [
+      {
+        workflow: "build-run",
+        index: 1,
+        title: "Implement search",
+        kind: "build",
+        status: "superseded",
+        cards: 2,
+        done: 2,
+        loops: 0,
+        timeline: [{ id: "build", stage: "implementation", status: "done", summary: "Implemented search", model: "codex/gpt-5.6-terra", pr_url: "https://github.com/example/project/pull/1" }],
+      },
+      {
+        workflow: "review-run",
+        index: 2,
+        title: "Review and repair",
+        kind: "review",
+        status: "completed",
+        current: true,
+        cards: 3,
+        done: 3,
+        loops: 1,
+        timeline: [{ id: "repair", stage: "repair", status: "done", summary: "Addressed review finding", model: "codex/gpt-5.6-terra", loop: true, pr_url: "https://github.com/example/project/pull/1" }],
+      },
+    ],
+  },
   warnings: [],
 };
 
@@ -58,7 +113,7 @@ describe("shared dashboard components", () => {
   it("renders loaded course state and exercises schedule installation", async () => {
     render(<App />);
 
-    await waitFor(() => expect(screen.getByText("example/project")).toBeTruthy());
+    await waitFor(() => expect(screen.getAllByText("example/project").length).toBeGreaterThan(0));
     expect(screen.getByText("Fleet at a glance")).toBeTruthy();
     expect(screen.getAllByText("open PRs").length).toBeGreaterThan(0);
     expect(screen.getByText("Search feature")).toBeTruthy();
@@ -67,10 +122,23 @@ describe("shared dashboard components", () => {
     await waitFor(() => expect(screen.getByRole("status").textContent).toContain("Schedule install"));
   });
 
+  it("shows implementation evidence, feedback loops, models, and workflow runs", async () => {
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText("How the work moved")).toBeTruthy());
+    expect(screen.getByText("FLIGHT RECORDER")).toBeTruthy();
+    expect(screen.getByText("Workflow runs")).toBeTruthy();
+    expect(screen.getByText("1 feedback loop")).toBeTruthy();
+    expect(screen.getByText("OpenClaw coding route: gpt-5.6-terra")).toBeTruthy();
+    expect(screen.getByText("Implemented search")).toBeTruthy();
+    expect(screen.getByText("Addressed review finding")).toBeTruthy();
+    expect(screen.getAllByText("Build").length).toBeGreaterThan(0);
+  });
+
   it("opens repository registration and sends the submitted fields", async () => {
     const fetchMock = vi.mocked(globalThis.fetch);
     render(<App />);
-    await waitFor(() => expect(screen.getByText("example/project")).toBeTruthy());
+    await waitFor(() => expect(screen.getAllByText("example/project").length).toBeGreaterThan(0));
 
     fireEvent.click(screen.getByRole("button", { name: "Register repository" }));
     fireEvent.change(screen.getByLabelText("GitHub repository"), { target: { value: "example/second" } });
@@ -85,7 +153,7 @@ describe("shared dashboard components", () => {
   it("registers a greenfield course without claiming remote creation", async () => {
     const fetchMock = vi.mocked(globalThis.fetch);
     render(<App />);
-    await waitFor(() => expect(screen.getByText("example/project")).toBeTruthy());
+    await waitFor(() => expect(screen.getAllByText("example/project").length).toBeGreaterThan(0));
 
     fireEvent.click(screen.getByRole("button", { name: "New greenfield repo" }));
     fireEvent.change(screen.getByLabelText("GitHub repository"), { target: { value: "example/new-project" } });
@@ -102,7 +170,7 @@ describe("shared dashboard components", () => {
   it("saves repository autonomy, channel, and model controls", async () => {
     const fetchMock = vi.mocked(globalThis.fetch);
     render(<App />);
-    await waitFor(() => expect(screen.getByText("example/project")).toBeTruthy());
+    await waitFor(() => expect(screen.getAllByText("example/project").length).toBeGreaterThan(0));
 
     fireEvent.click(screen.getByText("Repository controls"));
     fireEvent.change(screen.getByLabelText("Autonomy"), { target: { value: "autonomous" } });
@@ -123,7 +191,7 @@ describe("shared dashboard components", () => {
 
   it("applies a local-first route preset before manual edits", async () => {
     render(<App />);
-    await waitFor(() => expect(screen.getByText("example/project")).toBeTruthy());
+    await waitFor(() => expect(screen.getAllByText("example/project").length).toBeGreaterThan(0));
 
     fireEvent.click(screen.getByText("Repository controls"));
     fireEvent.change(screen.getAllByLabelText("Route preset")[0], { target: { value: "local_first" } });

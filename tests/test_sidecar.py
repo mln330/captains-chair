@@ -110,7 +110,88 @@ def test_sidecar_projects_terminal_workboard_proof_into_completed_state(
     assert result["workboard_status"]["historical_blockers"] == 2
     assert result["workboard_status"]["historical_review_blockers"] == 1
     assert result["workboard_status"]["completion_status"] == "verified"
+    assert result["workboard_status"]["workflow_runs"][0]["status"] == "completed"
+    assert {row["stage"] for row in result["workboard_status"]["stage_history"]} >= {
+        "review",
+        "repair",
+        "merge",
+        "post_merge",
+    }
+    assert result["workboard_status"]["total_loop_count"] == 1
     assert "Historical blocked" in result["workboard_status"]["message"]
+
+
+def test_workboard_history_preserves_build_review_and_completion_runs() -> None:
+    def card(
+        card_id: str,
+        workflow: str,
+        stage: str,
+        status: QueueStatus,
+        timestamp: int,
+        agent: str,
+        *,
+        attempts: int = 0,
+    ) -> QueueCard:
+        return QueueCard(
+            id=card_id,
+            title=f"{stage} evidence",
+            status=status,
+            labels=(f"workflow:{workflow}", f"stage:{stage}"),
+            agent_id=agent,
+            source_url="https://github.com/example/project/pull/7",
+            metadata={
+                "comments": [{"createdAt": timestamp, "body": f"{stage} finished"}],
+                "attempts": [{"createdAt": timestamp - index} for index in range(attempts)],
+            },
+        )
+
+    summary = sidecar_module._summarize_workboard(  # pyright: ignore[reportPrivateUsage]
+        [
+            card("build", "build-run", "implementation", QueueStatus.DONE, 1_000, "coder"),
+            card("review", "review-run", "review", QueueStatus.DONE, 2_000, "reviewer"),
+            card(
+                "repair",
+                "review-run",
+                "repair",
+                QueueStatus.DONE,
+                2_100,
+                "coder",
+                attempts=2,
+            ),
+            card("merge", "completion-run", "merge", QueueStatus.DONE, 3_000, "merger"),
+            card(
+                "verify",
+                "completion-run",
+                "post_merge",
+                QueueStatus.DONE,
+                3_100,
+                "verifier",
+            ),
+        ],
+        "board",
+        worker_models={
+            "coder": "codex/gpt-5.6-terra",
+            "reviewer": "codex/gpt-5.6-terra",
+            "merger": "codex/gpt-5.6-terra",
+            "verifier": "codex/gpt-5.6-terra",
+        },
+    )
+
+    assert [run["kind"] for run in summary["workflow_runs"]] == [
+        "build",
+        "review",
+        "completion",
+    ]
+    assert [run["status"] for run in summary["workflow_runs"]] == [
+        "superseded",
+        "superseded",
+        "completed",
+    ]
+    assert next(row for row in summary["stage_history"] if row["stage"] == "implementation")[
+        "models"
+    ] == ["codex/gpt-5.6-terra"]
+    assert summary["total_loop_count"] == 1
+    assert summary["pr_count"] == 1
 
 
 def test_sidecar_does_not_mark_workboard_with_active_cards_completed(
