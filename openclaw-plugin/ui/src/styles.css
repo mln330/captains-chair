@@ -55,6 +55,7 @@ h3 { font-size: 17px; margin-bottom: 5px; }
 .metric-danger strong { color: #f0bfc6; }
 .repo-stats { border-bottom: 1px solid #2e3b3e; display: grid; gap: 12px 10px; grid-template-columns: repeat(4, minmax(0, 1fr)); padding: 14px 0; }
 .repo-stats .metric strong { font-size: 14px; }
+.completion-note { border-bottom: 1px solid #2e3b3e; color: #b5c3c5; font-size: 11px; line-height: 1.45; margin: 0; padding: 11px 0; }
 .execution-panel { border-bottom: 1px solid #2e3b3e; padding: 14px 0 4px; }
 .execution-details { border-bottom: 1px solid #2e3b3e; }
 .execution-details > summary { align-items: center; color: #d9e8e7; cursor: pointer; display: flex; font-size: 12px; font-weight: 650; gap: 10px; justify-content: space-between; list-style-position: inside; padding: 13px 0; }
@@ -217,6 +218,7 @@ legend { color: #7fc7c0; font-size: 12px; padding: 0 5px; }
   .status-pill { background: #f5ddd7; color: #8d2f22; }
   .repo-panel, .course-card, .activity-panel, .schedule-row { background: #fff; border-color: #ded8d0; }
   .repo-stats, .execution-panel, .stage-summary, .token-breakdown, .token-breakdown > div, .pr-list, .pr-list a { border-color: #ded8d0; }
+  .completion-note { border-color: #ded8d0; color: #6f6a63; }
   .repo-stats span, .repo-meta, .execution-heading span, .path-step span, .path-step small, .stage-summary small, .token-breakdown span, .pr-list a small { color: #6f6a63; }
   .repo-stats strong, .path-step strong, .pr-list a span { color: #292724; }
   .portfolio-summary { border-color: #ded8d0; }

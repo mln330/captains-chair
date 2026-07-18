@@ -79,7 +79,8 @@ def test_sidecar_projects_terminal_workboard_proof_into_completed_state(
         _workboard_card("review", QueueStatus.DONE, 1),
         _workboard_card("merge", QueueStatus.DONE, 2),
         _workboard_card("post_merge", QueueStatus.DONE, 3),
-        _workboard_card("repair", QueueStatus.BLOCKED, 4),
+        _workboard_card("final_review", QueueStatus.BLOCKED, 4),
+        _workboard_card("repair", QueueStatus.BLOCKED, 5),
     ]
 
     class Adapter:
@@ -100,11 +101,16 @@ def test_sidecar_projects_terminal_workboard_proof_into_completed_state(
     assert result["workboard_status"]["status"] == "completed"
     assert result["workboard_status"]["active_cards"] == 0
     assert result["workboard_status"]["current_stage"] == "post_merge"
-    assert result["workboard_status"]["review_cycles"] == 1
+    assert result["workboard_status"]["review_cycles"] == 2
     assert result["workboard_status"]["reviews_passed"] == 1
     assert result["workboard_status"]["review_status"] == "passed"
     assert result["workboard_status"]["test_status"] == "not_run"
-    assert result["workboard_status"]["blockers"] == 1
+    assert result["workboard_status"]["blockers"] == 0
+    assert result["workboard_status"]["current_blockers"] == 0
+    assert result["workboard_status"]["historical_blockers"] == 2
+    assert result["workboard_status"]["historical_review_blockers"] == 1
+    assert result["workboard_status"]["completion_status"] == "verified"
+    assert "Historical blocked" in result["workboard_status"]["message"]
 
 
 def test_sidecar_does_not_mark_workboard_with_active_cards_completed(

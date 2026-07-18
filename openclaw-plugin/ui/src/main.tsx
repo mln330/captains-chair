@@ -44,6 +44,11 @@ type WorkboardStatus = {
   review_status?: "not_run" | "in_review" | "passed" | "blocked" | string;
   test_status?: "not_run" | "running" | "passed" | "blocked" | string;
   blockers?: number;
+  current_blockers?: number;
+  historical_blockers?: number;
+  historical_review_blockers?: number;
+  terminal?: boolean;
+  completion_status?: string;
   pr_count?: number;
   pr_numbers?: number[];
   pr_urls?: string[];
@@ -240,7 +245,7 @@ function PortfolioSummary({ repos }: { repos: Repo[] }) {
       <Metric label="registered" value={repos.length} />
       <Metric label="active courses" value={active} tone={active ? "accent" : "neutral"} />
       <Metric label="open PRs" value={openPrs} tone={openPrs ? "accent" : "neutral"} />
-      <Metric label="PRs in runs" value={trackedPrs} />
+      <Metric label="PRs in workflow" value={trackedPrs} />
       <Metric label="review cycles" value={reviewCycles} />
       <Metric label="checks" value={failedChecks ? `${failedChecks} failing` : pendingChecks ? `${pendingChecks} running` : "passing"} tone={failedChecks ? "danger" : pendingChecks ? "warn" : "good"} />
       <Metric label="blockers" value={blockers} tone={blockers ? "danger" : "good"} />
@@ -254,9 +259,11 @@ function ExecutionPath({ repo }: { repo: Repo }) {
   if (!workboard || workboard.status === "unknown" || workboard.status === "unavailable") return null;
   const timeline = (workboard.timeline ?? []).slice(-12);
   const dimensions = (repo.usage_detail?.dimensions ?? []).slice(0, 5);
+  const terminal = workboard.terminal || workboard.status === "completed" || repo.state === "merged";
   return <details className="execution-details" aria-label={`Execution evidence for ${repo.full_name}`}>
     <summary><span>Execution details</span><strong>{workboard.current_stage ? `Current: ${stageLabel(workboard.current_stage)}` : "No active stage"} · {workboard.loop_count ?? 0} loops</strong></summary>
     <section className="execution-panel">
+    {terminal && <p className="completion-note">Implementation merged and post-merge verification passed. Historical blocked cards below are audit history, not current blockers. Production delivery is a separate step.</p>}
     <div className="execution-heading"><div><h4>Execution path</h4><span>{workboard.current_stage ? `Current: ${stageLabel(workboard.current_stage)}` : "No active stage"}</span></div><strong>{workboard.loop_count ?? 0} retry/repair loops</strong></div>
     {timeline.length ? <div className="execution-path" role="list">{timeline.map((item, index) => <div className={`path-step ${item.status ?? "unknown"} ${item.loop ? "loop" : ""}`} role="listitem" key={`${item.stage}-${item.updated_at}-${index}`}>
       <span className="path-dot" aria-hidden="true" /><div><strong>{stageLabel(item.stage)}</strong><span>{item.status ?? "unknown"}</span><small title={item.summary ?? item.title}>{item.summary ?? item.title ?? "Workboard transition"}</small>{item.pr_url && <a href={item.pr_url} target="_blank" rel="noreferrer">PR</a>}</div>
@@ -410,20 +417,23 @@ function RepoPanel({ repo, onSave }: { repo: Repo; onSave: (name: string, payloa
   const reviewStatus = statusLabel(workboard?.review_status);
   const testStatus = statusLabel(workboard?.test_status);
   const checks = checkStatus(github);
-  const blockers = workboard?.blockers ?? workboard?.counts?.blocked ?? 0;
+  const terminal = workboard?.terminal || workboard?.status === "completed" || repo.state === "merged";
+  const blockers = workboard?.current_blockers ?? workboard?.blockers ?? (terminal ? 0 : workboard?.counts?.blocked ?? 0);
+  const historicalBlockers = workboard?.historical_blockers ?? 0;
   return <article className="repo-panel">
     <div className="repo-heading"><div><h3>{repo.full_name}</h3><p>{repo.local_path}</p></div><span className={`mode ${repo.operation_mode}`}>{repo.operation_mode}</span></div>
     <Flow state={repo.state} />
     <div className="repo-meta"><span>{repo.state.split("_").join(" ")}</span><span className={usagePending ? "usage-pending" : ""}>{usageLabel}</span><span>{repo.dirty ? "Uncommitted changes" : "Clean checkout"}</span></div>
     <div className="repo-stats" aria-label={`Repository facts for ${repo.full_name}`}>
       <Metric label="open PRs" value={github?.open_prs ?? "-"} />
-      <Metric label="PRs in run" value={trackedPrs} />
+      <Metric label="PRs in workflow" value={trackedPrs} />
       <Metric label="review cycles" value={reviewCycles} />
       <Metric label="reviews" value={reviewStatus} tone={reviewStatus === "blocked" ? "danger" : reviewStatus === "passed" ? "good" : "neutral"} />
       <Metric label="tests" value={testStatus} tone={testStatus === "blocked" ? "danger" : testStatus === "passed" ? "good" : "neutral"} />
       <Metric label="checks" value={checks} tone={checks === "failing" ? "danger" : checks === "passing" ? "good" : checks === "running" ? "warn" : "neutral"} />
       <Metric label="blockers" value={blockers} tone={blockers ? "danger" : "good"} />
     </div>
+    {terminal && <p className="completion-note">Complete: merged and post-merge verified. {historicalBlockers ? `${historicalBlockers} historical blocker${historicalBlockers === 1 ? "" : "s"} resolved during the run.` : "No historical blockers recorded."} Production deployment is not implied.</p>}
     <ExecutionPath repo={repo} />
     {github?.prs?.length ? <div className="pr-list"><h4>Open pull requests</h4>{github.prs.slice(0, 4).map((pr) => <a href={pr.url} target="_blank" rel="noreferrer" key={pr.number}><strong>#{pr.number}</strong><span>{pr.title ?? "Untitled PR"}</span><small>{pr.isDraft ? "draft" : pr.reviewDecision ?? pr.mergeStateStatus ?? "open"}</small></a>)}</div> : null}
     {repo.warnings[0] && <p className="warning">{repo.warnings[0]}</p>}

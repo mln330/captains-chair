@@ -266,8 +266,13 @@ def _summarize_workboard(
     ]
     review_active = any(card.status in _WORKBOARD_ACTIVE_STATUSES for card in review_cards)
     review_blocked = any(card.status == QueueStatus.BLOCKED for card in review_cards)
+    historical_review_blockers = sum(
+        card.status == QueueStatus.BLOCKED for card in review_cards
+    )
     review_status = (
-        "blocked"
+        "passed"
+        if terminal and review_cards
+        else "blocked"
         if review_blocked
         else "in_review"
         if review_active
@@ -308,6 +313,8 @@ def _summarize_workboard(
         if timeline
         else None
     )
+    historical_blockers = counts.get(QueueStatus.BLOCKED.value, 0)
+    current_blockers = 0 if terminal else historical_blockers
     pr_numbers: set[int] = set()
     explicit_pr_numbers: set[int] = set()
     pr_urls_set: set[str] = set()
@@ -348,7 +355,15 @@ def _summarize_workboard(
         "reviews_passed": sum(card.status == QueueStatus.DONE for card in review_cards),
         "review_status": review_status,
         "test_status": test_status,
-        "blockers": counts.get(QueueStatus.BLOCKED.value, 0),
+        # A terminal workflow has no current blocker. Preserve the blocked
+        # cards separately so the execution history remains auditable without
+        # making a completed course look stuck.
+        "blockers": current_blockers,
+        "current_blockers": current_blockers,
+        "historical_blockers": historical_blockers,
+        "historical_review_blockers": historical_review_blockers,
+        "terminal": terminal,
+        "completion_status": "verified" if terminal else status,
         "pr_count": max(len(pr_numbers), len(pr_urls)),
         "pr_numbers": sorted(pr_numbers),
         "pr_urls": pr_urls,
@@ -356,7 +371,10 @@ def _summarize_workboard(
     if usage_sync is not None:
         summary["usage_sync"] = usage_sync
     if terminal:
-        summary["message"] = "Workboard merge and post-merge verification completed."
+        summary["message"] = (
+            "Implementation merged and post-merge verification completed. "
+            "Historical blocked or retry cards are retained for audit and do not block this course."
+        )
     return summary
 
 
