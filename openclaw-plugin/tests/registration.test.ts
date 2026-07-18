@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import plugin from "../src/index.js";
+import plugin, { parseRouteParams } from "../src/index.js";
 
 describe("Make It So OpenClaw registration", () => {
+  it("preserves JSON parameters from string and byte route bodies", () => {
+    expect(parseRouteParams('{"full_name":"example/project"}')).toEqual({ full_name: "example/project" });
+    expect(parseRouteParams(new TextEncoder().encode('{"local_path":"/workspace/project"}'))).toEqual({ local_path: "/workspace/project" });
+  });
+
   it("declares every agent tool in the host manifest contract", () => {
     const manifest = JSON.parse(
       readFileSync(resolve(process.cwd(), "openclaw.plugin.json"), "utf8"),

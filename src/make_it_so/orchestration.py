@@ -1816,6 +1816,21 @@ def _block_reason(card: QueueCard) -> str:
                 attempt_row = cast(dict[str, object], item)
                 if attempt_row.get("error"):
                     return str(attempt_row["error"])
+    # OpenClaw's Workboard stores an agent's explicit block reason in the
+    # card activity feed when the worker protocol metadata is unavailable.
+    # Preserve that actionable finding for repair cards instead of degrading
+    # it to the generic "missing evidence" message.
+    for field in ("comments", "notifications"):
+        entries = card.metadata.get(field)
+        if not isinstance(entries, list):
+            continue
+        for item in reversed(cast(list[object], entries)):
+            if not isinstance(item, dict):
+                continue
+            row = cast(dict[str, object], item)
+            candidate = row.get("body") or row.get("message")
+            if candidate:
+                return str(candidate)
     return "TECHNICAL: worker blocked without structured failure evidence"
 
 

@@ -340,6 +340,12 @@ def test_orchestration_card_helpers_fail_closed_and_preserve_latest_evidence(tmp
     attempts = protocol.model_copy(
         update={"metadata": {"attempts": [{"error": "provider error"}]}}
     )
+    comments = protocol.model_copy(
+        update={"metadata": {"comments": [{"body": "TECHNICAL: actionable review finding"}]}}
+    )
+    notifications = protocol.model_copy(
+        update={"metadata": {"notifications": [{"message": "TECHNICAL: notification finding"}]}}
+    )
     bare = protocol.model_copy(update={"metadata": {}})
 
     assert _card_stage(protocol) == WorkStage.REVIEW
@@ -348,6 +354,8 @@ def test_orchestration_card_helpers_fail_closed_and_preserve_latest_evidence(tmp
     assert _block_reason(protocol) == "protocol detail"
     assert _block_reason(logs) == "latest"
     assert _block_reason(attempts) == "provider error"
+    assert _block_reason(comments) == "TECHNICAL: actionable review finding"
+    assert _block_reason(notifications) == "TECHNICAL: notification finding"
     assert _block_reason(bare).startswith("TECHNICAL:")
     assert _failure_count(protocol) == 1
     assert _failure_count(protocol.model_copy(update={"metadata": {"failureCount": 0}})) == 0

@@ -91,6 +91,26 @@ function configArgs(config: Record<string, unknown>): string[] {
     : ["-m", "make_it_so.sidecar"];
 }
 
+export function parseRouteParams(raw: unknown): Record<string, unknown> {
+  if (raw && typeof raw === "object" && !ArrayBuffer.isView(raw)) {
+    return raw as Record<string, unknown>;
+  }
+  const text = typeof raw === "string"
+    ? raw
+    : ArrayBuffer.isView(raw)
+      ? new TextDecoder().decode(new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength))
+      : "";
+  if (!text.trim()) return {};
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {};
+  } catch {
+    return {};
+  }
+}
+
 export default definePluginEntry({
   id: PLUGIN_ID,
   name: "Make It So",
@@ -177,7 +197,7 @@ export default definePluginEntry({
         handler: async (req, res) => {
           if (rejectNonControlUiRequest(req, res, { token: controlUiToken })) return;
           try {
-            const params = req?.body && typeof req.body === "object" ? req.body : {};
+            const params = parseRouteParams(req?.body);
             const result = await request(method, params);
             res.statusCode = 200;
             res.setHeader("content-type", "application/json; charset=utf-8");
