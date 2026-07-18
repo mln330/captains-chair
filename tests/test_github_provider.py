@@ -115,8 +115,10 @@ def test_readiness_evidence_collects_live_proof_without_issue_or_pr_bodies(tmp_p
     assert evidence["collection_errors"] == {}
 
 
-def test_gate_fails_when_required_check_is_missing_and_counts_active_threads(
+@pytest.mark.parametrize("include_security", (False, True))
+def test_gate_requires_complete_required_check_coverage_and_counts_active_threads(
     tmp_path: Path,
+    include_security: bool,
 ) -> None:
     def runner(
         command: Sequence[str],
@@ -137,6 +139,17 @@ def test_gate_fails_when_required_check_is_missing_and_counts_active_threads(
                     "isDraft": False,
                     "statusCheckRollup": [
                         {"name": "build", "status": "COMPLETED", "conclusion": "SUCCESS"},
+                        *(
+                            [
+                                {
+                                    "name": "security",
+                                    "status": "COMPLETED",
+                                    "conclusion": "SUCCESS",
+                                }
+                            ]
+                            if include_security
+                            else []
+                        ),
                         {"name": "optional", "status": "COMPLETED", "conclusion": "FAILURE"},
                     ],
                 }
@@ -166,10 +179,10 @@ def test_gate_fails_when_required_check_is_missing_and_counts_active_threads(
     gate = GhGitHubProvider(runner, cwd=tmp_path).gate(repo(tmp_path), 12, "head-12")
 
     assert gate.head_sha == "head-12"
-    assert not gate.checks_green
+    assert gate.checks_green is include_security
     assert [(check.name, check.status) for check in gate.required_checks] == [
         ("build", "COMPLETED"),
-        ("security", "MISSING"),
+        ("security", "COMPLETED" if include_security else "MISSING"),
     ]
     assert gate.unresolved_threads == 1
     assert gate.review_head_sha == "head-12"

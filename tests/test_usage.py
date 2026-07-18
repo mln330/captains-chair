@@ -10,12 +10,15 @@ import pytest
 from pydantic import BaseModel
 
 import captains_chair.openclaw_usage as openclaw_usage
+import captains_chair.state as state_module
 from captains_chair.command import CommandResult
 from captains_chair.harness import CodexAdapter
 from captains_chair.models import HarnessConfig, ModelTarget, RoleModels, UsageConfig
 from captains_chair.openclaw_usage import sync_openclaw_sessions
 from captains_chair.state import StateStore
 from captains_chair.usage import build_usage_report, dispatch_budget, usage_summary_text
+
+_usage_attempt_index = state_module._usage_attempt_index  # pyright: ignore[reportPrivateUsage]
 
 
 def test_codex_usage_is_recorded_without_retaining_response_content(tmp_path: Path) -> None:
@@ -670,6 +673,40 @@ def test_usage_dimensions_keep_identical_model_routes_separate_by_date(tmp_path:
         ("2026-07-16", 10),
         ("2026-07-17", 20),
     }
+
+
+def test_usage_summary_ignores_corrupt_attempt_envelopes(tmp_path: Path) -> None:
+    path = tmp_path / "state.db"
+    state = StateStore(path)
+    with closing(sqlite3.connect(path)) as connection, connection:
+        connection.executemany(
+            "INSERT INTO model_calls(repo,run_id,runtime,role,attempts_json,created_at) "
+            "VALUES('repo/project',?,'codex','coder',?,'2026-07-17T10:00:00+00:00')",
+            (
+                ("invalid-json", "{"),
+                ("object-envelope", '{"model":"gpt-5.6-terra"}'),
+                ("scalar-attempt", '["not-an-attempt"]'),
+            ),
+        )
+
+    summary = state.usage_summary(repo="repo/project")
+
+    assert summary["direct_calls"]["calls"] == 3
+    assert summary["direct_attempt_groups"] == []
+
+
+def test_usage_attempt_index_fails_closed_for_stale_or_ambiguous_sessions() -> None:
+    assert (
+        _usage_attempt_index(
+            [{"session_id": "attempt-1:root"}],
+            "agent:worker:attempt-2:root",
+            "root",
+        )
+        is None
+    )
+    assert _usage_attempt_index(["malformed", {}], None, "root") == 1
+    assert _usage_attempt_index(["malformed"], None, "root") == 0
+    assert _usage_attempt_index(["first", "second"], None, "root") is None
 
 
 def test_usage_report_ranks_external_token_hotspots_and_marks_partial_telemetry() -> None:

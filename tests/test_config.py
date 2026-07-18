@@ -54,6 +54,26 @@ def test_openclaw_workboard_rejects_model_worker_merge_execution() -> None:
         )
 
 
+@pytest.mark.parametrize("command", ((), ("captains_chair", "")))
+def test_openclaw_workboard_rejects_empty_control_plane_command(
+    command: tuple[str, ...],
+) -> None:
+    with pytest.raises(ValueError, match="must contain non-empty argv items"):
+        OpenClawWorkboardConfig(
+            captains_chair_command=command,
+            workers=WorkerAssignments(
+                captain="captain",
+                coder="coder",
+                reviewer="reviewer",
+                tester="tester",
+                ux_reviewer="ux",
+                final_reviewer="final",
+                merger="merger",
+                verifier="verifier",
+            ),
+        )
+
+
 @pytest.mark.parametrize(
     ("schema_name", "model"),
     (

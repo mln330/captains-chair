@@ -1110,10 +1110,12 @@ def test_managed_dispatch_promotes_dependency_ready_card(monkeypatch: pytest.Mon
     ((True, "done"), (False, "blocked")),
 )
 @pytest.mark.parametrize("merge_agent", ("", "merger"))
+@pytest.mark.parametrize("merge_status", ("todo", "ready"))
 def test_merge_card_uses_deterministic_gate_without_model_worker(
     allowed: bool,
     expected_status: str,
     merge_agent: str,
+    merge_status: str,
 ) -> None:
     head = "6fc76b212ac2011b01eb91b6ad008f9d9c2c6267"
     cards: dict[str, dict[str, Any]] = {
@@ -1148,7 +1150,9 @@ def test_merge_card_uses_deterministic_gate_without_model_worker(
             },
         },
         "merge": {
-            **_managed_card("merge", status="todo", agent_id=merge_agent, parents=("final",)),
+            **_managed_card(
+                "merge", status=merge_status, agent_id=merge_agent, parents=("final",)
+            ),
             "notes": "Repository: mln330/canary",
             "labels": ["workflow:current", "stage:merge"],
         },
@@ -1183,7 +1187,7 @@ def test_merge_card_uses_deterministic_gate_without_model_worker(
                 "allowed": allowed,
                 "merged": allowed,
                 "reason": "all merge gates passed" if allowed else "missing AUTO_MERGE_ALLOWED proof",
-                "current_head": head,
+                "current_head": head if merge_agent else "",
             }
             return CommandResult(0 if allowed else 2, json.dumps(payload), "")
         return gateway_runner(
@@ -1229,7 +1233,42 @@ def test_assigned_merge_card_never_falls_through_to_model_dispatch() -> None:
     assert not any("sessions.spawn" in call for call in calls)
 
 
-def test_deterministic_merge_command_failure_blocks_claimed_card() -> None:
+@pytest.mark.parametrize("missing", ("repository", "pull_request", "final_review"))
+def test_deterministic_merge_waits_for_unambiguous_context(missing: str) -> None:
+    final_labels = ["workflow:current", "stage:final_review"]
+    notes = "Repository: mln330/canary"
+    proof: list[dict[str, str]] = [
+        {"status": "passed", "url": "https://github.com/mln330/canary/pull/1"}
+    ]
+    if missing == "repository":
+        notes = "Repository context is unavailable"
+    elif missing == "pull_request":
+        proof = [{"status": "passed", "note": "AUTO_MERGE_ALLOWED:head"}]
+    elif missing == "final_review":
+        final_labels = ["workflow:current", "stage:test"]
+    cards: dict[str, dict[str, Any]] = {
+        "final": {
+            **_managed_card("final", status="done", agent_id="final"),
+            "notes": notes,
+            "labels": final_labels,
+            "metadata": {"proof": proof},
+        },
+        "merge": {
+            **_managed_card("merge", status="todo", agent_id="", parents=("final",)),
+            "notes": notes,
+            "labels": ["workflow:current", "stage:merge"],
+        },
+    }
+
+    result = OpenClawWorkboardAdapter(config(), _managed_runner(cards, [])).dispatch("board")
+
+    assert result["deterministic_merge"]["status"] == "waiting"
+    assert cards["merge"]["status"] == "ready"
+    assert cards["merge"]["agentId"] == ""
+
+
+@pytest.mark.parametrize("outcome", ("command_error", "non_object_output"))
+def test_deterministic_merge_command_failure_blocks_claimed_card(outcome: str) -> None:
     cards: dict[str, dict[str, Any]] = {
         "final": {
             **_managed_card("final", status="done", agent_id="final"),
@@ -1261,16 +1300,21 @@ def test_deterministic_merge_command_failure_blocks_claimed_card() -> None:
         timeout: int = 60,
     ) -> CommandResult:
         if command and command[0] == "captains_chair":
-            raise OSError("merge executable is unavailable")
+            if outcome == "command_error":
+                raise OSError("merge executable is unavailable")
+            return CommandResult(0, "[]", "merge gate returned a non-object payload")
         return gateway_runner(command, cwd=cwd, input_text=input_text, timeout=timeout)
 
     result = OpenClawWorkboardAdapter(config(), runner).dispatch("board")
 
     assert result["deterministic_merge"]["status"] == "blocked"
     assert cards["merge"]["status"] == "blocked"
-    assert "merge executable is unavailable" in cards["merge"]["metadata"]["workerProtocol"][
-        "detail"
-    ]
+    expected = (
+        "merge executable is unavailable"
+        if outcome == "command_error"
+        else "merge gate returned a non-object payload"
+    )
+    assert expected in cards["merge"]["metadata"]["workerProtocol"]["detail"]
 
 
 def test_managed_dispatch_idles_when_dependencies_are_not_done() -> None:

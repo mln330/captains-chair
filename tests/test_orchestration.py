@@ -170,6 +170,21 @@ def test_direct_orchestrator_keeps_declared_merge_worker(tmp_path: Path) -> None
     assert merge.metadata["expectedModel"] == "codex/gpt-5.6-terra"
 
 
+def test_workflow_propagates_course_and_package_context(tmp_path: Path) -> None:
+    decision = implementation_decision().model_copy(
+        update={"course_key": "course-1", "work_package_key": "package-1"}
+    )
+
+    workflow = build_workflow(repo_config(tmp_path), decision, "context", worker_config())
+
+    assert workflow.root.metadata == {
+        "courseKey": "course-1",
+        "workPackageKey": "package-1",
+    }
+    assert all(card.metadata["courseKey"] == "course-1" for card in workflow.stages)
+    assert all(card.metadata["workPackageKey"] == "package-1" for card in workflow.stages)
+
+
 def test_completed_workflow_cleans_shared_workspace_without_touching_branch_metadata(
     tmp_path: Path,
 ) -> None:
