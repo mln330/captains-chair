@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 import sys
@@ -211,24 +212,31 @@ def test_sidecar_imports_direct_codex_workboard_usage(tmp_path: Path) -> None:
         labels=("workflow:spark", "stage:implementation"),
         agent_id="coder",
         metadata={
-            "comments": [{"createdAt": 1_784_408_000_000}],
+            "comments": [
+                {"createdAt": 1_784_408_000_000},
+                {
+                    "body": "MAKE_IT_SO_WORKER_EXECUTION:"
+                    + json.dumps(
+                        {
+                            "runtime": "codex",
+                            "requested_model": "gpt-5.3-codex-spark",
+                            "attempt_id": "attempt-1",
+                            "duration_ms": 1234,
+                            "usage": {
+                                "input_tokens": 100,
+                                "cached_input_tokens": 25,
+                                "output_tokens": 10,
+                                "prompt_bytes": 500,
+                                "response_bytes": 100,
+                            },
+                        }
+                    ),
+                },
+            ],
             "proof": [
                 {
                     "status": "passed",
                     "note": "tests passed",
-                    "execution": {
-                        "runtime": "codex",
-                        "requested_model": "gpt-5.3-codex-spark",
-                        "attempt_id": "attempt-1",
-                        "duration_ms": 1234,
-                        "usage": {
-                            "input_tokens": 100,
-                            "cached_input_tokens": 25,
-                            "output_tokens": 10,
-                            "prompt_bytes": 500,
-                            "response_bytes": 100,
-                        },
-                    },
                 }
             ],
         },

@@ -1067,6 +1067,8 @@ def test_managed_dispatch_routes_coder_through_direct_codex(
     assert result["runtime"] == "codex"
     assert result["model"] == "codex/gpt-5.3-codex-spark"
     assert constructed == [("codex", "/opt/codex")]
+    receipt = cards["card-1"]["metadata"]["comments"][0]["body"]
+    assert receipt.startswith("MAKE_IT_SO_WORKER_EXECUTION:")
     execution = cards["card-1"]["metadata"]["proof"][0]["execution"]
     assert execution["runtime"] == "codex"
     assert execution["usage"]["input_tokens"] == 100
@@ -1493,6 +1495,8 @@ def _managed_runner(
         elif method == "workboard.cards.complete":
             card["status"] = "done"
             card["metadata"]["proof"] = [params["proof"]]
+        elif method == "workboard.cards.comment":
+            card["metadata"].setdefault("comments", []).append({"body": params["body"]})
         elif method == "workboard.cards.block":
             card["status"] = "blocked"
             card["metadata"]["workerProtocol"] = {

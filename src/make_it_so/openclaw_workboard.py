@@ -28,6 +28,9 @@ class OpenClawWorkboardError(RuntimeError):
     pass
 
 
+WORKER_EXECUTION_COMMENT_PREFIX = "MAKE_IT_SO_WORKER_EXECUTION:"
+
+
 REQUIRED_WORKER_TOOLS = (
     "workboard_block",
     "workboard_comment",
@@ -434,6 +437,17 @@ class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
                     timeout_seconds=_runtime_limit(claimed, self.config.max_runtime_seconds),
                 )
                 if result.status == "completed":
+                    execution = (
+                        result.telemetry.model_dump(mode="json")
+                        if result.telemetry is not None
+                        else None
+                    )
+                    if execution is not None:
+                        self.comment(
+                            claimed.id,
+                            WORKER_EXECUTION_COMMENT_PREFIX
+                            + json.dumps(execution, separators=(",", ":")),
+                        )
                     self.complete_claimed_card(
                         claimed.id,
                         owner_id=owner_id,
@@ -442,11 +456,7 @@ class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
                         proof=_managed_completion_proof(
                             result.proof,
                             result.summary,
-                            execution=(
-                                result.telemetry.model_dump(mode="json")
-                                if result.telemetry is not None
-                                else None
-                            ),
+                            execution=execution,
                         ),
                     )
                     completed = True

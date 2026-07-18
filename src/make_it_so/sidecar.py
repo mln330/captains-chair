@@ -53,6 +53,7 @@ from make_it_so.models import (
     UsageConfig,
 )
 from make_it_so.openclaw_usage import sync_openclaw_sessions
+from make_it_so.openclaw_workboard import WORKER_EXECUTION_COMMENT_PREFIX
 from make_it_so.orchestration import QueueCard, QueueStatus
 from make_it_so.runtime import build_work_queue_adapter
 from make_it_so.state import StateStore
@@ -148,14 +149,27 @@ def _card_model(card: QueueCard, worker_models: dict[str, str]) -> str | None:
 
 def _card_execution(card: QueueCard) -> dict[str, Any] | None:
     proof = card.metadata.get("proof")
-    if not isinstance(proof, list):
-        return None
-    for raw in reversed(cast(list[object], proof)):
-        if not isinstance(raw, dict):
-            continue
-        execution = cast(dict[str, Any], raw).get("execution")
-        if isinstance(execution, dict):
-            return cast(dict[str, Any], execution)
+    if isinstance(proof, list):
+        for raw in reversed(cast(list[object], proof)):
+            if not isinstance(raw, dict):
+                continue
+            execution = cast(dict[str, Any], raw).get("execution")
+            if isinstance(execution, dict):
+                return cast(dict[str, Any], execution)
+    comments = card.metadata.get("comments")
+    if isinstance(comments, list):
+        for raw in reversed(cast(list[object], comments)):
+            if not isinstance(raw, dict):
+                continue
+            body = cast(dict[str, Any], raw).get("body")
+            if not isinstance(body, str) or not body.startswith(WORKER_EXECUTION_COMMENT_PREFIX):
+                continue
+            try:
+                execution = json.loads(body.removeprefix(WORKER_EXECUTION_COMMENT_PREFIX))
+            except json.JSONDecodeError:
+                continue
+            if isinstance(execution, dict):
+                return cast(dict[str, Any], execution)
     return None
 
 
