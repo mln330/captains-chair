@@ -358,7 +358,7 @@ function ExecutionPath({ repo }: { repo: Repo }) {
       <div><strong>{totalLoops} feedback loop{totalLoops === 1 ? "" : "s"}</strong><span>Review findings and failed gates route work back through repair, then forward through independent verification.</span></div>
       <div className="feedback-counts"><span><b>{workboard.review_cycles ?? 0}</b> reviews</span><span><b>{workboard.historical_blockers ?? 0}</b> historical blockers</span><span><b>{workboard.current_blockers ?? workboard.blockers ?? 0}</b> current blockers</span></div>
     </div>
-    {coderRoute && <div className="model-route-note"><Cpu size={17} aria-hidden="true" /><div><strong>OpenClaw coding route: {shortModel(coderRoute)}</strong><span>Direct Codex and OpenClaw use separate provider routes. Spark remains available to direct Codex; this OpenClaw worker used its compatible configured route.</span></div></div>}
+    {coderRoute && <div className="model-route-note"><Cpu size={17} aria-hidden="true" /><div><strong>OpenClaw coding route: {shortModel(coderRoute)}</strong><span>Direct Codex and OpenClaw use separate provider routes. Spark remains configured for direct Codex; this OpenClaw worker used its compatible configured route.</span></div></div>}
     <div className="run-history">
       <div className="run-history-heading"><div><p className="eyebrow">FLIGHT RECORDER</p><h5>Workflow runs</h5></div><span>{runs.length} recorded run{runs.length === 1 ? "" : "s"}</span></div>
       {runs.length ? runs.map((run) => <article className={`workflow-run ${run.status ?? "unknown"}`} key={run.workflow ?? run.index}>
