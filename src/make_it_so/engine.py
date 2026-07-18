@@ -1270,6 +1270,22 @@ class ControlPlaneEngine:
                 branch=worktree.branch,
                 push_branch=worktree.push_branch,
             )
+        elif decision.action == ActionKind.REVIEW_PR:
+            if decision.target_pr is None:
+                raise ValueError("review_pr requires target_pr")
+            pr = self.github.pull_request(repo, decision.target_pr)
+            remote_branch = str(pr.get("headRefName") or "")
+            if not remote_branch:
+                raise ValueError("review_pr target PR does not expose a head branch")
+            worktree = self.worktrees.checkout_existing(
+                repo, f"pr-{decision.target_pr}-{action_id[:8]}", remote_branch, lane="review"
+            )
+            workspace = WorkspaceRef(
+                kind="worktree",
+                path=worktree.path,
+                branch=worktree.branch,
+                push_branch=worktree.push_branch,
+            )
         try:
             return self.orchestrator.enqueue(repo, decision, action_id, workspace=workspace)
         except Exception as exc:
