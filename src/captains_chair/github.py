@@ -388,9 +388,19 @@ class GhGitHubProvider:
                     url=cast(Any, item.get("detailsUrl") or item.get("url")),
                 )
             )
+        observed_names = {check.name for check in check_rows}
+        for missing_name in sorted(required_names - observed_names):
+            check_rows.append(
+                CheckResult(
+                    name=missing_name,
+                    status="MISSING",
+                    conclusion=None,
+                    url=None,
+                )
+            )
         # An empty rollup is acceptable when the branch has no required
-        # checks. If checks are present, every observed check must still be
-        # complete and successful; pending or failed checks remain fail-closed.
+        # checks. Otherwise every required check must be present, complete,
+        # and successful; missing, pending, or failed checks remain fail-closed.
         checks_green = (not required_names and not check_rows) or (
             bool(check_rows)
             and all(

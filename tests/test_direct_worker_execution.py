@@ -11,7 +11,11 @@ import pytest
 
 from captains_chair.command import CommandResult
 from captains_chair.direct_orchestrator import DirectOrchestrator
-from captains_chair.direct_workers import CommandWorkerExecutor, WorkerExecutionResult, _worker_prompt
+from captains_chair.direct_workers import (
+    CommandWorkerExecutor,
+    WorkerExecutionResult,
+    _worker_prompt,  # pyright: ignore[reportPrivateUsage]
+)
 from captains_chair.models import (
     ActionKind,
     CompletionPolicy,

@@ -115,7 +115,9 @@ def test_readiness_evidence_collects_live_proof_without_issue_or_pr_bodies(tmp_p
     assert evidence["collection_errors"] == {}
 
 
-def test_gate_filters_required_checks_and_counts_only_active_review_threads(tmp_path: Path) -> None:
+def test_gate_fails_when_required_check_is_missing_and_counts_active_threads(
+    tmp_path: Path,
+) -> None:
     def runner(
         command: Sequence[str],
         *,
@@ -164,8 +166,11 @@ def test_gate_filters_required_checks_and_counts_only_active_review_threads(tmp_
     gate = GhGitHubProvider(runner, cwd=tmp_path).gate(repo(tmp_path), 12, "head-12")
 
     assert gate.head_sha == "head-12"
-    assert gate.checks_green
-    assert [check.name for check in gate.required_checks] == ["build"]
+    assert not gate.checks_green
+    assert [(check.name, check.status) for check in gate.required_checks] == [
+        ("build", "COMPLETED"),
+        ("security", "MISSING"),
+    ]
     assert gate.unresolved_threads == 1
     assert gate.review_head_sha == "head-12"
 

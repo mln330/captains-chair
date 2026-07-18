@@ -399,10 +399,12 @@ class WorkerOrchestrationConfig(StrictModel):
     max_runtime_seconds: int = Field(default=3600, ge=60, le=14400)
     max_retries: int = Field(default=2, ge=0, le=10)
     require_live_completion_validation: bool = True
+    merge_execution: Literal["worker", "deterministic"] = "worker"
 
 
 class OpenClawWorkboardConfig(WorkerOrchestrationConfig):
     kind: Literal["openclaw_workboard"] = "openclaw_workboard"
+    merge_execution: Literal["worker", "deterministic"] = "deterministic"
     executable: str = "openclaw"
     captains_chair_command: tuple[str, ...] = ("captains_chair",)
     auth_source_agent: str | None = None
@@ -415,6 +417,8 @@ class OpenClawWorkboardConfig(WorkerOrchestrationConfig):
     def command_must_not_be_empty(self) -> OpenClawWorkboardConfig:
         if not self.captains_chair_command or any(not item.strip() for item in self.captains_chair_command):
             raise ValueError("captains_chair_command must contain non-empty argv items")
+        if self.merge_execution != "deterministic":
+            raise ValueError("OpenClaw Workboard requires deterministic merge execution")
         return self
 
 

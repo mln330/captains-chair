@@ -110,6 +110,7 @@ def _direct_attempt_groups(rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
                 str(row["work_package_key"] or ""),
                 stage,
                 model,
+                str(row["created_at"])[:10],
             )
             item = grouped.setdefault(
                 key,
@@ -121,7 +122,7 @@ def _direct_attempt_groups(rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
                     "work_package_key": row["work_package_key"],
                     "stage": key[5],
                     "model": key[6],
-                    "date": str(row["created_at"])[:10],
+                    "date": key[7],
                     "calls": 0,
                     "fallback_attempts": 0,
                     "model_mismatch_attempts": 0,

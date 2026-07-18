@@ -13,7 +13,7 @@ from captains_chair.models import OpenClawWorkboardConfig, WorkerAssignments
 from captains_chair.openclaw_workboard import (
     OpenClawWorkboardAdapter,
     OpenClawWorkboardError,
-    _managed_completion_proof,
+    _managed_completion_proof,  # pyright: ignore[reportPrivateUsage]
     decode_openclaw_json,
 )
 from captains_chair.orchestration import QueueCard, QueueCardSpec, QueueStatus, WorkspaceRef
@@ -1109,9 +1109,11 @@ def test_managed_dispatch_promotes_dependency_ready_card(monkeypatch: pytest.Mon
     ("allowed", "expected_status"),
     ((True, "done"), (False, "blocked")),
 )
+@pytest.mark.parametrize("merge_agent", ("", "merger"))
 def test_merge_card_uses_deterministic_gate_without_model_worker(
     allowed: bool,
     expected_status: str,
+    merge_agent: str,
 ) -> None:
     head = "6fc76b212ac2011b01eb91b6ad008f9d9c2c6267"
     cards: dict[str, dict[str, Any]] = {
@@ -1146,7 +1148,7 @@ def test_merge_card_uses_deterministic_gate_without_model_worker(
             },
         },
         "merge": {
-            **_managed_card("merge", status="todo", agent_id="", parents=("final",)),
+            **_managed_card("merge", status="todo", agent_id=merge_agent, parents=("final",)),
             "notes": "Repository: mln330/canary",
             "labels": ["workflow:current", "stage:merge"],
         },
@@ -1207,6 +1209,24 @@ def test_merge_card_uses_deterministic_gate_without_model_worker(
         assert "missing AUTO_MERGE_ALLOWED" in cards["merge"]["metadata"]["workerProtocol"][
             "detail"
         ]
+
+
+def test_assigned_merge_card_never_falls_through_to_model_dispatch() -> None:
+    cards: dict[str, dict[str, Any]] = {
+        "merge": {
+            **_managed_card("merge", status="ready", agent_id="merger"),
+            "notes": "Repository: mln330/canary",
+            "labels": ["workflow:legacy", "stage:merge"],
+        }
+    }
+    calls: list[str] = []
+
+    result = OpenClawWorkboardAdapter(config(), _managed_runner(cards, calls)).dispatch("board")
+
+    assert result["status"] == "idle"
+    assert cards["merge"]["status"] == "ready"
+    assert cards["merge"]["agentId"] == ""
+    assert not any("sessions.spawn" in call for call in calls)
 
 
 def test_deterministic_merge_command_failure_blocks_claimed_card() -> None:
@@ -1354,6 +1374,9 @@ def _managed_runner(
         card = cards[params["id"]]
         if method == "workboard.cards.reclaim":
             card["status"] = params["status"]
+        elif method == "workboard.cards.reassign":
+            card["status"] = params["status"]
+            card["agentId"] = params["agentId"]
         elif method == "workboard.cards.claim":
             card["status"] = "running"
             card["metadata"]["claim"] = {

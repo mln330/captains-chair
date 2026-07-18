@@ -18,6 +18,7 @@ from captains_chair.models import (
     HarnessConfig,
     ModelProfile,
     ModelTarget,
+    ReasoningEffort,
     RepoConfig,
 )
 from captains_chair.state import StateStore
@@ -255,7 +256,9 @@ def test_baseline_uses_named_profile_override(tmp_path: Path) -> None:
         update={
             "profiles": {
                 "baseline": ModelProfile(
-                    primary=ModelTarget(model="runtime-baseline", thinking="medium")
+                    primary=ModelTarget(
+                        model="runtime-baseline", thinking=ReasoningEffort.MEDIUM
+                    )
                 )
             }
         }

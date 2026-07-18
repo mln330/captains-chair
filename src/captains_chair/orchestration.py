@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from hashlib import sha256
 from pathlib import Path
-from typing import Any, Protocol, cast, runtime_checkable
+from typing import Any, Literal, Protocol, cast, runtime_checkable
 
 from pydantic import Field
 
@@ -356,6 +356,7 @@ class OrchestrationPolicy(Protocol):
     max_runtime_seconds: int
     max_retries: int
     require_live_completion_validation: bool
+    merge_execution: Literal["worker", "deterministic"]
 
 
 class WorkflowOrchestrator:
@@ -1221,7 +1222,7 @@ class WorkflowOrchestrator:
                 labels=tuple(_bounded_label(label) for label in (*card.labels, retry_label)),
                 agent_id=(
                     None
-                    if stage == WorkStage.MERGE
+                    if stage == WorkStage.MERGE and _uses_deterministic_merge(self.config)
                     else card.agent_id or _worker_for(stage, self.config)
                 ),
                 source_url=card.source_url,
@@ -1422,7 +1423,7 @@ def build_workflow(
         parents = tuple(root_key if parent is None else f"{action_id}:{parent}" for parent in dependencies)
         metadata: dict[str, Any] = {
             **_course_metadata(decision),
-            "workerRole": _role_for(stage),
+            "workerRole": _role_for(stage, config),
             "expectedModel": _model_for(stage, config),
         }
         if qa_profile is not None:
@@ -1445,9 +1446,14 @@ def build_workflow(
                     qa_profile=qa_profile,
                 ),
                 labels=(*common_labels, *qa_labels, f"stage:{stage.value}"),
-                # Merge is a deterministic control-plane mutation. Leaving it
-                # unassigned prevents any model worker from bypassing the gate.
-                agent_id=None if stage == WorkStage.MERGE else _worker_for(stage, config),
+                # A deterministic merge adapter owns the mutation and leaves
+                # no model worker assigned. Other adapters retain their
+                # declared merger worker behind the portable config contract.
+                agent_id=(
+                    None
+                    if stage == WorkStage.MERGE and _uses_deterministic_merge(config)
+                    else _worker_for(stage, config)
+                ),
                 source_url=source_url,
                 parents=parents,
                 workspace=stage_workspace,
@@ -1559,8 +1565,8 @@ def _worker_for(stage: WorkStage, config: OrchestrationPolicy) -> str:
     }[stage]
 
 
-def _role_for(stage: WorkStage) -> str:
-    return {
+def _role_for(stage: WorkStage, config: OrchestrationPolicy) -> str:
+    role = {
         WorkStage.CONTROL_PLANE_ACTION: "captain",
         WorkStage.IMPLEMENTATION: "coder",
         WorkStage.REPAIR: "coder",
@@ -1568,15 +1574,22 @@ def _role_for(stage: WorkStage) -> str:
         WorkStage.TEST: "tester",
         WorkStage.UX_REVIEW: "ux_reviewer",
         WorkStage.FINAL_REVIEW: "final_reviewer",
-        WorkStage.MERGE: "deterministic_merge",
+        WorkStage.MERGE: "merger",
         WorkStage.POST_MERGE: "verifier",
     }[stage]
+    if stage == WorkStage.MERGE and _uses_deterministic_merge(config):
+        return "deterministic_merge"
+    return role
 
 
 def _model_for(stage: WorkStage, config: OrchestrationPolicy) -> str:
-    if stage == WorkStage.MERGE:
+    if stage == WorkStage.MERGE and _uses_deterministic_merge(config):
         return "deterministic/no-model"
-    return str(getattr(config.worker_models, _role_for(stage)))
+    return str(getattr(config.worker_models, _role_for(stage, config)))
+
+
+def _uses_deterministic_merge(config: OrchestrationPolicy) -> bool:
+    return config.merge_execution == "deterministic"
 
 
 def _source_url(repo: RepoConfig, decision: PlanDecision) -> str:

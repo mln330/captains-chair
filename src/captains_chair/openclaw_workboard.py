@@ -211,6 +211,24 @@ class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
     def _dispatch_deterministic_merge(self, board_id: str) -> dict[str, Any] | None:
         """Execute one eligible merge card without granting merge authority to a model."""
         cards = self.list_cards(board_id)
+        assigned_merge_cards = [
+            card
+            for card in cards
+            if "stage:merge" in card.labels
+            and card.status in {QueueStatus.TODO, QueueStatus.READY}
+            and not card.metadata.get("archivedAt")
+            and card.agent_id
+        ]
+        for card in assigned_merge_cards:
+            self.reassign_card(
+                card.id,
+                agent_id="",
+                status=card.status,
+                reset_failures=False,
+                reason="TECHNICAL_migrate_merge_card_to_deterministic_control_plane",
+            )
+        if assigned_merge_cards:
+            cards = self.list_cards(board_id)
         by_id = {card.id: card for card in cards}
         merge_card = next(
             (
@@ -219,7 +237,6 @@ class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
                 if "stage:merge" in card.labels
                 and card.status in {QueueStatus.TODO, QueueStatus.READY}
                 and not card.metadata.get("archivedAt")
-                and not card.agent_id
                 and _parent_ids(card)
                 and all(
                     parent_id in by_id and by_id[parent_id].status == QueueStatus.DONE
@@ -338,6 +355,7 @@ class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
                 if card.status == QueueStatus.READY
                 and not card.metadata.get("archivedAt")
                 and card.agent_id
+                and "stage:merge" not in card.labels
             ),
             None,
         )

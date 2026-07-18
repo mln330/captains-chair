@@ -106,7 +106,9 @@ describe("Captain's Chair OpenClaw registration", () => {
 
   it("marks embedded UI assets as CORS-enabled for the sandboxed plugin frame", () => {
     const source = readFileSync(resolve(process.cwd(), "src/index.ts"), "utf8");
-    expect(source).toContain('<link rel=\\"stylesheet\\" crossorigin=\\"anonymous\\"');
-    expect(source).toContain('<script crossorigin=\\"anonymous\\"');
+    expect(source).toContain('<link rel="stylesheet" crossorigin="anonymous"');
+    expect(source).toContain('<script crossorigin="anonymous"');
+    expect(source).toContain('content-security-policy", "frame-ancestors \'self\'');
+    expect(source).toContain('captains-chair-control-token');
   });
 });

@@ -9,6 +9,7 @@ import captains_chair.orchestration as orchestration
 from captains_chair.models import (
     ActionKind,
     CompletionPolicy,
+    DirectOrchestratorConfig,
     OpenClawWorkboardConfig,
     OperationMode,
     PlanDecision,
@@ -148,6 +149,25 @@ def test_autonomous_workflow_is_role_separated_and_dependency_gated(tmp_path: Pa
     assert "Configured completion policy: auto_merge." in final.notes
     assert "Required final-review marker: AUTO_MERGE_ALLOWED:<head-sha>." in final.notes
     assert all("OpenClaw" not in (card.notes or "") for card in workflow.stages)
+
+
+def test_direct_orchestrator_keeps_declared_merge_worker(tmp_path: Path) -> None:
+    repo = repo_config(
+        tmp_path,
+        mode=OperationMode.AUTONOMOUS,
+        completion=CompletionPolicy.AUTO_MERGE,
+    )
+    config = DirectOrchestratorConfig(
+        database_path=tmp_path / "direct.db",
+        workers=worker_config().workers,
+    )
+
+    workflow = build_workflow(repo, implementation_decision(), "direct-merge", config)
+    merge = next(card for card in workflow.stages if "stage:merge" in card.labels)
+
+    assert merge.agent_id == "github-merge"
+    assert merge.metadata["workerRole"] == "merger"
+    assert merge.metadata["expectedModel"] == "codex/gpt-5.6-terra"
 
 
 def test_completed_workflow_cleans_shared_workspace_without_touching_branch_metadata(

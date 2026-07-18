@@ -37,6 +37,23 @@ def test_checked_in_configuration_schema_matches_typed_models() -> None:
     assert checked_in == AppConfig.model_json_schema()
 
 
+def test_openclaw_workboard_rejects_model_worker_merge_execution() -> None:
+    with pytest.raises(ValueError, match="requires deterministic merge execution"):
+        OpenClawWorkboardConfig(
+            merge_execution="worker",
+            workers=WorkerAssignments(
+                captain="captain",
+                coder="coder",
+                reviewer="reviewer",
+                tester="tester",
+                ux_reviewer="ux",
+                final_reviewer="final",
+                merger="merger",
+                verifier="verifier",
+            ),
+        )
+
+
 @pytest.mark.parametrize(
     ("schema_name", "model"),
     (

@@ -136,6 +136,10 @@ type ScheduleStatus = { status: string; jobs: ScheduleJob[] };
 type UpdatePayload = Record<string, unknown>;
 type ModelPreset = "economy" | "balanced" | "maximum_quality" | "local_first";
 
+const CONTROL_UI_TOKEN = document
+  .querySelector<HTMLMetaElement>('meta[name="captains-chair-control-token"]')
+  ?.content ?? "";
+
 const ROUTE_DEFAULTS = [
   { role: "strategist", label: "Course strategist", model: "codex/gpt-5.6-sol", effort: "high" },
   { role: "course_verifier", label: "Course verifier", model: "codex/gpt-5.6-sol", effort: "high" },
@@ -170,7 +174,10 @@ type EditableRoute = { model: string; effort: string };
 function callGateway<T>(path: string, params: Record<string, unknown> = {}): Promise<T> {
   return fetch(`/captains-chair/api/${path}`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      "x-captains-chair-control-token": CONTROL_UI_TOKEN,
+    },
     body: JSON.stringify(params),
   }).then(async (response) => {
     if (!response.ok) throw new Error(`Gateway request failed: ${response.status}`);

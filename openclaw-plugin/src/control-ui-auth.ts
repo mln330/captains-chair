@@ -3,6 +3,14 @@ const PLUGIN_ID = "captains-chair";
 const PLUGIN_UI_PATH = "/captains-chair/";
 
 type RequestLike = { method?: string; headers?: Record<string, unknown> };
+type ResponseLike = {
+  statusCode: number;
+  setHeader: (name: string, value: string) => void;
+  end: (body: string) => void;
+};
+type GuardOptions = { token?: string; cors?: boolean };
+
+export const CONTROL_UI_TOKEN_HEADER = "x-captains-chair-control-token";
 
 function header(request: RequestLike, name: string): string | undefined {
   const value = request.headers?.[name];
@@ -36,16 +44,27 @@ export function isCaptainUiRequest(request: RequestLike): boolean {
   }
 }
 
-export function rejectNonControlUiRequest(request: RequestLike, response: { statusCode: number; setHeader: (name: string, value: string) => void; end: (body: string) => void }): boolean {
-  response.setHeader("access-control-allow-origin", "*");
-  response.setHeader("access-control-allow-methods", "GET,POST,OPTIONS");
-  response.setHeader("access-control-allow-headers", "content-type");
+export function rejectNonControlUiRequest(
+  request: RequestLike,
+  response: ResponseLike,
+  options: GuardOptions = {},
+): boolean {
+  if (options.cors !== false) {
+    response.setHeader("access-control-allow-origin", "*");
+    response.setHeader("access-control-allow-methods", "GET,POST,OPTIONS");
+    response.setHeader(
+      "access-control-allow-headers",
+      `content-type,${CONTROL_UI_TOKEN_HEADER}`,
+    );
+  }
   if (request.method?.toUpperCase() === "OPTIONS") {
     response.statusCode = 204;
     response.end("");
     return true;
   }
-  if (isCaptainUiRequest(request)) return false;
+  const tokenMatches = options.token === undefined
+    || header(request, CONTROL_UI_TOKEN_HEADER) === options.token;
+  if (isCaptainUiRequest(request) && tokenMatches) return false;
   response.statusCode = 403;
   response.setHeader("content-type", "application/json; charset=utf-8");
   response.end(JSON.stringify({ error: { message: "Captain's Chair UI requests must originate from the OpenClaw Control UI.", type: "forbidden" } }));

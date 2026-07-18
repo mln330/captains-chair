@@ -643,6 +643,35 @@ def test_usage_tracks_fallback_tokens_by_stage_and_actual_model(tmp_path: Path) 
     }
 
 
+def test_usage_dimensions_keep_identical_model_routes_separate_by_date(tmp_path: Path) -> None:
+    path = tmp_path / "state.db"
+    state = StateStore(path)
+    for run_id, tokens in (("run-1", 10), ("run-2", 20)):
+        state.record_model_call(
+            "repo/project",
+            run_id,
+            "coder",
+            "gpt-5.6-terra",
+            [{"model": "gpt-5.6-terra", "total_tokens": tokens, "success": True}],
+            runtime="codex",
+            stage="implementation",
+        )
+    with closing(sqlite3.connect(path)) as connection, connection:
+        connection.execute(
+            "UPDATE model_calls SET created_at='2026-07-16T10:00:00+00:00' WHERE run_id='run-1'"
+        )
+        connection.execute(
+            "UPDATE model_calls SET created_at='2026-07-17T10:00:00+00:00' WHERE run_id='run-2'"
+        )
+
+    dimensions = state.usage_dimensions("repo/project")
+
+    assert {(item["date"], item["tokens"]) for item in dimensions} == {
+        ("2026-07-16", 10),
+        ("2026-07-17", 20),
+    }
+
+
 def test_usage_report_ranks_external_token_hotspots_and_marks_partial_telemetry() -> None:
     report = build_usage_report(
         {

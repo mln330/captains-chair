@@ -93,6 +93,15 @@
           "title": "Require Live Completion Validation",
           "type": "boolean"
         },
+        "merge_execution": {
+          "default": "worker",
+          "enum": [
+            "worker",
+            "deterministic"
+          ],
+          "title": "Merge Execution",
+          "type": "string"
+        },
         "kind": {
           "const": "direct",
           "default": "direct",
@@ -192,6 +201,15 @@
           "default": true,
           "title": "Require Live Completion Validation",
           "type": "boolean"
+        },
+        "merge_execution": {
+          "default": "worker",
+          "enum": [
+            "worker",
+            "deterministic"
+          ],
+          "title": "Merge Execution",
+          "type": "string"
         },
         "kind": {
           "minLength": 1,
@@ -656,6 +674,15 @@
           "default": true,
           "title": "Require Live Completion Validation",
           "type": "boolean"
+        },
+        "merge_execution": {
+          "default": "deterministic",
+          "enum": [
+            "worker",
+            "deterministic"
+          ],
+          "title": "Merge Execution",
+          "type": "string"
         },
         "kind": {
           "const": "openclaw_workboard",

@@ -86,7 +86,10 @@ def test_sidecar_projects_terminal_workboard_proof_into_completed_state(
             assert board_id == "test-board"
             return cards
 
-    monkeypatch.setattr(sidecar_module, "build_work_queue_adapter", lambda _config: Adapter())
+    def build_adapter(_config: object) -> Adapter:
+        return Adapter()
+
+    monkeypatch.setattr(sidecar_module, "build_work_queue_adapter", build_adapter)
     server = SidecarServer(config_path)
 
     result = server.request("portfolio.status")["repos"][0]
@@ -133,7 +136,10 @@ def test_sidecar_does_not_mark_workboard_with_active_cards_completed(
             assert board_id == "test-board"
             return cards
 
-    monkeypatch.setattr(sidecar_module, "build_work_queue_adapter", lambda _config: Adapter())
+    def build_adapter(_config: object) -> Adapter:
+        return Adapter()
+
+    monkeypatch.setattr(sidecar_module, "build_work_queue_adapter", build_adapter)
     server = SidecarServer(config_path)
 
     result = server.request("portfolio.status")["repos"][0]
@@ -237,7 +243,10 @@ def test_sidecar_correlates_workboard_sessions_and_reports_execution_facts(
             "sessions_with_usage": 1,
         }
 
-    monkeypatch.setattr(sidecar_module, "build_work_queue_adapter", lambda _config: Adapter())
+    def build_adapter(_config: object) -> Adapter:
+        return Adapter()
+
+    monkeypatch.setattr(sidecar_module, "build_work_queue_adapter", build_adapter)
     monkeypatch.setattr(sidecar_module, "sync_openclaw_sessions", sync)
     server = SidecarServer(config_path, github=cast(GitHubProvider, Github()))
 
