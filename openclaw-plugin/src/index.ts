@@ -111,6 +111,26 @@ export function parseRouteParams(raw: unknown): Record<string, unknown> {
   }
 }
 
+export async function readRouteParams(request: unknown): Promise<Record<string, unknown>> {
+  const body = request && typeof request === "object"
+    ? (request as { body?: unknown }).body
+    : undefined;
+  if (body !== undefined) return parseRouteParams(body);
+
+  const stream = request as AsyncIterable<unknown> | null;
+  if (!stream || typeof stream[Symbol.asyncIterator] !== "function") return {};
+
+  const chunks: string[] = [];
+  for await (const chunk of stream) {
+    if (typeof chunk === "string") {
+      chunks.push(chunk);
+    } else if (chunk instanceof Uint8Array) {
+      chunks.push(new TextDecoder().decode(chunk));
+    }
+  }
+  return parseRouteParams(chunks.join(""));
+}
+
 export default definePluginEntry({
   id: PLUGIN_ID,
   name: "Make It So",
@@ -197,7 +217,7 @@ export default definePluginEntry({
         handler: async (req, res) => {
           if (rejectNonControlUiRequest(req, res, { token: controlUiToken })) return;
           try {
-            const params = parseRouteParams(req?.body);
+            const params = await readRouteParams(req);
             const result = await request(method, params);
             res.statusCode = 200;
             res.setHeader("content-type", "application/json; charset=utf-8");
