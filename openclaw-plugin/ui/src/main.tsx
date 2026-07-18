@@ -433,7 +433,7 @@ function RepoPanel({ repo, onSave }: { repo: Repo; onSave: (name: string, payloa
       <Metric label="checks" value={checks} tone={checks === "failing" ? "danger" : checks === "passing" ? "good" : checks === "running" ? "warn" : "neutral"} />
       <Metric label="blockers" value={blockers} tone={blockers ? "danger" : "good"} />
     </div>
-    {terminal && <p className="completion-note">Complete: merged and post-merge verified. {historicalBlockers ? `${historicalBlockers} historical blocker${historicalBlockers === 1 ? "" : "s"} resolved during the run.` : "No historical blockers recorded."} Production deployment is not implied.</p>}
+    {terminal && <p className="completion-note">Complete: merged and post-merge verified. {historicalBlockers ? `${historicalBlockers} historical blocker${historicalBlockers === 1 ? "" : "s"} recorded during the run.` : "No historical blockers recorded."} Production deployment is not implied.</p>}
     <ExecutionPath repo={repo} />
     {github?.prs?.length ? <div className="pr-list"><h4>Open pull requests</h4>{github.prs.slice(0, 4).map((pr) => <a href={pr.url} target="_blank" rel="noreferrer" key={pr.number}><strong>#{pr.number}</strong><span>{pr.title ?? "Untitled PR"}</span><small>{pr.isDraft ? "draft" : pr.reviewDecision ?? pr.mergeStateStatus ?? "open"}</small></a>)}</div> : null}
     {repo.warnings[0] && <p className="warning">{repo.warnings[0]}</p>}
