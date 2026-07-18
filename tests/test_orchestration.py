@@ -37,6 +37,7 @@ _completion_summary = orchestration._completion_summary  # pyright: ignore[repor
 _failure_count = orchestration._failure_count  # pyright: ignore[reportPrivateUsage]
 _has_passed_proof = orchestration._has_passed_proof  # pyright: ignore[reportPrivateUsage]
 _has_valid_proof = orchestration._has_valid_proof  # pyright: ignore[reportPrivateUsage]
+_has_merge_completion_proof = orchestration._has_merge_completion_proof  # pyright: ignore[reportPrivateUsage]
 _passed_proof = orchestration._passed_proof  # pyright: ignore[reportPrivateUsage]
 _retry_depth = orchestration._retry_depth  # pyright: ignore[reportPrivateUsage]
 _retry_limit = orchestration._retry_limit  # pyright: ignore[reportPrivateUsage]
@@ -373,6 +374,16 @@ def test_orchestration_card_helpers_fail_closed_and_preserve_latest_evidence(tmp
     assert _has_valid_proof(repo, passed)
     assert not _has_passed_proof(bare)
     assert not _has_valid_proof(repo, bare)
+    assert not _has_merge_completion_proof(bare)
+    assert not _has_merge_completion_proof(
+        protocol.model_copy(update={"metadata": {"proof": [{"status": "failed", "note": "Merged PR #1"}]}})
+    )
+    assert not _has_merge_completion_proof(
+        protocol.model_copy(update={"metadata": {"proof": [{"status": "passed", "note": "reviewed"}]}})
+    )
+    assert _has_merge_completion_proof(
+        protocol.model_copy(update={"metadata": {"proof": [{"status": "passed", "note": "Merged PR #1"}]}})
+    )
     assert _completion_summary(passed) == "Recovered completed review card from runtime review status."
 
 

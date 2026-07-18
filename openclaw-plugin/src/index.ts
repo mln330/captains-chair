@@ -124,8 +124,16 @@ export async function readRouteParams(request: unknown): Promise<Record<string, 
   for await (const chunk of stream) {
     if (typeof chunk === "string") {
       chunks.push(chunk);
-    } else if (chunk instanceof Uint8Array) {
-      chunks.push(new TextDecoder().decode(chunk));
+    } else if (ArrayBuffer.isView(chunk)) {
+      const view = chunk as ArrayBufferView;
+      chunks.push(
+        new TextDecoder().decode(new Uint8Array(view.buffer, view.byteOffset, view.byteLength)),
+      );
+    } else if (
+      Object.prototype.toString.call(chunk) === "[object ArrayBuffer]"
+      || Object.prototype.toString.call(chunk) === "[object SharedArrayBuffer]"
+    ) {
+      chunks.push(new TextDecoder().decode(new Uint8Array(chunk as ArrayBufferLike)));
     }
   }
   return parseRouteParams(chunks.join(""));

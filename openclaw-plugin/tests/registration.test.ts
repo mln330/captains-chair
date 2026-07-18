@@ -21,6 +21,16 @@ describe("Make It So OpenClaw registration", () => {
     });
   });
 
+  it("accepts an ArrayBuffer request chunk", async () => {
+    async function* requestBody() {
+      yield new TextEncoder().encode('{"full_name":"buffer/project"}').buffer;
+    }
+
+    await expect(readRouteParams(requestBody())).resolves.toEqual({
+      full_name: "buffer/project",
+    });
+  });
+
   it("declares every agent tool in the host manifest contract", () => {
     const manifest = JSON.parse(
       readFileSync(resolve(process.cwd(), "openclaw.plugin.json"), "utf8"),
