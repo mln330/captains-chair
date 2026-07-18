@@ -732,6 +732,10 @@ class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
             raise OpenClawWorkboardError("Workboard card workspace must be an object")
         if not isinstance(workspace_value, dict):
             workspace_value = metadata.get("workspace")
+        if not isinstance(workspace_value, dict):
+            automation = metadata.get("automation")
+            if isinstance(automation, dict):
+                workspace_value = cast(dict[str, Any], automation).get("workspace")
         if workspace_value is not None and not isinstance(workspace_value, dict):
             raise OpenClawWorkboardError("Workboard card metadata.workspace must be an object")
         if isinstance(workspace_value, dict) and (
