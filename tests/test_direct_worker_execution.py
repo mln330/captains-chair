@@ -224,6 +224,21 @@ def test_merge_worker_prompt_allows_only_explicit_merge_stage_action(tmp_path: P
     assert "Do not merge, release, deploy, expose secrets" not in prompt
 
 
+def test_runtime_canary_prompt_forbids_repository_inspection(tmp_path: Path) -> None:
+    card = QueueCard(
+        id="canary-1",
+        title="Runtime canary",
+        status=QueueStatus.READY,
+        labels=("runtime-canary",),
+        notes="Return MAKE_IT_SO_CANARY_PROOF:spark immediately.",
+    )
+
+    prompt = _worker_prompt(card, attempt_id="attempt-1", workspace=tmp_path)
+
+    assert "Do not inspect files, run commands, or mutate the workspace" in prompt
+    assert "Inspect current repository state before mutating it" not in prompt
+
+
 def test_codex_worker_captures_provider_usage_for_workboard_audit(tmp_path: Path) -> None:
     runner = StructuredWorkerRunner()
     executor = CommandWorkerExecutor("codex", "codex", runner)

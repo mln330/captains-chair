@@ -245,6 +245,7 @@ class CommandWorkerExecutor:
 
 def _worker_prompt(card: QueueCard, *, attempt_id: str, workspace: Path) -> str:
     schema = json.dumps(_worker_output_schema(), separators=(",", ":"))
+    runtime_canary = "runtime-canary" in card.labels
     merge_rule = (
         "This is an explicitly assigned merge-stage card: you may merge only after the configured merge gate "
         "passes and its completion policy allows it. Do not release, deploy, expose secrets, force-push, or "
@@ -261,8 +262,13 @@ def _worker_prompt(card: QueueCard, *, attempt_id: str, workspace: Path) -> str:
         "This managed launcher owns Workboard claim, heartbeat, completion, and blocking. Do not call "
         "Workboard tools or lifecycle helper commands, even if the assignment text mentions them. "
         "Report the outcome only by returning the JSON object requested below.\n\n"
-        "Inspect current repository state before mutating it. Keep changes inside the exact working directory. "
-        f"{merge_rule} Run the checks relevant "
+        + (
+            "This is a runtime-only canary. Do not inspect files, run commands, or mutate the workspace. "
+            "Return the required canary marker as passed proof immediately. "
+            if runtime_canary
+            else "Inspect current repository state before mutating it. Keep changes inside the exact working directory. "
+        )
+        + f"{merge_rule} Run the checks relevant "
         "to this card. Return blocked with a TECHNICAL:, USER_SECRET:, GOAL_DIVERGENCE:, EXTERNAL_ACCESS:, or "
         "HIGH_RISK_DECISION: reason when completion is not justified. Never invent proof.\n\n"
         "Return exactly one JSON object matching this schema, with no markdown or commentary:\n"

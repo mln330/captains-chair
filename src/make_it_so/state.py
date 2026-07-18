@@ -230,6 +230,20 @@ def _event_from_row(row: sqlite3.Row) -> EventRecord:
     )
 
 
+def _dimension_tokens(group: dict[str, Any]) -> int:
+    total = group.get("total_tokens")
+    if isinstance(total, (int, float)) and not isinstance(total, bool) and total >= 0:
+        return int(total)
+    # Provider input totals already include the cached subset. Keep cache
+    # visible as its own efficiency dimension without counting it twice.
+    return sum(
+        int(value)
+        for field in ("input_tokens", "output_tokens")
+        for value in (group.get(field),)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0
+    )
+
+
 class StateStore:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -946,11 +960,7 @@ class StateStore:
                     "reasoning_tokens": group.get("reasoning_tokens"),
                     "output_tokens": group.get("output_tokens"),
                     "total_tokens": group.get("total_tokens"),
-                    "tokens": group.get("total_tokens")
-                    or sum(
-                        int(group.get(field) or 0)
-                        for field in ("input_tokens", "cached_input_tokens", "output_tokens")
-                    ),
+                    "tokens": _dimension_tokens(group),
                 }
             )
         for group in cast(list[dict[str, Any]], summary.get("external_groups", [])):
@@ -971,11 +981,7 @@ class StateStore:
                     "reasoning_tokens": group.get("reasoning_tokens"),
                     "output_tokens": group.get("output_tokens"),
                     "total_tokens": group.get("total_tokens"),
-                    "tokens": group.get("total_tokens")
-                    or sum(
-                        int(group.get(field) or 0)
-                        for field in ("input_tokens", "cached_input_tokens", "output_tokens")
-                    ),
+                    "tokens": _dimension_tokens(group),
                 }
             )
         return sorted(dimensions, key=lambda item: (str(item["date"]), int(item["tokens"])), reverse=True)

@@ -622,6 +622,7 @@ def test_usage_tracks_fallback_tokens_by_stage_and_actual_model(tmp_path: Path) 
                 "model": "gpt-5.3-codex-spark",
                 "success": True,
                 "input_tokens": 50,
+                "cached_input_tokens": 20,
                 "output_tokens": 5,
             },
         ],
