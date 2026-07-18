@@ -99,6 +99,7 @@ def test_sidecar_projects_terminal_workboard_proof_into_completed_state(
     assert result["state_source"] == "workboard"
     assert result["workboard_status"]["status"] == "completed"
     assert result["workboard_status"]["active_cards"] == 0
+    assert result["workboard_status"]["current_stage"] == "post_merge"
 
 
 def test_sidecar_does_not_mark_workboard_with_active_cards_completed(

@@ -259,13 +259,22 @@ def _summarize_workboard(
         key=lambda item: str(item["updated_at"] or ""),
     )[-16:]
     loop_count = sum(int(bool(item["loop"])) for item in timeline)
-    current_stage = next(
+    active_stage = next(
         (
             _workflow_stage(card) or "unknown"
             for card in sorted(latest_cards, key=_card_activity_timestamp, reverse=True)
             if card.status in _WORKBOARD_ACTIVE_STATUSES
         ),
-        timeline[-1]["stage"] if timeline else None,
+        None,
+    )
+    current_stage = active_stage or (
+        "post_merge"
+        if terminal
+        else "merge"
+        if "merge" in done_stages
+        else timeline[-1]["stage"]
+        if timeline
+        else None
     )
     pr_numbers: set[int] = set()
     explicit_pr_numbers: set[int] = set()
