@@ -394,8 +394,11 @@ def test_sidecar_fast_portfolio_status_skips_expensive_usage_sync(
     server = SidecarServer(config_path)
     sync_flags: list[bool] = []
 
-    def repo_status(_repo: RepoConfig, *, sync_usage: bool = True) -> dict[str, Any]:
+    def repo_status(
+        _repo: RepoConfig, *, sync_usage: bool = True, cached_workboard: bool = False
+    ) -> dict[str, Any]:
         sync_flags.append(sync_usage)
+        assert cached_workboard is True
         return {"full_name": _repo.full_name}
 
     monkeypatch.setattr(server, "_repo_status", repo_status)

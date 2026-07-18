@@ -455,6 +455,23 @@ class StateStore:
                 )
         return transitions
 
+    def orchestration_card_payloads(self, repo: str) -> list[dict[str, Any]]:
+        """Read the last durable Workboard mirror without calling the host runtime."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT payload_json FROM orchestration_cards WHERE repo=?",
+                (repo,),
+            ).fetchall()
+        payloads: list[dict[str, Any]] = []
+        for row in rows:
+            try:
+                value = json.loads(str(row["payload_json"]))
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, dict):
+                payloads.append(cast(dict[str, Any], value))
+        return payloads
+
     def openclaw_session_context(self, repo: str) -> dict[str, dict[str, str]]:
         """Return stage context keyed by managed Workboard card ID.
 

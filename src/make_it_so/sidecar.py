@@ -416,6 +416,32 @@ class SidecarServer:
                 "error": str(exc)[:500],
             }
 
+    def _cached_workboard_status(self, repo: RepoConfig) -> dict[str, Any] | None:
+        """Project the durable Workboard mirror without a slow OpenClaw RPC."""
+        if not repo.orchestrator or not repo.orchestration_board:
+            return None
+        payloads = self.state.orchestration_card_payloads(repo.full_name)
+        cards: list[QueueCard] = []
+        for payload in payloads:
+            try:
+                cards.append(QueueCard.model_validate(payload))
+            except ValueError:
+                continue
+        if not cards:
+            return {
+                "status": "unknown",
+                "board": repo.orchestration_board,
+                "cards": 0,
+                "counts": {},
+                "usage_sync": {"status": "cached"},
+            }
+        return _summarize_workboard(
+            cards,
+            repo.orchestration_board,
+            usage_sync={"status": "cached"},
+            repo_full_name=repo.full_name,
+        )
+
     def _github_status(self, repo: RepoConfig) -> dict[str, Any]:
         """Collect the small GitHub slice needed for a portfolio card."""
         try:
@@ -459,7 +485,7 @@ class SidecarServer:
 
     def _fast_repo_status(self, repo: RepoConfig) -> dict[str, Any]:
         """Build a dashboard status without blocking on provider session import."""
-        return self._repo_status(repo, sync_usage=False)
+        return self._repo_status(repo, sync_usage=False, cached_workboard=True)
 
     def request(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         payload = params or {}
@@ -538,11 +564,19 @@ class SidecarServer:
             return self._run_once(str(payload.get("kind") or "reconcile"))
         raise SidecarError(f"unknown sidecar method: {method}")
 
-    def _repo_status(self, repo: RepoConfig, *, sync_usage: bool = True) -> dict[str, Any]:
+    def _repo_status(
+        self,
+        repo: RepoConfig,
+        *,
+        sync_usage: bool = True,
+        cached_workboard: bool = False,
+    ) -> dict[str, Any]:
         with ThreadPoolExecutor(max_workers=1) as executor:
             github_future = executor.submit(self._github_status, repo)
             workboard = (
-                self._workboard_status(repo, sync_usage=False)
+                self._cached_workboard_status(repo)
+                if cached_workboard
+                else self._workboard_status(repo, sync_usage=False)
                 if not sync_usage
                 else self._workboard_status(repo)
             )
