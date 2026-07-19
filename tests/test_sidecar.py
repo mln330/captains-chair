@@ -10,6 +10,7 @@ import pytest
 import yaml
 
 import make_it_so.sidecar as sidecar_module
+from make_it_so import __version__
 from make_it_so.config import load_config
 from make_it_so.github import GitHubProvider, RepositorySnapshot
 from make_it_so.models import (
@@ -585,7 +586,7 @@ def test_sidecar_reports_health_portfolio_and_schedule_contract(tmp_path: Path) 
 
     health = server.request("health")
     assert health["status"] == "healthy"
-    assert health["version"] == "0.2.2"
+    assert health["version"] == __version__
     assert health["protocol_version"] == 1
     status = server.request("portfolio.status")
     assert status["repos"][0]["full_name"] == "example/project"
