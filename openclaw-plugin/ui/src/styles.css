@@ -348,6 +348,7 @@ legend { color: #7fc7c0; font-size: 12px; padding: 0 5px; }
 .run-steps { display: grid; gap: 5px; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); margin-top: 10px; }
 .run-step { align-items: start; background: #121c1e; border: 1px solid #2e3b3e; display: grid; gap: 7px; grid-template-columns: auto minmax(0, 1fr) auto; min-height: 64px; padding: 8px; }
 .run-step.loop { border-color: #806a38; box-shadow: inset 2px 0 #c89b48; }
+.run-step.superseded { background: #202b2e; border-color: #527b73; box-shadow: inset 2px 0 #7fc7c0; }
 .run-step-marker { color: #8bd0c6; display: flex; padding-top: 1px; }
 .run-step.blocked .run-step-marker { color: #f0bfc6; }
 .run-step > div { min-width: 0; }
@@ -427,6 +428,7 @@ legend { color: #7fc7c0; font-size: 12px; padding: 0 5px; }
   .model-route-note { border-color: #ded8d0; }
   .current-run { background: #f5ddd7; color: #8d2f22; }
   .run-step.loop { border-color: #cfb56d; box-shadow: inset 2px 0 #b78427; }
+  .run-step.superseded { background: #f3f8ef; border-color: #9bb792; box-shadow: inset 2px 0 #5d9360; }
   .run-step-marker, .run-step a { color: #32602b; }
   .run-step.blocked .run-step-marker { color: #8d2f36; }
   .completion-strip { background: #f3f8ef; border-color: #9bb792; color: #32602b; }

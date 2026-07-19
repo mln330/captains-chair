@@ -35,11 +35,12 @@ const repo = {
     test_status: "passed",
     blockers: 0,
     current_blockers: 0,
-    historical_blockers: 1,
+    historical_blockers: 0,
+    superseded_retries: 1,
     total_loop_count: 1,
     stage_history: [
       { stage: "implementation", total: 1, done: 1, active: 0, blocked: 0, loops: 0, models: ["codex/gpt-5.6-terra"] },
-      { stage: "review", total: 1, done: 1, active: 0, blocked: 0, loops: 0, models: ["codex/gpt-5.6-terra"] },
+      { stage: "review", total: 2, done: 1, active: 0, blocked: 1, loops: 1, retry_attempts: 1, superseded_retries: 1, historical_blockers: 0, models: ["codex/gpt-5.6-terra"] },
       { stage: "repair", total: 1, done: 1, active: 0, blocked: 0, loops: 1, models: ["codex/gpt-5.6-terra"] },
       { stage: "test", total: 1, done: 1, active: 0, blocked: 0, loops: 0, models: ["codex/gpt-5.6-luna"] },
       { stage: "final_review", total: 1, done: 1, active: 0, blocked: 0, loops: 0, models: ["codex/gpt-5.6-sol"] },
@@ -68,6 +69,7 @@ const repo = {
         cards: 3,
         done: 3,
         loops: 1,
+        superseded_retries: 1,
         timeline: [{ id: "repair", stage: "repair", status: "done", summary: "Addressed review finding", model: "codex/gpt-5.6-terra", loop: true, pr_url: "https://github.com/example/project/pull/1" }],
       },
     ],
@@ -130,6 +132,7 @@ describe("shared dashboard components", () => {
     expect(screen.getByText("FLIGHT RECORDER")).toBeTruthy();
     expect(screen.getByText("Workflow runs")).toBeTruthy();
     expect(screen.getByText("1 feedback loop")).toBeTruthy();
+    expect(screen.getAllByText(/1 superseded retry/).length).toBeGreaterThan(0);
     expect(screen.getByText("Coding route: gpt-5.3-codex-spark via direct Codex")).toBeTruthy();
     expect(screen.getByText(/OpenClaw owns the Workboard lifecycle/)).toBeTruthy();
     expect(screen.getByText("Implemented search")).toBeTruthy();

@@ -49,6 +49,7 @@ type WorkflowTimelineItem = {
   pr_url?: string | null;
   updated_at?: string | null;
   loop?: boolean;
+  superseded_retry?: boolean;
 };
 type WorkflowRun = {
   workflow?: string;
@@ -61,6 +62,8 @@ type WorkflowRun = {
   loops?: number;
   blocked?: number;
   done?: number;
+  historical_blockers?: number;
+  superseded_retries?: number;
   updated_at?: string | null;
   timeline?: WorkflowTimelineItem[];
 };
@@ -71,6 +74,9 @@ type StageHistory = {
   active?: number;
   blocked?: number;
   loops?: number;
+  retry_attempts?: number;
+  historical_blockers?: number;
+  superseded_retries?: number;
   models?: string[];
 };
 type WorkboardStatus = {
@@ -95,6 +101,7 @@ type WorkboardStatus = {
   current_blockers?: number;
   historical_blockers?: number;
   historical_review_blockers?: number;
+  superseded_retries?: number;
   terminal?: boolean;
   completion_status?: string;
   pr_count?: number;
@@ -286,6 +293,25 @@ function stageTone(stage?: StageHistory, terminal = false): string {
   return "idle";
 }
 
+function stageCountLabel(stage?: StageHistory): string {
+  if (!stage) return "--";
+  const done = stage.done ?? 0;
+  const active = stage.active ?? 0;
+  const historicalBlockers = stage.historical_blockers ?? 0;
+  if (done > 0 && active === 0) return "Complete";
+  if (historicalBlockers > 0 && done === 0) return "Blocked";
+  return `${done}/${stage.total ?? 0}`;
+}
+
+function stageCountDetail(stage?: StageHistory): string | undefined {
+  if (!stage) return undefined;
+  const details = [`${stage.done ?? 0} successful`, `${stage.total ?? 0} recorded`];
+  if (stage.retry_attempts) details.push(`${stage.retry_attempts} retry attempt${stage.retry_attempts === 1 ? "" : "s"}`);
+  if (stage.superseded_retries) details.push(`${stage.superseded_retries} superseded`);
+  if (stage.historical_blockers) details.push(`${stage.historical_blockers} historical blocker${stage.historical_blockers === 1 ? "" : "s"}`);
+  return details.join("; ");
+}
+
 function statusLabel(value?: string | null): string {
   return (value || "not available").split("_").join(" ");
 }
@@ -347,10 +373,10 @@ function ExecutionPath({ repo }: { repo: Repo }) {
         const models = telemetry.models.length ? telemetry.models : history?.models ?? [];
         const tone = stageTone(history, terminal);
         return <div className={`stage-node ${tone}`} role="listitem" key={stage}>
-          <div className="stage-node-top"><span className="stage-icon"><Icon size={16} aria-hidden="true" /></span><span className="stage-count">{history ? `${history.done ?? 0}/${history.total ?? 0}` : "--"}</span></div>
+          <div className="stage-node-top"><span className="stage-icon"><Icon size={16} aria-hidden="true" /></span><span className="stage-count" title={stageCountDetail(history)}>{stageCountLabel(history)}</span></div>
           <strong>{label}</strong>
           <span className="stage-model" title={models.join(", ")}>{models.length ? models.map(shortModel).join(", ") : "No recorded model"}</span>
-          <span className="stage-tokens">{telemetry.tokens ? `${compactTokens(telemetry.tokens)} tokens` : history ? `${history.loops ?? 0} loops` : "No run"}</span>
+          <span className="stage-tokens">{telemetry.tokens ? `${compactTokens(telemetry.tokens)} tokens` : history ? `${history.retry_attempts ?? history.loops ?? 0} retry attempt${(history.retry_attempts ?? history.loops ?? 0) === 1 ? "" : "s"}` : "No run"}</span>
           {index < EXECUTION_LANES.length - 1 && <span className="stage-connector" aria-hidden="true" />}
         </div>;
       })}
@@ -358,7 +384,7 @@ function ExecutionPath({ repo }: { repo: Repo }) {
     <div className="feedback-band">
       <div className="feedback-icon"><RotateCcw size={18} aria-hidden="true" /></div>
       <div><strong>{totalLoops} feedback loop{totalLoops === 1 ? "" : "s"}</strong><span>Review findings and failed gates route work back through repair, then forward through independent verification.</span></div>
-      <div className="feedback-counts"><span><b>{workboard.review_cycles ?? 0}</b> reviews</span><span><b>{workboard.historical_blockers ?? 0}</b> historical blockers</span><span><b>{workboard.current_blockers ?? workboard.blockers ?? 0}</b> current blockers</span></div>
+      <div className="feedback-counts"><span><b>{workboard.reviews_passed ?? 0}</b> reviews passed</span><span><b>{workboard.superseded_retries ?? 0}</b> superseded retr{(workboard.superseded_retries ?? 0) === 1 ? "y" : "ies"}</span>{(workboard.historical_blockers ?? 0) > 0 && <span><b>{workboard.historical_blockers ?? 0}</b> historical blockers</span>}<span><b>{workboard.current_blockers ?? workboard.blockers ?? 0}</b> current blockers</span></div>
     </div>
     {coderRoute && <div className="model-route-note"><Cpu size={17} aria-hidden="true" /><div><strong>Coding route: {shortModel(coderRoute)} via {coderRuntime === "codex" ? "direct Codex" : "OpenClaw"}</strong><span>{coderRuntime === "codex" ? "OpenClaw owns the Workboard lifecycle; the coding card executes through your ChatGPT-authenticated Codex CLI and records provider token telemetry." : "This coding card executes through the OpenClaw agent route configured for the repository."}</span></div></div>}
     <div className="run-history">
@@ -366,18 +392,21 @@ function ExecutionPath({ repo }: { repo: Repo }) {
       {runs.length ? runs.map((run) => <article className={`workflow-run ${run.status ?? "unknown"}`} key={run.workflow ?? run.index}>
         <div className="run-label"><span>RUN {String(run.index ?? 0).padStart(2, "0")}</span><strong>{run.kind ?? "workflow"}</strong><em>{statusLabel(run.status)}</em></div>
         <div className="run-body">
-          <div className="run-title"><div><strong>{run.title ?? "Workboard workflow"}</strong><span>{run.done ?? 0}/{run.cards ?? 0} cards complete{run.loops ? ` | ${run.loops} loops` : ""}</span></div>{run.current && <span className="current-run">current</span>}</div>
+          <div className="run-title"><div><strong>{run.title ?? "Workboard workflow"}</strong><span>{run.status === "completed" ? "Complete" : `${run.done ?? 0}/${run.cards ?? 0} cards complete`}{run.superseded_retries ? ` | ${run.superseded_retries} superseded retr${run.superseded_retries === 1 ? "y" : "ies"}` : run.loops ? ` | ${run.loops} feedback loop${run.loops === 1 ? "" : "s"}` : ""}</span></div>{run.current && <span className="current-run">current</span>}</div>
           <div className="run-steps" role="list">
-            {(run.timeline ?? []).slice(-12).map((item, index) => <div className={`run-step ${item.status ?? "unknown"} ${item.loop ? "loop" : ""}`} role="listitem" key={item.id ?? `${run.workflow}-${item.stage}-${index}`}>
-              <span className="run-step-marker" aria-hidden="true">{item.status === "done" ? <CheckCircle2 size={14} /> : item.status === "blocked" ? <XCircle size={14} /> : <CircleDot size={14} />}</span>
-              <div><strong>{stageLabel(item.stage)}</strong><span>{item.model ? shortModel(item.model) : item.agent ?? "deterministic"}</span><small title={item.summary ?? item.title}>{item.summary ?? item.title ?? "Workboard transition"}</small></div>
+            {(run.timeline ?? []).slice(-12).map((item, index) => {
+              const supersededRetry = item.superseded_retry || (item.status === "blocked" && item.loop && run.status === "completed");
+              return <div className={`run-step ${supersededRetry ? "superseded" : item.status ?? "unknown"} ${item.loop ? "loop" : ""}`} role="listitem" key={item.id ?? `${run.workflow}-${item.stage}-${index}`}>
+              <span className="run-step-marker" aria-hidden="true">{item.status === "done" || supersededRetry ? <CheckCircle2 size={14} /> : item.status === "blocked" ? <XCircle size={14} /> : <CircleDot size={14} />}</span>
+              <div><strong>{stageLabel(item.stage)}{supersededRetry ? " - superseded retry" : ""}</strong><span>{item.model ? shortModel(item.model) : item.agent ?? "deterministic"}</span><small title={item.summary ?? item.title}>{supersededRetry ? "Retry preserved as audit history; successful path completed." : item.summary ?? item.title ?? "Workboard transition"}</small></div>
               {item.pr_url && <a href={item.pr_url} target="_blank" rel="noreferrer" aria-label={`Open PR for ${item.title ?? item.stage}`}><GitPullRequest size={14} /><span>PR</span><ExternalLink size={11} /></a>}
-            </div>)}
+            </div>;
+            })}
           </div>
         </div>
       </article>) : <p className="muted">No durable Workboard workflow history has been recorded yet.</p>}
     </div>
-    {terminal && <div className="completion-strip"><BadgeCheck size={18} aria-hidden="true" /><div><strong>Implementation complete</strong><span>Merged and post-merge verification passed. Historical blocked cards above are audit evidence, not active blockers. Production deployment remains a separately verified outcome.</span></div></div>}
+    {terminal && <div className="completion-strip"><BadgeCheck size={18} aria-hidden="true" /><div><strong>Implementation complete</strong><span>Merged and post-merge verification passed. Superseded retry cards above are audit history, not failed work. Production deployment remains a separately verified outcome.</span></div></div>}
   </section>;
 }
 
@@ -544,6 +573,7 @@ function RepoPanel({ repo, onSave }: { repo: Repo; onSave: (name: string, payloa
   const terminal = workboard?.terminal || workboard?.status === "completed" || repo.state === "merged";
   const blockers = workboard?.current_blockers ?? workboard?.blockers ?? (terminal ? 0 : workboard?.counts?.blocked ?? 0);
   const historicalBlockers = workboard?.historical_blockers ?? 0;
+  const supersededRetries = workboard?.superseded_retries ?? 0;
   return <section className="repo-panel">
     <div className="repo-heading"><div><h3>{repo.full_name}</h3><p>{repo.local_path}</p></div><span className={`mode ${repo.operation_mode}`}>{repo.operation_mode}</span></div>
     <div className="repo-meta"><span>{repo.state.split("_").join(" ")}</span><span className={usagePending ? "usage-pending" : ""}>{usageLabel}</span><span>{repo.dirty ? "Uncommitted changes" : "Clean checkout"}</span></div>
@@ -556,7 +586,7 @@ function RepoPanel({ repo, onSave }: { repo: Repo; onSave: (name: string, payloa
       <Metric label="checks" value={checks} tone={checks === "failing" ? "danger" : checks === "passing" ? "good" : checks === "running" ? "warn" : "neutral"} />
       <Metric label="blockers" value={blockers} tone={blockers ? "danger" : "good"} />
     </div>
-    {terminal && <p className="completion-note">Complete: merged and post-merge verified. {historicalBlockers ? `${historicalBlockers} historical blocker${historicalBlockers === 1 ? "" : "s"} recorded during the run.` : "No historical blockers recorded."} Production deployment is not implied.</p>}
+    {terminal && <p className="completion-note">Complete: merged and post-merge verified. {supersededRetries ? `${supersededRetries} superseded retry attempt${supersededRetries === 1 ? "" : "s"} retained as audit history. ` : ""}{historicalBlockers ? `${historicalBlockers} historical blocker${historicalBlockers === 1 ? "" : "s"} recorded during the run. ` : "No unresolved historical blockers recorded. "}Production deployment is not implied.</p>}
     <ExecutionPath repo={repo} />
     {github?.prs?.length ? <div className="pr-list"><h4>Open pull requests</h4>{github.prs.slice(0, 4).map((pr) => <a href={pr.url} target="_blank" rel="noreferrer" key={pr.number}><strong>#{pr.number}</strong><span>{pr.title ?? "Untitled PR"}</span><small>{pr.isDraft ? "draft" : pr.reviewDecision ?? pr.mergeStateStatus ?? "open"}</small></a>)}</div> : null}
     {repo.warnings[0] && <p className="warning">{repo.warnings[0]}</p>}

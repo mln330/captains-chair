@@ -110,6 +110,7 @@ def test_sidecar_projects_terminal_workboard_proof_into_completed_state(
     assert result["workboard_status"]["current_blockers"] == 0
     assert result["workboard_status"]["historical_blockers"] == 2
     assert result["workboard_status"]["historical_review_blockers"] == 1
+    assert result["workboard_status"]["superseded_retries"] == 0
     assert result["workboard_status"]["completion_status"] == "verified"
     assert result["workboard_status"]["workflow_runs"][0]["status"] == "completed"
     assert {row["stage"] for row in result["workboard_status"]["stage_history"]} >= {
@@ -119,7 +120,43 @@ def test_sidecar_projects_terminal_workboard_proof_into_completed_state(
         "post_merge",
     }
     assert result["workboard_status"]["total_loop_count"] == 1
-    assert "Historical blocked" in result["workboard_status"]["message"]
+    assert "Historical blockers" in result["workboard_status"]["message"]
+
+
+def test_sidecar_separates_superseded_retry_cards_from_historical_blockers() -> None:
+    def retry_card(card_id: str, stage: str, status: QueueStatus, timestamp: int) -> QueueCard:
+        return QueueCard(
+            id=card_id,
+            title=f"Retry {stage}",
+            status=status,
+            labels=("workflow:retry-workflow", f"stage:{stage}", f"retry:{card_id}"),
+            metadata={"comments": [{"createdAt": timestamp, "body": "CANCELLED: superseded by successful path"}]},
+        )
+
+    summary = sidecar_module._summarize_workboard(  # pyright: ignore[reportPrivateUsage]
+        [
+            _workboard_card("review", QueueStatus.DONE, 1),
+            retry_card("review-retry", "review", QueueStatus.BLOCKED, 2),
+            _workboard_card("final_review", QueueStatus.DONE, 3),
+            retry_card("final-retry", "final_review", QueueStatus.BLOCKED, 4),
+            _workboard_card("merge", QueueStatus.DONE, 5),
+            _workboard_card("post_merge", QueueStatus.DONE, 6),
+        ],
+        "board",
+    )
+
+    assert summary["status"] == "completed"
+    assert summary["historical_blockers"] == 0
+    assert summary["historical_review_blockers"] == 0
+    assert summary["current_blockers"] == 0
+    assert summary["superseded_retries"] == 2
+    assert all(item["superseded_retry"] for item in summary["timeline"] if item["status"] == "blocked")
+    review = next(row for row in summary["stage_history"] if row["stage"] == "review")
+    assert review["superseded_retries"] == 1
+    assert review["historical_blockers"] == 0
+    run = summary["workflow_runs"][0]
+    assert run["superseded_retries"] == 2
+    assert run["historical_blockers"] == 0
 
 
 def test_workboard_history_preserves_build_review_and_completion_runs() -> None:
@@ -548,7 +585,7 @@ def test_sidecar_reports_health_portfolio_and_schedule_contract(tmp_path: Path) 
 
     health = server.request("health")
     assert health["status"] == "healthy"
-    assert health["version"] == "0.2.1"
+    assert health["version"] == "0.2.2"
     assert health["protocol_version"] == 1
     status = server.request("portfolio.status")
     assert status["repos"][0]["full_name"] == "example/project"

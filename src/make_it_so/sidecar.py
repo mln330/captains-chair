@@ -221,6 +221,19 @@ def _is_loop_card(card: QueueCard) -> bool:
     )
 
 
+def _is_superseded_retry(card: QueueCard, cards: list[QueueCard]) -> bool:
+    """Return whether a blocked loop card was superseded by a successful stage."""
+    if card.status != QueueStatus.BLOCKED or not _is_loop_card(card):
+        return False
+    stage = _workflow_stage(card)
+    return stage is not None and any(
+        other.id != card.id
+        and other.status == QueueStatus.DONE
+        and _workflow_stage(other) == stage
+        for other in cards
+    )
+
+
 def _card_context_rows(cards: list[QueueCard]) -> list[dict[str, Any]]:
     return [
         {
@@ -322,6 +335,14 @@ def _summarize_workboard(
                 "done": sum(card.status == QueueStatus.DONE for card in stage_cards),
                 "active": sum(card.status in _WORKBOARD_ACTIVE_STATUSES for card in stage_cards),
                 "blocked": sum(card.status == QueueStatus.BLOCKED for card in stage_cards),
+                "historical_blockers": sum(
+                    card.status == QueueStatus.BLOCKED and not _is_superseded_retry(card, latest_cards)
+                    for card in stage_cards
+                ),
+                "retry_attempts": sum(_is_loop_card(card) for card in stage_cards),
+                "superseded_retries": sum(
+                    _is_superseded_retry(card, latest_cards) for card in stage_cards
+                ),
                 "loops": sum(
                     stage_name == "repair"
                     or any(label.startswith("retry:") for label in card.labels)
@@ -344,6 +365,7 @@ def _summarize_workboard(
                 "pr_url": card.source_url if "/pull/" in str(card.source_url or "") else None,
                 "updated_at": _card_activity_time(card),
                 "loop": _is_loop_card(card),
+                "superseded_retry": _is_superseded_retry(card, all_workflow_cards),
             }
             for card in latest_cards
         ),
@@ -358,7 +380,10 @@ def _summarize_workboard(
     ]
     review_active = any(card.status in _WORKBOARD_ACTIVE_STATUSES for card in current_review_cards)
     review_blocked = any(card.status == QueueStatus.BLOCKED for card in current_review_cards)
-    historical_review_blockers = sum(card.status == QueueStatus.BLOCKED for card in review_cards)
+    historical_review_blockers = sum(
+        card.status == QueueStatus.BLOCKED and not _is_superseded_retry(card, all_workflow_cards)
+        for card in review_cards
+    )
     review_status = (
         "passed"
         if terminal and any(card.status == QueueStatus.DONE for card in review_cards)
@@ -402,8 +427,17 @@ def _summarize_workboard(
         if timeline
         else None
     )
-    historical_blockers = sum(card.status == QueueStatus.BLOCKED for card in all_workflow_cards)
-    current_blockers = 0 if terminal else counts.get(QueueStatus.BLOCKED.value, 0)
+    superseded_retries = sum(
+        _is_superseded_retry(card, all_workflow_cards) for card in all_workflow_cards
+    )
+    historical_blockers = sum(
+        card.status == QueueStatus.BLOCKED and not _is_superseded_retry(card, all_workflow_cards)
+        for card in all_workflow_cards
+    )
+    current_blockers = 0 if terminal else sum(
+        card.status == QueueStatus.BLOCKED and not _is_superseded_retry(card, latest_cards)
+        for card in latest_cards
+    )
     latest_card_ids = {card.id for card in latest_cards}
     stage_history: list[dict[str, Any]] = []
     for stage_name in stage_names:
@@ -423,6 +457,15 @@ def _summarize_workboard(
                     for card in stage_cards
                 ),
                 "blocked": sum(card.status == QueueStatus.BLOCKED for card in stage_cards),
+                "historical_blockers": sum(
+                    card.status == QueueStatus.BLOCKED
+                    and not _is_superseded_retry(card, all_workflow_cards)
+                    for card in stage_cards
+                ),
+                "retry_attempts": sum(_is_loop_card(card) for card in stage_cards),
+                "superseded_retries": sum(
+                    _is_superseded_retry(card, all_workflow_cards) for card in stage_cards
+                ),
                 "loops": sum(_is_loop_card(card) for card in stage_cards),
                 "models": models,
             }
@@ -477,6 +520,7 @@ def _summarize_workboard(
                     "pr_url": card.source_url if "/pull/" in str(card.source_url or "") else None,
                     "updated_at": _card_activity_time(card),
                     "loop": _is_loop_card(card),
+                    "superseded_retry": _is_superseded_retry(card, all_workflow_cards),
                 }
                 for card in workflow_cards
                 if card.status in {QueueStatus.DONE, QueueStatus.BLOCKED}
@@ -499,6 +543,14 @@ def _summarize_workboard(
                 "loops": sum(_is_loop_card(card) for card in workflow_cards),
                 "blocked": sum(card.status == QueueStatus.BLOCKED for card in workflow_cards),
                 "done": sum(card.status == QueueStatus.DONE for card in workflow_cards),
+                "historical_blockers": sum(
+                    card.status == QueueStatus.BLOCKED
+                    and not _is_superseded_retry(card, all_workflow_cards)
+                    for card in workflow_cards
+                ),
+                "superseded_retries": sum(
+                    _is_superseded_retry(card, all_workflow_cards) for card in workflow_cards
+                ),
                 "updated_at": max((_card_activity_time(card) or "" for card in workflow_cards), default="")
                 or None,
                 "timeline": run_timeline[-18:],
@@ -554,6 +606,7 @@ def _summarize_workboard(
         "current_blockers": current_blockers,
         "historical_blockers": historical_blockers,
         "historical_review_blockers": historical_review_blockers,
+        "superseded_retries": superseded_retries,
         "terminal": terminal,
         "completion_status": "verified" if terminal else status,
         "pr_count": max(len(pr_numbers), len(pr_urls)),
@@ -565,7 +618,8 @@ def _summarize_workboard(
     if terminal:
         summary["message"] = (
             "Implementation merged and post-merge verification completed. "
-            "Historical blocked or retry cards are retained for audit and do not block this course."
+            "Historical blockers and superseded retry cards are retained for audit; "
+            "superseded retries do not block this course."
         )
     return summary
 
