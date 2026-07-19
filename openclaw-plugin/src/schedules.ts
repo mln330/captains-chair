@@ -14,9 +14,8 @@ export type OpenClawCommandResult = {
 };
 
 export type OpenClawCommandRunner = (
-  command: string,
-  args?: string[],
-  options?: { timeoutMs?: number },
+  argv: string[],
+  options: { timeoutMs: number },
 ) => Promise<OpenClawCommandResult>;
 
 export type ScheduleInspection = {
@@ -32,7 +31,7 @@ export async function runOpenClawCommand(
   args: string[],
   timeoutMs = 120_000,
 ): Promise<OpenClawCommandResult> {
-  return runner(executable, args, { timeoutMs });
+  return runner([executable, ...args], { timeoutMs });
 }
 
 export function cronListArgs(): string[] {

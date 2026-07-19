@@ -45,16 +45,16 @@ describe("Make It So OpenClaw registration", () => {
         follow_up_message: "Repository registered. Number 1 will follow up in chat before any work begins.",
         notification_route: "channel:1483192074344988954",
       },
-      async (command, args, options) => {
-        calls.push([command, args, options]);
+      async (argv, options) => {
+        calls.push([argv, options]);
         return { code: 0, stdout: '{"id":"discord-message-1"}' };
       },
       "openclaw",
     );
 
     expect(calls).toEqual([[
-      "openclaw",
       [
+        "openclaw",
         "message", "send", "--channel", "discord", "--target", "channel:1483192074344988954",
         "--message", "Repository registered. Number 1 will follow up in chat before any work begins.",
         "--json",

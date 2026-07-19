@@ -35,14 +35,13 @@ describe("OpenClaw schedule reconciliation", () => {
 
   it("uses the OpenClaw command-runner contract", async () => {
     const calls: unknown[][] = [];
-    const result = await runOpenClawCommand(async (command, args, options) => {
-      calls.push([command, args, options]);
+    const result = await runOpenClawCommand(async (argv, options) => {
+      calls.push([argv, options]);
       return { code: 0, stdout: "ok" };
     }, "/opt/openclaw/bin/openclaw", ["cron", "list", "--json"]);
 
     expect(calls).toEqual([[
-      "/opt/openclaw/bin/openclaw",
-      ["cron", "list", "--json"],
+      ["/opt/openclaw/bin/openclaw", "cron", "list", "--json"],
       { timeoutMs: 120_000 },
     ]]);
     expect(result.stdout).toBe("ok");
