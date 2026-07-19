@@ -727,6 +727,49 @@
       "title": "RequirementStatus",
       "type": "string"
     },
+    "TestEvidencePolicy": {
+      "additionalProperties": false,
+      "description": "Acceptance policy for the evidence produced by a delivery milestone.",
+      "properties": {
+        "version": {
+          "const": 1,
+          "default": 1,
+          "title": "Version",
+          "type": "integer"
+        },
+        "required": {
+          "default": true,
+          "title": "Required",
+          "type": "boolean"
+        },
+        "minimum_pass_rate": {
+          "default": 100.0,
+          "maximum": 100.0,
+          "minimum": 0.0,
+          "title": "Minimum Pass Rate",
+          "type": "number"
+        },
+        "require_command": {
+          "default": true,
+          "title": "Require Command",
+          "type": "boolean"
+        },
+        "require_screenshot": {
+          "default": false,
+          "title": "Require Screenshot",
+          "type": "boolean"
+        },
+        "minimum_screenshots": {
+          "default": 0,
+          "maximum": 50,
+          "minimum": 0,
+          "title": "Minimum Screenshots",
+          "type": "integer"
+        }
+      },
+      "title": "TestEvidencePolicy",
+      "type": "object"
+    },
     "WorkPackage": {
       "additionalProperties": false,
       "properties": {
@@ -782,6 +825,9 @@
           },
           "title": "Qa Profiles",
           "type": "array"
+        },
+        "test_evidence_policy": {
+          "$ref": "#/$defs/TestEvidencePolicy"
         },
         "checkpoint_keys": {
           "default": [],
@@ -879,6 +925,12 @@
       "minLength": 10,
       "title": "Goal",
       "type": "string"
+    },
+    "plan_revision": {
+      "default": 1,
+      "minimum": 1,
+      "title": "Plan Revision",
+      "type": "integer"
     },
     "non_goals": {
       "default": [],

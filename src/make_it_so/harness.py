@@ -75,9 +75,11 @@ class HarnessAdapter(ABC):
         output_model: type[OutputModel],
         cwd: Path,
         writable: bool,
+        continuation_session_id: str | None = None,
     ) -> HarnessResult:
         targets = (models.primary, *models.fallbacks) if models.allow_fallback else (models.primary,)
         session_id = str(uuid.uuid4())
+        provider_session_root = continuation_session_id or session_id
         attempts: list[ModelAttempt] = []
         for attempt_index, target in enumerate(targets):
             started = time.monotonic()
@@ -86,6 +88,7 @@ class HarnessAdapter(ABC):
             # Keep fallback attempts in fresh provider sessions while preserving
             # the root UUID for usage correlation and one-call accounting.
             attempt_session_id = f"attempt-{attempt_index}:{session_id}"
+            provider_session_id = f"attempt-{attempt_index}:{provider_session_root}"
             try:
                 invocation = self.invoke(
                     prompt=prompt,
@@ -94,7 +97,7 @@ class HarnessAdapter(ABC):
                     output_model=output_model,
                     cwd=cwd,
                     writable=writable,
-                    session_id=attempt_session_id,
+                    session_id=provider_session_id,
                 )
                 if isinstance(invocation, HarnessInvocation):
                     payload = invocation.payload
@@ -126,6 +129,7 @@ class HarnessAdapter(ABC):
                         reported_model=reported_model,
                         agent=target.agent,
                         session_id=attempt_session_id,
+                        provider_session_id=provider_session_id,
                         success=True,
                         duration_ms=int((time.monotonic() - started) * 1000),
                         input_tokens=attempt_usage.input_tokens,
@@ -145,6 +149,7 @@ class HarnessAdapter(ABC):
                     attempts=tuple(attempts),
                     resolved_model=target.model,
                     session_id=session_id,
+                    continuation_session_id=continuation_session_id,
                 )
             except Exception as exc:
                 attempts.append(
@@ -153,6 +158,7 @@ class HarnessAdapter(ABC):
                         reported_model=reported_model,
                         agent=target.agent,
                         session_id=attempt_session_id,
+                        provider_session_id=provider_session_id,
                         success=False,
                         duration_ms=int((time.monotonic() - started) * 1000),
                         error=str(exc)[:2000],

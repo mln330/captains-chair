@@ -12,6 +12,7 @@ from typing import Any, Literal, Protocol, cast, runtime_checkable
 from pydantic import Field
 
 from make_it_so.config import load_project_manifest
+from make_it_so.courses import CourseError, CourseStore
 from make_it_so.models import (
     ActionKind,
     ApplicationSurface,
@@ -20,6 +21,7 @@ from make_it_so.models import (
     QAProfile,
     RepoConfig,
     StrictModel,
+    TestEvidencePolicy,
     WorkerAssignments,
     WorkerModelAssignments,
 )
@@ -497,7 +499,7 @@ class WorkflowOrchestrator:
 
         # Recovery cards are control-plane work, not project work. Once their
         # target has recovered, leaving them READY would dispatch another
-        # Captain session and recreate the same context at additional cost.
+        # Number 1 session and recreate the same context at additional cost.
         for card in cards:
             if (
                 card.status in {QueueStatus.READY, QueueStatus.TODO}
@@ -879,6 +881,20 @@ class WorkflowOrchestrator:
                     else WorkStage.TEST
                 )
                 metadata = _qa_metadata(profile, context.planned_paths)
+                empty_evidence_metadata: dict[str, Any] = {}
+                evidence_metadata: dict[str, Any] = next(
+                    (
+                        {
+                            key: value
+                            for key, value in card.metadata.items()
+                            if key.startswith("testEvidence")
+                        }
+                        for card in workflow_cards
+                        if card.metadata.get("testEvidenceRequired") is not None
+                    ),
+                    empty_evidence_metadata,
+                )
+                metadata.update(evidence_metadata)
                 metadata.update(
                     {
                         "actualChangedPaths": list(context.actual_paths),
@@ -979,7 +995,10 @@ class WorkflowOrchestrator:
         stage = _card_stage(card)
         requires_live_validation = stage == WorkStage.FINAL_REVIEW or (
             stage in {WorkStage.TEST, WorkStage.UX_REVIEW}
-            and bool(card.metadata.get("qaProfile"))
+            and (
+                bool(card.metadata.get("qaProfile"))
+                or card.metadata.get("testEvidenceRequired") is True
+            )
         )
         if not requires_live_validation:
             return True
@@ -1297,12 +1316,12 @@ class WorkflowOrchestrator:
             board_id,
             QueueCardSpec(
                 key=f"make_it_so:control-plane-recovery:{card.id}:{attempt}",
-                title=f"Captain recovery: {card.title}",
+                title=f"Number 1 recovery: {card.title}",
                 notes=(
                     f"Repository: {repo.full_name}\n"
                     f"Failed card: {card.id}\n"
                     f"Failure evidence: {_block_reason(card)}\n\n"
-                    "This is a fresh Captain recovery context. Re-read the current repository, PR, issue, and Workboard state. "
+                    "This is a fresh Number 1 recovery context. Re-read the current repository, PR, issue, and Workboard state. "
                     "Determine the smallest autonomous replanning action that advances the original goal. Preserve the failed "
                     "card as evidence, create or retarget fresh work only when justified, and complete this card with a concise "
                     "decision, created-card links, and current-head proof. Use USER_SECRET:, GOAL_DIVERGENCE:, EXTERNAL_ACCESS:, "
@@ -1410,7 +1429,7 @@ class WorkflowOrchestrator:
             agent_id=self.config.workers.captain,
             status=QueueStatus.READY,
             reset_failures=True,
-            reason="Retry budget exhausted; route to Captain recovery for autonomous replanning.",
+            reason="Retry budget exhausted; route to Number 1 recovery for autonomous replanning.",
         )
         _append_unique(control_plane_recoveries, card.id)
 
@@ -1443,7 +1462,7 @@ def build_workflow(
         source_url=source_url,
         max_runtime_seconds=config.max_runtime_seconds,
         max_retries=config.max_retries,
-        metadata=_course_metadata(decision),
+        metadata={**_course_metadata(decision), **_test_evidence_metadata(repo, decision)},
     )
     stages = _stage_sequence(repo, decision)
     specs: list[QueueCardSpec] = []
@@ -1453,6 +1472,7 @@ def build_workflow(
         parents = tuple(root_key if parent is None else f"{action_id}:{parent}" for parent in dependencies)
         metadata: dict[str, Any] = {
             **_course_metadata(decision),
+            **_test_evidence_metadata(repo, decision),
             "workerRole": _role_for(stage, config),
             "expectedModel": _model_for(stage, config),
         }
@@ -1474,6 +1494,7 @@ def build_workflow(
                     stage,
                     workspace=stage_workspace,
                     qa_profile=qa_profile,
+                    test_evidence_policy=_test_evidence_policy(repo, decision),
                 ),
                 labels=(*common_labels, *qa_labels, f"stage:{stage.value}"),
                 # A deterministic merge adapter owns the mutation and leaves
@@ -1693,6 +1714,9 @@ def _retry_metadata(card: QueueCard) -> dict[str, Any]:
             "plannedChangedPaths",
             "actualChangedPaths",
             "discoveredHeadSha",
+            "testEvidenceRequired",
+            "testEvidencePolicy",
+            "testEvidenceScreenshotRequired",
         }
     }
 
@@ -1717,7 +1741,8 @@ def _dynamic_qa_notes(
         f"Capability surfaces: {surfaces}\n\n"
         f"Actual changed paths:\n{paths}\n\n"
         "Run this capability's checks in fresh context. Complete with one structured proof containing "
-        f"`QA_PASSED:{profile.key}:{context.head_sha}`, non-empty `model`, `provider`, and `evidence` fields."
+        f"`QA_PASSED:{profile.key}:{context.head_sha}`, non-empty `model`, `provider`, and `evidence` fields, "
+        "plus a `test_evidence` record with status, head_sha, commands, test counts, pass_rate, and artifact URLs."
         f"{ui_evidence} Block with TECHNICAL: and actionable findings when the capability does not pass."
     )
 
@@ -1730,6 +1755,7 @@ def _stage_notes(
     *,
     workspace: WorkspaceRef | None = None,
     qa_profile: QAProfile | None = None,
+    test_evidence_policy: TestEvidencePolicy | None = None,
 ) -> str:
     contracts = {
         WorkStage.CONTROL_PLANE_ACTION: "Perform only the exact GitHub issue action in this card and verify it by reading GitHub back.",
@@ -1747,14 +1773,16 @@ def _stage_notes(
         ),
         WorkStage.TEST: (
             "Independently run the configured targeted tests and inspect required GitHub checks for the current PR head. "
-            "Do not waive failures or pending checks."
+            "Do not waive failures or pending checks. Record structured test evidence with exact commands, counts, pass rate, "
+            "current head SHA, and artifact or screenshot URLs."
         ),
         WorkStage.UX_REVIEW: (
             "Use browser-based testing at mobile, tablet, and desktop sizes. Verify usability, contrast, keyboard/focus behavior, "
-            "responsive layout, error/loading/empty states, functionality, and visual cohesion. Attach screenshot proof when possible."
+            "responsive layout, error/loading/empty states, functionality, and visual cohesion. Attach screenshot proof and "
+            "record it in structured test evidence."
         ),
         WorkStage.FINAL_REVIEW: (
-            "Perform the Captain final review against the original issue, repository plan, acceptance criteria, independent review, "
+            "Perform the Number 1 final review against the original issue, repository plan, acceptance criteria, independent review, "
             "UX evidence, tests, CI, unresolved threads, and current PR head. Complete only when the configured completion policy is satisfied, "
             "and include the matching READY_FOR_OWNER:<head-sha>, CONTROL_PLANE_COMPLETE:<head-sha>, or AUTO_MERGE_ALLOWED:<head-sha> proof marker."
         ),
@@ -1785,8 +1813,30 @@ def _stage_notes(
             f"Capability surfaces: {surfaces}\n"
             f"Checks:\n{checks}\n"
             "Complete only against the current PR head with one structured proof containing "
-            f"`QA_PASSED:{qa_profile.key}:<head-sha>`, non-empty `model`, `provider`, and `evidence` fields."
+            f"`QA_PASSED:{qa_profile.key}:<head-sha>`, non-empty `model`, `provider`, and `evidence` fields, "
+            "plus `test_evidence` with status, head_sha, commands, test counts, pass_rate, and artifact URLs."
             f"{ui_evidence}\n"
+        )
+    evidence_note = ""
+    if (
+        test_evidence_policy is not None
+        and test_evidence_policy.required
+        and stage
+        in {
+            WorkStage.TEST,
+            WorkStage.UX_REVIEW,
+            WorkStage.FINAL_REVIEW,
+        }
+    ):
+        screenshot_note = (
+            " Include at least one screenshot artifact."
+            if test_evidence_policy.require_screenshot or test_evidence_policy.minimum_screenshots
+            else ""
+        )
+        evidence_note = (
+            "\nMilestone test-evidence contract: pass rate must be at least "
+            f"{test_evidence_policy.minimum_pass_rate:g}%, include a current-head SHA, "
+            f"and include the exact command used.{screenshot_note}"
         )
     completion_policy_note = ""
     if stage == WorkStage.FINAL_REVIEW:
@@ -1809,10 +1859,32 @@ def _stage_notes(
         f"Reason: {decision.reason}\n\n"
         + _workspace_notes(workspace)
         + completion_policy_note
-        + f"Stage contract: {contracts[stage]}{qa_note}\n"
+        + f"Stage contract: {contracts[stage]}{qa_note}{evidence_note}\n"
         f"Worker protocol: claim the card through the configured orchestrator, heartbeat during long work, "
         f"and complete it with a concise summary and proof or block it with a specific reason. {blocker_rules}"
     )
+
+
+def _test_evidence_policy(repo: RepoConfig, decision: PlanDecision) -> TestEvidencePolicy | None:
+    if not decision.course_key or not decision.work_package_key:
+        return None
+    try:
+        course = CourseStore(repo.local_path).load(decision.course_key)
+        package = next(item for item in course.work_packages if item.key == decision.work_package_key)
+    except (CourseError, OSError, StopIteration, ValueError):
+        return None
+    return package.test_evidence_policy
+
+
+def _test_evidence_metadata(repo: RepoConfig, decision: PlanDecision) -> dict[str, Any]:
+    policy = _test_evidence_policy(repo, decision)
+    if policy is None:
+        return {}
+    return {
+        "testEvidenceRequired": policy.required,
+        "testEvidencePolicy": policy.model_dump(mode="json"),
+        "testEvidenceScreenshotRequired": policy.require_screenshot or policy.minimum_screenshots > 0,
+    }
 
 
 def _card_stage(card: QueueCard) -> WorkStage | None:

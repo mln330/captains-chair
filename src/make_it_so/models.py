@@ -44,6 +44,14 @@ class CompletionPolicy(enum.StrEnum):
     AUTO_MERGE = "auto_merge"
 
 
+class MilestoneApprovalPolicy(enum.StrEnum):
+    """How a course pauses between delivery milestones."""
+
+    MODE_DEFAULT = "mode_default"
+    NONE = "none"
+    EACH_MILESTONE = "each_milestone"
+
+
 class CourseKind(enum.StrEnum):
     GREENFIELD = "greenfield"
     TAKEOVER = "takeover"
@@ -283,12 +291,20 @@ class ModelPolicy(StrictModel):
     profiles: dict[str, ModelProfile] = Field(default_factory=dict)
 
     def for_role(self, role: str) -> ModelProfile:
-        if role in self.profiles:
-            return self.profiles[role]
+        # Number 1 is the durable leadership role. `planner` and `strategist`
+        # remain accepted as configuration aliases during the rename.
+        aliases = {
+            "number_one": ("number_one", "strategist", "planner"),
+            "captain": ("number_one", "strategist", "planner"),
+            "project_manager": ("number_one", "strategist", "planner"),
+        }
+        for candidate in aliases.get(role, (role,)):
+            if candidate in self.profiles:
+                return self.profiles[candidate]
         if role in {"tester", "ux_reviewer"}:
             selected = getattr(self, role)
             return selected or self.coder
-        selected = getattr(self, role, None)
+        selected = getattr(self, "planner", None) if role in aliases else getattr(self, role, None)
         if not isinstance(selected, ModelProfile):
             raise ValueError(f"model policy has no configured role: {role}")
         return selected
@@ -327,6 +343,17 @@ class QAProfile(StrictModel):
         if not self.surfaces and not self.checks:
             raise ValueError("QA profile requires at least one application surface or deterministic check")
         return self
+
+
+class TestEvidencePolicy(StrictModel):
+    """Acceptance policy for the evidence produced by a delivery milestone."""
+
+    version: Literal[1] = 1
+    required: bool = True
+    minimum_pass_rate: float = Field(default=100.0, ge=0.0, le=100.0)
+    require_command: bool = True
+    require_screenshot: bool = False
+    minimum_screenshots: int = Field(default=0, ge=0, le=50)
 
 
 class HarnessConfig(StrictModel):
@@ -542,6 +569,7 @@ class RepoConfig(StrictModel):
     provisioning: RepositoryProvisioningConfig = RepositoryProvisioningConfig()
     operation_mode: OperationMode = OperationMode.ADVISORY
     completion_policy: CompletionPolicy = CompletionPolicy.OWNER_APPROVAL
+    milestone_approval: MilestoneApprovalPolicy = MilestoneApprovalPolicy.MODE_DEFAULT
     allow_autonomous_merge: bool = False
     canonical_docs: tuple[str, ...] = ()
     planning_doc: str
@@ -778,6 +806,7 @@ class WorkPackage(StrictModel):
     acceptance_criteria: tuple[str, ...] = ()
     checks: tuple[str, ...] = ()
     qa_profiles: tuple[str, ...] = ()
+    test_evidence_policy: TestEvidencePolicy = Field(default_factory=TestEvidencePolicy)
     checkpoint_keys: tuple[str, ...] = ()
     model_profiles: dict[str, ModelProfile] = Field(default_factory=dict)
     risk: Literal["low", "medium", "high", "critical"] = "medium"
@@ -793,6 +822,90 @@ class WorkPackage(StrictModel):
         return self
 
 
+class MilestoneChangeKind(enum.StrEnum):
+    ADD = "add"
+    UPDATE = "update"
+    REMOVE = "remove"
+
+
+class MilestoneChangeStatus(enum.StrEnum):
+    PROPOSED = "proposed"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    APPLIED = "applied"
+    SUPERSEDED = "superseded"
+
+
+class MilestoneChangeRequest(StrictModel):
+    """A bounded Number 1 request to change the course milestone graph."""
+
+    kind: MilestoneChangeKind
+    summary: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    work_package_key: str | None = None
+    work_package: WorkPackage | None = None
+    patch: dict[str, Any] = Field(default_factory=dict)
+    impact: Literal["routine", "major"] = "routine"
+
+    @model_validator(mode="after")
+    def validate_target(self) -> MilestoneChangeRequest:
+        if self.kind == MilestoneChangeKind.ADD and self.work_package is None:
+            raise ValueError("add milestone changes require work_package")
+        if self.kind in {MilestoneChangeKind.UPDATE, MilestoneChangeKind.REMOVE} and not self.work_package_key:
+            raise ValueError(f"{self.kind.value} milestone changes require work_package_key")
+        if self.kind == MilestoneChangeKind.UPDATE and not self.patch:
+            raise ValueError("update milestone changes require a non-empty patch")
+        if self.kind != MilestoneChangeKind.UPDATE and self.patch:
+            raise ValueError("only update milestone changes may include a patch")
+        return self
+
+
+class MilestoneChangeProposal(StrictModel):
+    version: Literal[1] = 1
+    proposal_id: str = Field(min_length=1)
+    repository: str = Field(pattern=r"^[^/\s]+/[^/\s]+$")
+    course_key: str = Field(min_length=1)
+    base_revision: int = Field(ge=1)
+    summary: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    requested_by: str = Field(min_length=1)
+    changes: tuple[MilestoneChangeRequest, ...] = Field(min_length=1)
+    requires_owner_approval: bool = True
+    impact: Literal["routine", "major"] = "routine"
+    status: MilestoneChangeStatus = MilestoneChangeStatus.PROPOSED
+    approved_by: str | None = None
+    approved_at: datetime | None = None
+    applied_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    @model_validator(mode="after")
+    def validate_approval_provenance(self) -> MilestoneChangeProposal:
+        if self.status in {MilestoneChangeStatus.APPROVED, MilestoneChangeStatus.APPLIED} and (
+            not self.approved_by or self.approved_at is None
+        ):
+            raise ValueError("approved milestone changes require approval provenance")
+        if self.status == MilestoneChangeStatus.APPLIED and self.applied_at is None:
+            raise ValueError("applied milestone changes require applied_at")
+        return self
+
+
+class MilestoneReviewRecord(StrictModel):
+    version: Literal[1] = 1
+    review_id: str = Field(min_length=1)
+    repository: str = Field(pattern=r"^[^/\s]+/[^/\s]+$")
+    course_key: str = Field(min_length=1)
+    plan_revision: int = Field(ge=1)
+    status: Literal["on_track", "at_risk", "blocked", "complete"]
+    summary: str = Field(min_length=1)
+    next_action: str = Field(min_length=1)
+    number_one_session_id: str = Field(min_length=1)
+    model: str = Field(min_length=1)
+    provider: str = Field(min_length=1)
+    reviewed_at: datetime
+    proposed_change_ids: tuple[str, ...] = ()
+
+
 class Course(StrictModel):
     version: Literal[1] = 1
     key: str = Field(min_length=1, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -800,6 +913,7 @@ class Course(StrictModel):
     kind: CourseKind
     title: str = Field(min_length=1)
     goal: str = Field(min_length=10)
+    plan_revision: int = Field(default=1, ge=1)
     non_goals: tuple[str, ...] = ()
     scope: tuple[str, ...] = ()
     users: tuple[str, ...] = ()
@@ -918,6 +1032,7 @@ class PlanDecision(StrictModel):
     acceptance_criteria: tuple[str, ...] = ()
     checks: tuple[str, ...] = ()
     changed_paths: tuple[str, ...] = ()
+    milestone_changes: tuple[MilestoneChangeRequest, ...] = ()
     requires_owner_approval: bool = False
     owner_blocker: str | None = None
 
@@ -1053,6 +1168,7 @@ class ModelAttempt(StrictModel):
     reported_model: str | None = None
     agent: str | None = None
     session_id: str | None = None
+    provider_session_id: str | None = None
     success: bool
     duration_ms: int = Field(ge=0)
     error: str | None = None
@@ -1091,6 +1207,7 @@ class HarnessResult(StrictModel):
     attempts: tuple[ModelAttempt, ...]
     resolved_model: str
     session_id: str
+    continuation_session_id: str | None = None
 
 
 class CheckResult(StrictModel):

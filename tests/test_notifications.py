@@ -96,7 +96,7 @@ def test_technical_failure_is_control_plane_status_not_owner_attention() -> None
 
     message = render_event(event)
 
-    assert message.startswith("Captain HANDLING\n")
+    assert message.startswith("Number 1 HANDLING\n")
     assert "ACTION NEEDED" not in message
     assert "Reclaim the card and retry automatically." in message
 
@@ -116,7 +116,7 @@ def test_notification_failure_is_control_plane_health_not_owner_attention() -> N
 
     message = render_event(event)
 
-    assert message.startswith("Captain HANDLING\n")
+    assert message.startswith("Number 1 HANDLING\n")
     assert "ACTION NEEDED" not in message
     assert "Check the configured notification route." in message
 
@@ -128,7 +128,7 @@ def test_untrusted_planning_context_is_control_plane_status_not_owner_attention(
         run_id="run-planning-context",
         state=RunState.DEGRADED,
         event_type="PLANNING_CONTEXT_UNAVAILABLE",
-        summary="The Captain could not obtain a trustworthy default-branch planning document.",
+        summary="The Number 1 could not obtain a trustworthy default-branch planning document.",
         reason="origin/main could not be read.",
         fingerprint="planning-context-failure",
         evidence={"next_action": "Restore the repository remote and rerun the cycle."},
@@ -136,7 +136,7 @@ def test_untrusted_planning_context_is_control_plane_status_not_owner_attention(
 
     message = render_event(event)
 
-    assert message.startswith("Captain HANDLING\n")
+    assert message.startswith("Number 1 HANDLING\n")
     assert "ACTION NEEDED" not in message
     assert "Restore the repository remote" in message
 
@@ -148,7 +148,7 @@ def test_completion_ready_only_pages_when_merge_policy_requires_owner() -> None:
         run_id="run-4",
         state=RunState.COMPLETION_READY,
         event_type="COMPLETION_READY",
-        summary="All Captain gates passed.",
+        summary="All Number 1 gates passed.",
         reason="The configured completion policy requires an owner decision.",
         fingerprint="completion-fingerprint",
         evidence={"next_action": "Choose the configured completion action."},

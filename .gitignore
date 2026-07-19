@@ -212,6 +212,7 @@ tempCodeRunnerFile.py
 
 # Disposable runtime and dashboard fixtures created by integration tests.
 .test-tmp*/
+.pytest-tmp*/
 .tmp-dashboard*/
 .tmp-sidecar*/
 .tmp-pr*/

@@ -30,7 +30,7 @@ kind is still unusable until a matching registry builder is installed.
 
 Direct model admission also accepts an optional runtime telemetry synchronizer.
 The OpenClaw CLI supplies one backed by `openclaw sessions`; it reconciles the
-previous call before the next direct Captain call is admitted and suppresses the call
+previous call before the next direct Number 1 call is admitted and suppresses the call
 when the telemetry endpoint is degraded. A Codex or future runtime
 can provide the same callback from its native usage ledger without importing
 OpenClaw code into the engine.
@@ -204,7 +204,7 @@ validators remain in MAKE_IT_SO.
 `GitHubProvider` is the engine-facing protocol. `GhGitHubProvider` is the current
 implementation using authenticated `gh` REST, GraphQL, and CLI operations. A future
 provider can use GitHub App REST/GraphQL, an organization service, or a test double
-without changing the Captain engine, baseline analysis, policy, or merge gate. It must
+without changing the Number 1 engine, baseline analysis, policy, or merge gate. It must
 preserve the same snapshot, pull-request, review-thread, check-gate, issue-mutation,
 and default-branch verification semantics. Issue mutation includes create, update,
 add-label, retarget (milestone and/or assignees), and close operations; these are
@@ -254,7 +254,7 @@ runtime-specific connection and dispatch fields. Workboard configuration belongs
 to the optional tracker adapter; it is never a required core field. The worker
 roles and retry policy remain common:
 
-- Captain recovery
+- Number 1 recovery
 - coder/repair
 - independent reviewer
 - tester/CI checker

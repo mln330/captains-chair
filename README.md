@@ -21,7 +21,7 @@ OpenClaw Workboard is the P0 worker runtime. The built-in SQLite `DirectOrchestr
 - Only `AUTO_MERGE_ALLOWED` can authorize autonomous merge.
 - Every code or documentation task starts in an isolated worktree from current `origin/main`.
 - Coder, reviewer, tester, UX reviewer, final reviewer, merger, and verifier are role-separated workers.
-- Technical blockers retry or route to Captain recovery while unrelated ready work continues.
+- Technical blockers retry or route to Number 1 recovery while unrelated ready work continues.
 - Only explicitly tagged secrets, access, goal divergence, and high-risk decisions require owner intervention.
 - Provider, model, notification, and check failures produce blocked or degraded health instead of empty success.
 - Unchanged planner inputs do not trigger repeated model calls; `--force-replan` is an explicit recovery override.
@@ -57,7 +57,13 @@ OpenClaw Workboard is the P0 worker runtime. The built-in SQLite `DirectOrchestr
 - `make-it-so orchestrate preflight` checks the adapter, model routes, Workboard, queue, and usage guard without dispatching workers.
 - `make-it-so orchestrate canary` plans, explicitly dispatches, or checks a no-repository-mutation Workboard runtime canary.
 
-With a Workboard orchestrator configured, the Captain cycle enqueues a policy-approved worker DAG instead of executing the implementation itself. Run reconciliation/dispatch frequently so ready cards are claimed promptly, and keep the slower Captain schedule for repository review and queue replenishment. Frontend-impacting PRs receive a dedicated UX worker covering flows, contrast, responsive behavior, accessibility, and visual cohesion before final Captain review.
+With a Workboard orchestrator configured, the Number 1 cycle enqueues a policy-approved worker DAG instead of executing the implementation itself. Run reconciliation/dispatch frequently so ready cards are claimed promptly, and keep the slower Number 1 schedule for repository review and queue replenishment. Frontend-impacting PRs receive a dedicated UX worker covering flows, contrast, responsive behavior, accessibility, and visual cohesion before final Number 1 review.
+
+Number 1 is the single high-level leadership role for a course: it gathers
+requirements, maintains the milestone plan, reviews progress at each course
+review cycle, and can reject or redirect work. Its session and context package
+remain stable per repository/course even though coding, review, QA, and UX
+workers use separate contexts.
 
 See `docs/ARCHITECTURE.md` and `docs/TESTING.md` for runtime ownership and conformance requirements.
 See `docs/PRODUCT_REORIENTATION.md` for the approved OpenClaw-first product direction and delivery plan.

@@ -157,6 +157,26 @@ export default definePluginEntry({
     );
     const request = async (method: string, params?: Record<string, unknown>): Promise<RpcResult> =>
       sidecar.request(method, params);
+    const executable = configString(config, "openclawExecutable", "openclaw");
+    const runCommand = api.runtime?.system?.runCommandWithTimeout;
+    const sendRegistrationFollowUp = async (result: RpcResult): Promise<RpcResult> => {
+      const message = typeof result.follow_up_message === "string" ? result.follow_up_message : "";
+      const route = typeof result.notification_route === "string" ? result.notification_route : "";
+      if (!message || !route) return result;
+      if (!runCommand) return { ...result, notification_status: "unavailable" };
+      try {
+        const delivery = await runOpenClawCommand(runCommand, executable, [
+          "message", "send", "--channel", "discord", "--target", route, "--message", message, "--json",
+        ], 90_000);
+        if (typeof delivery.code === "number" && delivery.code !== 0) {
+          throw new Error(String(delivery.stderr ?? `openclaw exited with code ${delivery.code}`));
+        }
+        return { ...result, notification_status: "sent" };
+      } catch (error) {
+        api.logger?.warn?.(`Make It So registration follow-up could not be sent: ${String(error)}`);
+        return { ...result, notification_status: "failed" };
+      }
+    };
     const controlUiToken = randomBytes(32).toString("base64url");
 
     api.session?.controls?.registerControlUiDescriptor?.({
@@ -218,7 +238,7 @@ export default definePluginEntry({
       },
     });
 
-    const apiRoute = (path: string, method: string) => {
+    const apiRoute = (path: string, method: string, afterRequest?: (result: RpcResult) => Promise<RpcResult>) => {
       api.registerHttpRoute?.({
         path,
         auth: "plugin",
@@ -226,7 +246,8 @@ export default definePluginEntry({
           if (rejectNonControlUiRequest(req, res, { token: controlUiToken })) return;
           try {
             const params = await readRouteParams(req);
-            const result = await request(method, params);
+            const rawResult = await request(method, params);
+            const result = afterRequest ? await afterRequest(rawResult) : rawResult;
             res.statusCode = 200;
             res.setHeader("content-type", "application/json; charset=utf-8");
             res.end(JSON.stringify(result));
@@ -240,7 +261,7 @@ export default definePluginEntry({
     };
     apiRoute("/make-it-so/api/portfolio/status", "portfolio.status");
     apiRoute("/make-it-so/api/repos/list", "repos.list");
-    apiRoute("/make-it-so/api/repos/register", "repo.register");
+    apiRoute("/make-it-so/api/repos/register", "repo.register", sendRegistrationFollowUp);
     apiRoute("/make-it-so/api/repos/create", "repo.create");
     apiRoute("/make-it-so/api/repos/update", "repo.update");
     apiRoute("/make-it-so/api/models/validate", "models.validate");
@@ -250,6 +271,11 @@ export default definePluginEntry({
     apiRoute("/make-it-so/api/usage/update", "usage.update");
     apiRoute("/make-it-so/api/courses/list", "courses.list");
     apiRoute("/make-it-so/api/course/get", "course.get");
+    apiRoute("/make-it-so/api/course/milestone-evidence", "course.milestone_evidence");
+    apiRoute("/make-it-so/api/course/milestone-changes", "course.milestone_changes");
+    apiRoute("/make-it-so/api/course/milestone-change-propose", "course.milestone_change_propose");
+    apiRoute("/make-it-so/api/course/milestone-change-approve", "course.milestone_change_approve");
+    apiRoute("/make-it-so/api/course/milestone-change-reject", "course.milestone_change_reject");
     apiRoute("/make-it-so/api/course/create", "course.create");
     apiRoute("/make-it-so/api/course/readiness", "course.readiness");
     apiRoute("/make-it-so/api/course/planning-session", "course.planning_session");
@@ -394,8 +420,6 @@ export default definePluginEntry({
           })
         : [];
     };
-    const executable = configString(config, "openclawExecutable", "openclaw");
-    const runCommand = api.runtime?.system?.runCommandWithTimeout;
     const invokeCron = async (args: string[]): Promise<CommandResult> => {
       if (!runCommand) throw new Error("OpenClaw command runtime is unavailable");
       const result = (await runOpenClawCommand(runCommand, executable, args)) as CommandResult;

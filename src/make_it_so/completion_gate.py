@@ -5,6 +5,7 @@ import re
 from typing import Any, Protocol, cast
 
 from make_it_so.config import load_project_manifest
+from make_it_so.evidence import validate_test_evidence
 from make_it_so.models import (
     ApplicationSurface,
     CompletionPolicy,
@@ -12,6 +13,7 @@ from make_it_so.models import (
     PullRequestGate,
     QAProfile,
     RepoConfig,
+    TestEvidencePolicy,
 )
 from make_it_so.orchestration import (
     CompletionValidation,
@@ -44,21 +46,31 @@ class GitHubCompletionValidator:
         workflow_cards: list[QueueCard],
     ) -> CompletionValidation:
         stage = _stage(card)
-        if stage in {WorkStage.TEST, WorkStage.UX_REVIEW} and card.metadata.get("qaProfile"):
-            context = self.required_qa(repo, workflow_cards)
-            if context is None:
+        if stage in {WorkStage.TEST, WorkStage.UX_REVIEW}:
+            context = self.required_qa(repo, workflow_cards) if card.metadata.get("qaProfile") else None
+            if card.metadata.get("qaProfile") and context is None:
                 return CompletionValidation(False, "QA proof cannot be validated before a PR exists")
-            profile_key = str(card.metadata.get("qaProfile") or "")
-            profile = next(
-                (item for item in context.selection.profiles if item.key == profile_key),
-                None,
-            )
-            if profile is None:
-                return CompletionValidation(
-                    True,
-                    f"QA profile {profile_key!r} is no longer required by current paths",
+            if context is not None:
+                profile_key = str(card.metadata.get("qaProfile") or "")
+                profile = next(
+                    (item for item in context.selection.profiles if item.key == profile_key),
+                    None,
                 )
-            return _validate_qa_evidence(card, profile, context.head_sha)
+                if profile is None:
+                    qa_result = CompletionValidation(
+                        True,
+                        f"QA profile {profile_key!r} is no longer required by current paths",
+                    )
+                else:
+                    qa_result = _validate_qa_evidence(card, profile, context.head_sha)
+                if not qa_result.allowed:
+                    return qa_result
+                if profile is None and card.metadata.get("testEvidenceRequired") is not True:
+                    return qa_result
+                current_head = context.head_sha
+            else:
+                current_head = str(card.metadata.get("discoveredHeadSha") or "").strip() or None
+            return _validate_milestone_test_evidence(card, current_head)
         if stage != WorkStage.FINAL_REVIEW:
             return CompletionValidation(False, "completion validation requires a final-review card")
         marker, verdict, reviewed_head = _final_review_evidence(repo, card)
@@ -102,6 +114,28 @@ class GitHubCompletionValidator:
                         False,
                         f"required QA profile {profile.key!r} lacks current-head evidence",
                     )
+        evidence_keys = {
+            str(item.metadata.get("workPackageKey") or "")
+            for item in workflow_cards
+            if item.metadata.get("testEvidenceRequired") is True
+            and _stage(item) in {WorkStage.TEST, WorkStage.UX_REVIEW}
+        }
+        for work_package_key in sorted(key for key in evidence_keys if key):
+            candidates = [
+                item
+                for item in workflow_cards
+                if item.metadata.get("testEvidenceRequired") is True
+                and str(item.metadata.get("workPackageKey") or "") == work_package_key
+                and _stage(item) in {WorkStage.TEST, WorkStage.UX_REVIEW}
+            ]
+            if not any(
+                _validate_milestone_test_evidence(item, reviewed_head).allowed
+                for item in candidates
+            ):
+                return CompletionValidation(
+                    False,
+                    f"milestone {work_package_key!r} lacks current-head test evidence",
+                )
         try:
             gate = self.provider.gate(repo, pr_number, reviewed_head)
         except Exception as exc:
@@ -212,6 +246,25 @@ def _validate_qa_evidence(
                 f"UI QA profile {profile.key!r} evidence is missing: {', '.join(missing)}",
             )
     return CompletionValidation(True, f"QA profile {profile.key!r} passed for {head_sha}")
+
+
+def _validate_milestone_test_evidence(
+    card: QueueCard,
+    head_sha: str | None,
+) -> CompletionValidation:
+    if card.metadata.get("testEvidenceRequired") is not True:
+        return CompletionValidation(True, "milestone test evidence is not required for this card")
+    try:
+        policy = TestEvidencePolicy.model_validate(card.metadata.get("testEvidencePolicy") or {})
+    except ValueError as exc:
+        return CompletionValidation(False, f"milestone test-evidence policy is invalid: {str(exc)[:300]}")
+    result = validate_test_evidence(
+        card.metadata.get("proof"),
+        policy,
+        head_sha,
+        require_screenshot=bool(card.metadata.get("testEvidenceScreenshotRequired")),
+    )
+    return CompletionValidation(result.allowed, result.reason)
 
 
 def _final_review_evidence(

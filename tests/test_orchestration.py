@@ -958,7 +958,7 @@ def test_control_plane_action_without_completion_proof_is_retried_instead_of_cou
     queue = MemoryQueue()
     queue.cards["recovery"] = QueueCard(
         id="recovery-1",
-        title="Captain recovery",
+        title="Number 1 recovery",
         status=QueueStatus.DONE,
         labels=("make_it_so", "stage:control_plane_action", "control-plane-recovery-for:failed-1"),
         agent_id="make-it-so",

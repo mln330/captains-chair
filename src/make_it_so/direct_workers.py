@@ -63,8 +63,51 @@ def _worker_output_schema() -> dict[str, Any]:
             "status": {"type": "string", "enum": ["passed", "failed"]},
             "note": {"type": "string", "minLength": 1},
             "url": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            "test_evidence": {
+                "anyOf": [
+                    {"type": "null"},
+                    {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "status": {"type": "string", "enum": ["passed", "failed"]},
+                            "head_sha": {"type": "string", "minLength": 7},
+                            "command": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                            "commands": {"type": "array", "items": {"type": "string"}},
+                            "tests_total": {"type": "integer", "minimum": 0},
+                            "tests_passed": {"type": "integer", "minimum": 0},
+                            "tests_failed": {"type": "integer", "minimum": 0},
+                            "tests_skipped": {"type": "integer", "minimum": 0},
+                            "pass_rate": {"type": "number", "minimum": 0, "maximum": 100},
+                            "screenshots": {"type": "array", "items": {"type": "string"}},
+                            "artifacts": {"type": "array", "items": {"type": "string"}},
+                            "model": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                            "provider": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                            "captured_at": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                            "summary": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                        },
+                        "required": [
+                            "artifacts",
+                            "captured_at",
+                            "command",
+                            "commands",
+                            "head_sha",
+                            "model",
+                            "pass_rate",
+                            "provider",
+                            "screenshots",
+                            "status",
+                            "tests_failed",
+                            "tests_passed",
+                            "tests_skipped",
+                            "tests_total",
+                            "summary",
+                        ],
+                    },
+                ]
+            },
         },
-        "required": ["note", "status", "url"],
+        "required": ["note", "status", "test_evidence", "url"],
     }
     return schema
 
@@ -271,6 +314,7 @@ def _worker_prompt(card: QueueCard, *, attempt_id: str, workspace: Path) -> str:
         + f"{merge_rule} Run the checks relevant "
         "to this card. Return blocked with a TECHNICAL:, USER_SECRET:, GOAL_DIVERGENCE:, EXTERNAL_ACCESS:, or "
         "HIGH_RISK_DECISION: reason when completion is not justified. Never invent proof.\n\n"
+        "For non-test cards set `test_evidence` to null. For test and UX cards return the complete evidence object.\n"
         "Return exactly one JSON object matching this schema, with no markdown or commentary:\n"
         f"{schema}"
     )

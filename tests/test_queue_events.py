@@ -206,7 +206,7 @@ def test_technical_repair_and_control_plane_recovery_actions_are_reported_once(t
         "REPAIR_QUEUED",
         "CONTROL_PLANE_RECOVERY_QUEUED",
     ]
-    assert all(render_event(event).startswith("Captain HANDLING\n") for event in events)
+    assert all(render_event(event).startswith("Number 1 HANDLING\n") for event in events)
     assert all("ACTION NEEDED" not in render_event(event) for event in events)
     assert "https://github.com/example/project/pull/40" in render_event(events[1])
     assert repeated == []
@@ -255,13 +255,13 @@ def test_queue_diagnostics_are_reported_once_with_card_link_and_next_action(tmp_
     assert events[0].event_type == "QUEUE_STALLED"
     assert events[0].evidence["status_level"] == 1
     message = render_event(events[0])
-    assert message.startswith("Captain HANDLING\n")
+    assert message.startswith("Number 1 HANDLING\n")
     assert "ACTION NEEDED" not in message
     assert "https://github.com/example/project/issues/39" in message
     assert "Reconcile the queue" in message
     assert len(repeated) == 1
     assert repeated[0].evidence["status_level"] == 2
-    assert "Captain HANDLING" in render_event(repeated[0])
+    assert "Number 1 HANDLING" in render_event(repeated[0])
 
 
 def test_queue_diagnostics_escalate_without_spamming_every_cycle(tmp_path: Path) -> None:
@@ -331,7 +331,7 @@ def test_diagnostics_failure_is_reported_as_actionable_queue_health_event(tmp_pa
     assert events[0].event_type == "QUEUE_DEGRADED"
     assert events[0].reason == "gateway timeout"
     message = render_event(events[0])
-    assert message.startswith("Captain HANDLING\n")
+    assert message.startswith("Number 1 HANDLING\n")
     assert "ACTION NEEDED" not in message
     assert "Check the configured queue runtime" in message
 
@@ -350,7 +350,7 @@ def test_worktree_cleanup_failure_is_technical_and_actionable(tmp_path: Path) ->
     assert len(events) == 1
     assert events[0].event_type == "WORKSPACE_CLEANUP_FAILED"
     message = render_event(events[0])
-    assert message.startswith("Captain HANDLING\n")
+    assert message.startswith("Number 1 HANDLING\n")
     assert "dirty worktree" in message
     assert "owner" not in message.lower()
     assert "GitHub branch and PR remain untouched" in message
@@ -370,7 +370,7 @@ def test_worker_recovery_warning_is_reported_without_owner_attention(tmp_path: P
     assert len(events) == 1
     assert events[0].event_type == "QUEUE_DEGRADED"
     message = render_event(events[0])
-    assert message.startswith("Captain HANDLING\n")
+    assert message.startswith("Number 1 HANDLING\n")
     assert "gateway timeout" in message
     assert "unrelated ready work continues" in message
 

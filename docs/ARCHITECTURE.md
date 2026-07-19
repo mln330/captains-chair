@@ -38,7 +38,7 @@ Runtime adapters must provide:
 - dependency-aware status progression
 - worker dispatch
 - completion proof and comments
-- unblock, reclaim, and Captain recovery routing
+- unblock, reclaim, and Number 1 recovery routing
 - diagnostics
 
 Queue cards preserve the `WorkspaceRef` supplied by the core. Retry and repair cards
@@ -82,7 +82,7 @@ The default implementation workflow is:
 
 1. implementation
 2. independent review, test/CI, and optional UX review
-3. Captain final review
+3. Number 1 final review
 4. policy-gated merge
 5. post-merge verification
 
@@ -133,7 +133,7 @@ gate. The gate requires current-head `AUTO_MERGE_ALLOWED` proof, green required
 checks, clean mergeability, resolved blocking threads, autonomous repository
 mode, and an explicit `auto_merge` policy before it calls GitHub.
 
-The direct Captain final-review contract also has an `owner_blocker` field. It must use
+The direct Number 1 final-review contract also has an `owner_blocker` field. It must use
 one of those prefixes to move an autonomous PR to `blocked`; an unclassified final
 review blocker is treated as technical repair work instead of silently paging the
 owner. Ordinary review findings remain autonomous repair work.
@@ -144,19 +144,19 @@ page the owner without marking the proposal executed; technical blockers become
 degraded handling events and are eligible for the normal evidence-change retry
 path. An owner-attention event is never treated as an autonomous proposal to resume.
 
-Everything else is technical. Technical implementation failures are retried within the card budget. Review, test, UX, and final-review failures create coder repair cards, then rerun the independent gate. Exhausted retries route to the Captain recovery agent for autonomous replanning. Reconciliation always dispatches unrelated ready work.
+Everything else is technical. Technical implementation failures are retried within the card budget. Review, test, UX, and final-review failures create coder repair cards, then rerun the independent gate. Exhausted retries route to the Number 1 recovery agent for autonomous replanning. Reconciliation always dispatches unrelated ready work.
 
 Direct issue mutations follow the same autonomy rule without spending another
 planner call: update, label, retarget, and close operations receive one bounded
 automatic retry on the unchanged decision. Issue creation is deliberately not
 replayed after an ambiguous provider failure, because the first request may have
 created the issue before its response was lost. After the safe retry is exhausted,
-the Captain reports a stalled technical state and waits for changed evidence or an
+the Number 1 reports a stalled technical state and waits for changed evidence or an
 explicit forced replan.
 
 Notifications follow the same boundary: approval requests and explicitly classified
 owner blockers use the attention ladder; baseline, queue, worker, review, and deploy-
-health failures are reported as `Captain HANDLING` with the automatic next action. A
+health failures are reported as `Number 1 HANDLING` with the automatic next action. A
 technical failure must not look like a request for owner approval.
 An owner-blocked Workboard card is checked on every reconciliation, not only when
 its status first changes. It re-notifies at ladder levels 1, 2, 3, 4, 8, and 16;
@@ -164,7 +164,7 @@ an `make_it_so ack` acknowledgement resets that card's ladder so the next unreso
 decision starts at level 1. This keeps unattended blockers visible without sending
 the same ping on every scheduled pass.
 Queue reconciliation also reports automatic technical retries, repair-card creation,
-and Captain-recovery routing as idempotent `Captain HANDLING` events, so autonomous progress is
+and Number 1-recovery routing as idempotent `Number 1 HANDLING` events, so autonomous progress is
 visible even when no owner decision is needed. Event fingerprints include the card
 and retry evidence; repeated reconciliation does not resend the same transition.
 Notification delivery failures are persisted as linked `NOTIFICATION_FAILED` events,
@@ -212,7 +212,7 @@ canary creation) takes the repository's SQLite lease before it can call usage
 sync, Workboard, or model-health code. If another scheduled pass owns that
 lease, the command emits a concise `busy` result and exits successfully so the
 next scheduled pass can retry. Worker card claims remain a separate Workboard
-lease: worker heartbeats and completions can proceed while the Captain reconciler is
+lease: worker heartbeats and completions can proceed while the Number 1 reconciler is
 running.
 
 See `docs/ADAPTERS.md` for the conformance path for Codex and future runtimes.

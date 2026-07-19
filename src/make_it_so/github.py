@@ -33,7 +33,7 @@ class RepositorySnapshot:
 
 
 class GitHubProvider(Protocol):
-    """Portable GitHub boundary used by the Captain engine and baseline collector."""
+    """Portable GitHub boundary used by the Number 1 engine and baseline collector."""
 
     def snapshot(self, repo: RepoConfig) -> RepositorySnapshot: ...
 

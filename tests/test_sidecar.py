@@ -800,6 +800,50 @@ def test_sidecar_registers_and_updates_repositories_atomically(tmp_path: Path) -
     assert scheduled["repo"]["schedule_enabled"] is False
 
 
+def test_sidecar_registration_discovers_clone_and_plan_without_ui_paths(tmp_path: Path) -> None:
+    config = app_config(tmp_path, repo_config(tmp_path))
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+    clone = tmp_path.parent / "second"
+    (clone / ".git").mkdir(parents=True)
+    (clone / "docs").mkdir()
+    (clone / "docs" / "IMPLEMENTATION_ROADMAP.md").write_text("# Roadmap\n", encoding="utf-8")
+    server = SidecarServer(config_path)
+
+    registered = server.request(
+        "repo.register",
+        {"full_name": "example/second", "notification_route": "project-room"},
+    )
+
+    assert registered["status"] == "registered"
+    assert registered["discovery"]["local_clone"]["path"] == str(clone)
+    assert registered["discovery"]["local_clone"]["cloned"] is True
+    assert registered["discovery"]["planning_document"]["path"] == "docs/IMPLEMENTATION_ROADMAP.md"
+    assert registered["discovery"]["planning_document"]["found"] is True
+    assert registered["follow_up_required"] is True
+    assert "Number 1" in registered["follow_up_message"]
+    persisted = load_config(config_path).repo("example/second")
+    assert persisted.local_path == clone
+    assert persisted.planning_doc == "docs/IMPLEMENTATION_ROADMAP.md"
+    assert persisted.notification.route == "project-room"
+
+
+def test_sidecar_registration_normalizes_github_url(tmp_path: Path) -> None:
+    config = app_config(tmp_path, repo_config(tmp_path))
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+    server = SidecarServer(config_path)
+
+    registered = server.request(
+        "repo.register",
+        {"full_name": "https://github.com/example/second/", "notification_route": "notifications"},
+    )
+
+    assert registered["status"] == "registered"
+    assert registered["repo"]["full_name"] == "example/second"
+    assert load_config(config_path).repo("example/second").full_name == "example/second"
+
+
 def test_sidecar_validates_model_routes_without_spending_model_tokens(tmp_path: Path) -> None:
     config = app_config(tmp_path, repo_config(tmp_path))
     config_path = tmp_path / "config.yaml"
@@ -1307,7 +1351,7 @@ def test_sidecar_rejects_invalid_repository_and_model_requests(tmp_path: Path) -
     server = _sidecar(tmp_path)
 
     invalid_requests: tuple[tuple[str, dict[str, Any], str], ...] = (
-        ("repo.register", {}, "requires full_name and local_path"),
+        ("repo.register", {}, "requires full_name"),
         ("repo.update", {}, "requires full_name"),
         ("repo.update", {"full_name": "missing/repo"}, "not registered"),
         ("models.validate", {}, "requires full_name or model_profiles"),

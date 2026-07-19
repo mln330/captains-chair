@@ -14,16 +14,18 @@ import re
 import subprocess
 import sys
 import tempfile
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
+from urllib.parse import urlsplit
 
 import yaml
 
 from make_it_so import SIDECAR_PROTOCOL_VERSION, __version__
 from make_it_so.adapters import InteractionAdapter, NativeInteractionAdapter
-from make_it_so.config import load_config
+from make_it_so.config import load_config, load_project_manifest
 from make_it_so.courses import (
     CourseError,
     CourseStore,
@@ -33,13 +35,19 @@ from make_it_so.courses import (
     readiness_report,
     resume_course,
 )
+from make_it_so.evidence import extract_test_evidence, validate_test_evidence
 from make_it_so.github import GhGitHubProvider, GitHubProvider
+from make_it_so.milestones import MilestoneError, apply_milestone_changes, validate_milestone_changes
 from make_it_so.models import (
     AppConfig,
     ApplicationSurface,
     CheckpointStatus,
     CompletionPolicy,
     Course,
+    MilestoneApprovalPolicy,
+    MilestoneChangeProposal,
+    MilestoneChangeRequest,
+    MilestoneChangeStatus,
     ModelPolicy,
     ModelProfile,
     NotificationConfig,
@@ -72,6 +80,108 @@ _WORKBOARD_ACTIVE_STATUSES = frozenset(
         QueueStatus.REVIEW,
     }
 )
+
+_REGISTRATION_IGNORED_PARTS = frozenset(
+    {".git", ".venv", "node_modules", "bin", "obj", "dist", "build", "__pycache__"}
+)
+_DEFAULT_PLANNING_DOC = "docs/IMPLEMENTATION_PLAN.md"
+_PLANNING_DOC_CANDIDATES = (
+    "ISSUES_EXECUTION_PLAN.md",
+    "docs/IMPLEMENTATION_PLAN.md",
+    "docs/IMPLEMENTATION_ROADMAP.md",
+    "docs/EXECUTION_PLAN.md",
+    "EXECUTION_PLAN.md",
+    "ROADMAP.md",
+    "docs/ROADMAP.md",
+    "PLAN.md",
+    "docs/PLAN.md",
+)
+
+
+def _normalize_github_repository(value: str) -> str:
+    """Accept the forms people naturally copy from GitHub and persist one form."""
+    candidate = value.strip()
+    if not candidate:
+        raise SidecarError("repo.register requires full_name")
+    if candidate.lower().startswith("git@github.com:"):
+        candidate = candidate.split(":", 1)[1]
+    elif candidate.lower().startswith(("https://github.com/", "http://github.com/", "https://www.github.com/", "http://www.github.com/")):
+        parsed = urlsplit(candidate)
+        if parsed.netloc.lower() not in {"github.com", "www.github.com"} or parsed.query or parsed.fragment:
+            raise SidecarError("repo.register requires a GitHub repository URL or owner/repository")
+        candidate = parsed.path.strip("/")
+    candidate = candidate.removesuffix("/").removesuffix(".git")
+    parts = candidate.split("/")
+    if len(parts) != 2 or any(not part or any(char.isspace() for char in part) for part in parts):
+        raise SidecarError("repo.register requires a GitHub repository URL or owner/repository")
+    return "/".join(parts)
+
+
+def _planning_document_discovery(root: Path) -> dict[str, Any]:
+    """Find the repository's durable plan without making the user provide a path."""
+    if not root.is_dir():
+        return {
+            "found": False,
+            "path": _DEFAULT_PLANNING_DOC,
+            "candidates": [],
+            "reason": "The repository is not cloned locally yet.",
+        }
+
+    manifest_path = root / ".make-it-so" / "project.yaml"
+    manifest_error: str | None = None
+    if manifest_path.is_file():
+        try:
+            manifest = load_project_manifest(root, ".make-it-so/project.yaml")
+        except (OSError, ValueError) as exc:
+            manifest = None
+            manifest_error = f"The project manifest could not be read: {type(exc).__name__}."
+        if manifest is not None:
+            plan_path = root / manifest.planning_doc
+            if plan_path.is_file():
+                return {
+                    "found": True,
+                    "path": manifest.planning_doc,
+                    "candidates": [manifest.planning_doc],
+                    "source": "project_manifest",
+                    "canonical_docs": list(manifest.canonical_docs),
+                    "checks": list(manifest.checks),
+                }
+            manifest_error = "The project manifest names a planning document that is not present."
+
+    candidates: list[str] = []
+    for relative in _PLANNING_DOC_CANDIDATES:
+        if (root / relative).is_file():
+            candidates.append(relative)
+    if not candidates:
+        try:
+            discovered = sorted(
+                path.relative_to(root).as_posix()
+                for path in root.rglob("*.md")
+                if path.is_file()
+                and not any(part in _REGISTRATION_IGNORED_PARTS for part in path.relative_to(root).parts)
+                and any(token in path.name.lower() for token in ("plan", "roadmap", "execution"))
+            )
+        except OSError:
+            discovered = []
+        candidates.extend(discovered[:8])
+    if candidates:
+        return {
+            "found": True,
+            "path": candidates[0],
+            "candidates": candidates,
+            "source": "repository_scan",
+            "reason": manifest_error,
+            "canonical_docs": [item for item in ("README.md", candidates[0]) if (root / item).is_file()],
+            "checks": [],
+        }
+    return {
+        "found": False,
+        "path": _DEFAULT_PLANNING_DOC,
+        "candidates": [],
+        "reason": manifest_error or "No likely planning document was found.",
+        "canonical_docs": ["README.md"] if (root / "README.md").is_file() else [],
+        "checks": [],
+    }
 
 
 def _workflow_label(card: QueueCard) -> str | None:
@@ -256,6 +366,122 @@ def _expected_worker_models(configured: OpenClawWorkboardConfig) -> dict[str, st
     }
 
 
+def _milestone_rows(repo: RepoConfig, cards: list[QueueCard]) -> list[dict[str, Any]]:
+    """Build compact milestone/evidence rows without fetching model transcripts."""
+    try:
+        courses = CourseStore(repo.local_path).list()
+    except (CourseError, OSError, ValueError):
+        return []
+    active_cards = [card for card in cards if not card.metadata.get("archivedAt")]
+    workflows: dict[str, list[QueueCard]] = {}
+    for card in active_cards:
+        label = _workflow_label(card)
+        if label:
+            workflows.setdefault(label, []).append(card)
+    latest_cards = active_cards
+    if workflows:
+        _latest_label, latest_cards = max(
+            workflows.items(),
+            key=lambda item: max((_card_activity_timestamp(card) for card in item[1]), default=0),
+        )
+    rows: list[dict[str, Any]] = []
+    for course in courses:
+        course_cards = [
+            card
+            for card in latest_cards
+            if str(card.metadata.get("courseKey") or "") == course.key
+        ]
+        if not course_cards:
+            course_cards = [
+                card
+                for card in active_cards
+                if str(card.metadata.get("courseKey") or "") == course.key
+            ]
+        for package in course.work_packages:
+            candidates = [
+                card
+                for card in course_cards
+                if str(card.metadata.get("workPackageKey") or "") == package.key
+                and _workflow_stage(card) in {"test", "ux_review"}
+            ]
+            candidates.sort(key=_card_activity_timestamp, reverse=True)
+            current_head = next(
+                (
+                    str(card.metadata.get("discoveredHeadSha") or "").strip()
+                    for card in candidates
+                    if str(card.metadata.get("discoveredHeadSha") or "").strip()
+                ),
+                None,
+            )
+            policy = package.test_evidence_policy
+            validations: list[tuple[QueueCard, Any, dict[str, Any] | None]] = []
+            for card in candidates:
+                validation = validate_test_evidence(
+                    card.metadata.get("proof"),
+                    policy,
+                    current_head,
+                )
+                validations.append((card, validation, extract_test_evidence(card.metadata.get("proof"))))
+            passed = next((row for row in validations if row[1].allowed), None)
+            inspected = passed or next((row for row in validations if row[2] is not None), None)
+            validation = inspected[1] if inspected else None
+            parsed = inspected[2] if inspected else None
+            evidence_status = (
+                "passed"
+                if passed is not None
+                else str(validation.summary.get("status") or "missing")
+                if validation is not None
+                else "not_run"
+            )
+            evidence: dict[str, Any] = {
+                "status": evidence_status,
+                "reason": validation.reason if validation is not None else "no test or UX evidence recorded",
+                "source_card_id": inspected[0].id if inspected else None,
+                "head_sha": parsed.get("head_sha") if parsed else None,
+                "current_head_sha": current_head,
+                "pass_rate": parsed.get("pass_rate") if parsed else None,
+                "tests_total": parsed.get("tests_total") if parsed else None,
+                "tests_passed": parsed.get("tests_passed") if parsed else None,
+                "tests_failed": parsed.get("tests_failed") if parsed else None,
+                "tests_skipped": parsed.get("tests_skipped") if parsed else None,
+                "commands": parsed.get("commands", []) if parsed else [],
+                "screenshots": parsed.get("screenshots", []) if parsed else [],
+                "artifacts": parsed.get("artifacts", []) if parsed else [],
+                "model": parsed.get("model") if parsed else None,
+                "provider": parsed.get("provider") if parsed else None,
+                "captured_at": parsed.get("captured_at") if parsed else None,
+                "summary": parsed.get("summary") if parsed else None,
+            }
+            pr_url = next(
+                (
+                    card.source_url
+                    for card in candidates
+                    if card.source_url and "/pull/" in card.source_url
+                ),
+                next(
+                    (
+                        card.source_url
+                        for card in course_cards
+                        if card.source_url and "/pull/" in card.source_url
+                    ),
+                    None,
+                ),
+            )
+            rows.append(
+                {
+                    "course_key": course.key,
+                    "work_package_key": package.key,
+                    "title": package.title,
+                    "objective": package.objective,
+                    "status": package.status.value,
+                    "policy": policy.model_dump(mode="json"),
+                    "evidence": evidence,
+                    "pr_url": pr_url,
+                }
+            )
+    return rows
+
+
 def _summarize_workboard(
     cards: list[QueueCard],
     board_id: str,
@@ -263,6 +489,7 @@ def _summarize_workboard(
     usage_sync: dict[str, Any] | None = None,
     repo_full_name: str | None = None,
     worker_models: dict[str, str] | None = None,
+    repo: RepoConfig | None = None,
 ) -> dict[str, Any]:
     """Project Workboard cards into a read-only dashboard status.
 
@@ -284,6 +511,7 @@ def _summarize_workboard(
             "board": board_id,
             "cards": 0,
             "counts": {},
+            "milestones": _milestone_rows(repo, cards) if repo is not None else [],
         }
 
     configured_models = worker_models or {}
@@ -612,6 +840,7 @@ def _summarize_workboard(
         "pr_count": max(len(pr_numbers), len(pr_urls)),
         "pr_numbers": sorted(pr_numbers),
         "pr_urls": pr_urls,
+        "milestones": _milestone_rows(repo, all_workflow_cards) if repo is not None else [],
     }
     if usage_sync is not None:
         summary["usage_sync"] = usage_sync
@@ -673,6 +902,7 @@ class SidecarServer:
                 usage_sync=usage_sync,
                 repo_full_name=repo.full_name,
                 worker_models=_expected_worker_models(configured),
+                repo=repo,
             )
         except Exception as exc:
             return {
@@ -703,6 +933,7 @@ class SidecarServer:
                 "cards": 0,
                 "counts": {},
                 "usage_sync": {"status": "cached"},
+                "milestones": _milestone_rows(repo, cards),
             }
         return _summarize_workboard(
             cards,
@@ -710,6 +941,7 @@ class SidecarServer:
             usage_sync={"status": "cached"},
             repo_full_name=repo.full_name,
             worker_models=worker_models,
+            repo=repo,
         )
 
     def _github_status(self, repo: RepoConfig) -> dict[str, Any]:
@@ -798,6 +1030,16 @@ class SidecarServer:
             return self._list_courses()
         if method == "course.get":
             return self._course_status(payload)
+        if method == "course.milestone_evidence":
+            return self._course_milestone_evidence(payload)
+        if method == "course.milestone_changes":
+            return self._course_milestone_changes(payload)
+        if method == "course.milestone_change_propose":
+            return self._propose_milestone_change(payload)
+        if method == "course.milestone_change_approve":
+            return self._approve_milestone_change(payload)
+        if method == "course.milestone_change_reject":
+            return self._reject_milestone_change(payload)
         if method == "course.create":
             return self._create_course(payload)
         if method == "course.readiness":
@@ -888,6 +1130,7 @@ class SidecarServer:
             "default_branch": repo.default_branch,
             "operation_mode": repo.operation_mode.value,
             "completion_policy": repo.completion_policy.value,
+            "milestone_approval": repo.milestone_approval.value,
             "state": state,
             "state_source": "workboard" if workboard is not None else "state_store",
             "workboard_status": workboard,
@@ -918,34 +1161,144 @@ class SidecarServer:
             "events": events,
         }
 
+    def _registration_roots(self) -> list[Path]:
+        roots: list[Path] = []
+        for configured in self.config.repos:
+            roots.append(configured.local_path.expanduser().parent)
+        # Existing repository parents are the authoritative discovery hint. These
+        # fallbacks keep first-repository registration useful on OpenClaw while
+        # leaving explicit local paths available to other runtimes.
+        roots.extend(
+            [
+                Path.home() / ".openclaw" / "workspace",
+                Path.home() / "workspace",
+                Path.home() / "repos",
+            ]
+        )
+        unique: list[Path] = []
+        seen: set[str] = set()
+        for root in roots:
+            resolved = root.expanduser()
+            key = str(resolved).lower()
+            if key not in seen:
+                seen.add(key)
+                unique.append(resolved)
+        return unique
+
+    def _discover_local_repository(self, full_name: str) -> tuple[Path, dict[str, Any]]:
+        repository_name = full_name.split("/", 1)[1]
+        candidates = [root / repository_name for root in self._registration_roots()]
+        selected = next((path for path in candidates if (path / ".git").exists()), None)
+        selected = selected or next((path for path in candidates if path.exists()), None)
+        selected = selected or candidates[0]
+        cloned = (selected / ".git").exists()
+        remote_matches: bool | None = None
+        if cloned:
+            try:
+                result = subprocess.run(
+                    ["git", "-C", str(selected), "remote", "get-url", "origin"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                )
+                origin = result.stdout.strip().lower().removesuffix(".git")
+                remote_matches = result.returncode == 0 and full_name.lower() in origin
+            except (OSError, subprocess.SubprocessError):
+                remote_matches = None
+        return selected, {
+            "path": str(selected),
+            "exists": selected.exists(),
+            "cloned": cloned,
+            "remote_matches": remote_matches,
+        }
+
     def _register_repo(self, payload: dict[str, Any]) -> dict[str, Any]:
-        full_name = str(payload.get("full_name") or "").strip()
-        local_path = str(payload.get("local_path") or "").strip()
-        if not full_name or not local_path:
-            raise SidecarError("repo.register requires full_name and local_path")
+        full_name = _normalize_github_repository(str(payload.get("full_name") or ""))
+        if not full_name:
+            raise SidecarError("repo.register requires full_name")
         if any(repo.full_name == full_name for repo in self.config.repos):
             raise SidecarError(f"repository is already registered: {full_name}")
+        local_path_value = str(payload.get("local_path") or "").strip()
+        if local_path_value:
+            local_path = Path(local_path_value).expanduser()
+            local_discovery = {
+                "path": str(local_path),
+                "exists": local_path.exists(),
+                "cloned": (local_path / ".git").exists(),
+                "remote_matches": None,
+                "source": "explicit",
+            }
+        else:
+            local_path, local_discovery = self._discover_local_repository(full_name)
+            local_discovery["source"] = "repository_roots"
+        planning = _planning_document_discovery(local_path)
+        requested_planning_doc = str(payload.get("planning_doc") or "").strip()
+        if requested_planning_doc:
+            planning = {
+                **planning,
+                "path": requested_planning_doc,
+                "source": "explicit",
+                "found": (local_path / requested_planning_doc).is_file(),
+            }
+        discovered_canonical = planning.get("canonical_docs")
+        discovered_checks = planning.get("checks")
+        canonical_values = cast(list[Any], discovered_canonical) if isinstance(discovered_canonical, list) else []
+        check_values = cast(list[Any], discovered_checks) if isinstance(discovered_checks, list) else []
+        canonical_docs = tuple(str(item) for item in _list_value(payload.get("canonical_docs"))) or tuple(
+            str(item) for item in canonical_values
+        )
+        checks = tuple(str(item) for item in _list_value(payload.get("checks"))) or tuple(
+            str(item) for item in check_values
+        )
+        follow_up_reasons: list[str] = []
+        if not bool(local_discovery["cloned"]):
+            follow_up_reasons.append(
+                f"No local clone was found at {local_discovery['path']}; Number 1 will confirm whether to clone it."
+            )
+        if not bool(planning.get("found")):
+            follow_up_reasons.append(
+                "No durable planning document was identified; Number 1 will ask you to confirm the plan source in chat."
+            )
+        follow_up_message = (
+            f"Repository {full_name} is registered. "
+            + (" ".join(follow_up_reasons) if follow_up_reasons else "The local clone and planning document were found.")
+            + " Number 1 will follow up in chat before any work begins."
+        )
         repo = RepoConfig(
             full_name=full_name,
-            local_path=Path(local_path),
+            local_path=local_path,
             default_branch=str(payload.get("default_branch") or "main"),
-            planning_doc=str(payload.get("planning_doc") or "docs/IMPLEMENTATION_PLAN.md"),
-            canonical_docs=tuple(str(item) for item in _list_value(payload.get("canonical_docs"))),
-            checks=tuple(str(item) for item in _list_value(payload.get("checks"))),
+            planning_doc=str(planning.get("path") or _DEFAULT_PLANNING_DOC),
+            canonical_docs=canonical_docs,
+            checks=checks,
             docs_checks=tuple(str(item) for item in _list_value(payload.get("docs_checks"))),
             surfaces=frozenset(
                 ApplicationSurface(str(item)) for item in _list_value(payload.get("surfaces"))
             ),
             operation_mode=OperationMode(str(payload.get("operation_mode") or "advisory")),
             completion_policy=CompletionPolicy(str(payload.get("completion_policy") or "owner_approval")),
+            milestone_approval=MilestoneApprovalPolicy(
+                str(payload.get("milestone_approval") or "mode_default")
+            ),
             allow_autonomous_merge=bool(payload.get("allow_autonomous_merge", False)),
             notification=NotificationConfig(
                 kind="stdout",
-                route=str(payload.get("notification_route")) if payload.get("notification_route") else None,
+                route=str(payload.get("notification_route") or "notifications"),
             ),
         )
         self._write_config(self.config.model_copy(update={"repos": (*self.config.repos, repo)}))
-        return {"repo": self._repo_status(repo), "status": "registered"}
+        return {
+            "repo": self._repo_status(repo),
+            "status": "registered",
+            "discovery": {
+                "local_clone": local_discovery,
+                "planning_document": planning,
+            },
+            "follow_up_required": True,
+            "follow_up_message": follow_up_message,
+            "notification_route": repo.notification.route,
+        }
 
     def _create_greenfield_repo(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Register a local course intent; remote creation waits for course approval."""
@@ -984,6 +1337,9 @@ class SidecarServer:
             ),
             orchestrator=configured_orchestrator or default_orchestrator,
             orchestration_board=(str(payload.get("orchestration_board") or "").strip() or None),
+            milestone_approval=MilestoneApprovalPolicy(
+                str(payload.get("milestone_approval") or "mode_default")
+            ),
             require_project_manifest=True,
             provisioning=RepositoryProvisioningConfig(
                 enabled=True,
@@ -1018,6 +1374,7 @@ class SidecarServer:
                 "planning_doc",
                 "operation_mode",
                 "completion_policy",
+                "milestone_approval",
                 "allow_autonomous_merge",
                 "orchestrator",
                 "orchestration_board",
@@ -1097,6 +1454,7 @@ class SidecarServer:
     @staticmethod
     def _policy_profiles(policy: ModelPolicy) -> dict[str, dict[str, Any]]:
         role_names = {
+            "number_one",
             "baseline",
             "planner",
             "coder",
@@ -1192,15 +1550,128 @@ class SidecarServer:
 
     def _course_payload(self, full_name: str, course: Course) -> dict[str, Any]:
         report = readiness_report(course)
+        session = self.state.number_one_session(full_name, course.key)
         return {
             "repository": full_name,
             "course": course.model_dump(mode="json"),
             "readiness": report.model_dump(mode="json"),
+            "number_one": session,
+            "milestone_changes": self.state.milestone_changes(full_name, course.key),
+            "milestone_reviews": self.state.milestone_reviews(full_name, course.key, limit=12),
         }
 
     def _course_status(self, payload: dict[str, Any]) -> dict[str, Any]:
         repo, _store, course = self._course_context(payload)
         return self._course_payload(repo.full_name, course)
+
+    def _course_milestone_evidence(self, payload: dict[str, Any]) -> dict[str, Any]:
+        repo, _store, course = self._course_context(payload)
+        status = self._cached_workboard_status(repo)
+        rows = [
+            row
+            for row in (status or {}).get("milestones", [])
+            if str(row.get("course_key") or "") == course.key
+        ]
+        package_key = str(payload.get("work_package_key") or payload.get("package_key") or "").strip()
+        if package_key:
+            rows = [row for row in rows if str(row.get("work_package_key") or "") == package_key]
+        return {
+            "repository": repo.full_name,
+            "course_key": course.key,
+            "milestones": rows,
+            "source": "workboard_mirror",
+        }
+
+    def _course_milestone_changes(self, payload: dict[str, Any]) -> dict[str, Any]:
+        repo, _store, course = self._course_context(payload)
+        return {
+            "repository": repo.full_name,
+            "course_key": course.key,
+            "plan_revision": course.plan_revision,
+            "changes": self.state.milestone_changes(repo.full_name, course.key),
+            "reviews": self.state.milestone_reviews(repo.full_name, course.key, limit=12),
+        }
+
+    def _propose_milestone_change(self, payload: dict[str, Any]) -> dict[str, Any]:
+        repo, _store, course = self._course_context(payload)
+        raw_changes = payload.get("changes")
+        if not isinstance(raw_changes, list) or not raw_changes:
+            raise SidecarError("course.milestone_change_propose requires a non-empty changes list")
+        try:
+            raw_change_items = cast(list[Any], raw_changes)
+            changes = tuple(MilestoneChangeRequest.model_validate(item) for item in raw_change_items)
+            validate_milestone_changes(course, changes)
+            now = datetime.now(UTC)
+            proposal = MilestoneChangeProposal(
+                proposal_id=str(payload.get("proposal_id") or uuid.uuid4()),
+                repository=repo.full_name,
+                course_key=course.key,
+                base_revision=course.plan_revision,
+                summary=str(payload.get("summary") or "Number 1 proposed a milestone change").strip(),
+                reason=str(payload.get("reason") or "Course evidence requires a milestone correction").strip(),
+                requested_by=str(payload.get("requested_by") or "owner").strip(),
+                changes=changes,
+                requires_owner_approval=bool(payload.get("requires_owner_approval", True)),
+                impact=str(payload.get("impact") or "routine"),  # type: ignore[arg-type]
+                created_at=now,
+                updated_at=now,
+            )
+            self.state.save_milestone_change(proposal.model_dump(mode="json"))
+        except (MilestoneError, ValueError) as exc:
+            raise SidecarError(str(exc)) from exc
+        return {"status": "proposed", "proposal": proposal.model_dump(mode="json"), **self._course_payload(repo.full_name, course)}
+
+    def _approve_milestone_change(self, payload: dict[str, Any]) -> dict[str, Any]:
+        repo, store, course = self._course_context(payload)
+        proposal_id = str(payload.get("proposal_id") or "").strip()
+        approved_by = str(payload.get("approved_by") or "").strip()
+        if not proposal_id or not approved_by:
+            raise SidecarError("course.milestone_change_approve requires proposal_id and approved_by")
+        raw = self.state.milestone_change(repo.full_name, proposal_id)
+        if raw is None:
+            raise SidecarError(f"milestone change proposal does not exist: {proposal_id}")
+        try:
+            proposal = MilestoneChangeProposal.model_validate(raw)
+            if proposal.status != MilestoneChangeStatus.PROPOSED:
+                raise MilestoneError(f"proposal {proposal_id} is {proposal.status.value}, not proposed")
+            if proposal.base_revision != course.plan_revision:
+                raise MilestoneError("milestone proposal is stale; the course plan revision changed")
+            updated = apply_milestone_changes(course, proposal.changes)
+            store.save(updated)
+            now = datetime.now(UTC)
+            applied = proposal.model_copy(
+                update={
+                    "status": MilestoneChangeStatus.APPLIED,
+                    "approved_by": approved_by,
+                    "approved_at": now,
+                    "applied_at": now,
+                    "updated_at": now,
+                }
+            )
+            self.state.save_milestone_change(applied.model_dump(mode="json"))
+        except (MilestoneError, ValueError) as exc:
+            raise SidecarError(str(exc)) from exc
+        return {"status": "applied", "proposal": applied.model_dump(mode="json"), **self._course_payload(repo.full_name, updated)}
+
+    def _reject_milestone_change(self, payload: dict[str, Any]) -> dict[str, Any]:
+        repo, _store, course = self._course_context(payload)
+        proposal_id = str(payload.get("proposal_id") or "").strip()
+        if not proposal_id:
+            raise SidecarError("course.milestone_change_reject requires proposal_id")
+        raw = self.state.milestone_change(repo.full_name, proposal_id)
+        if raw is None:
+            raise SidecarError(f"milestone change proposal does not exist: {proposal_id}")
+        try:
+            proposal = MilestoneChangeProposal.model_validate(raw)
+            if proposal.status != MilestoneChangeStatus.PROPOSED:
+                raise MilestoneError(f"proposal {proposal_id} is {proposal.status.value}, not proposed")
+            rejected = proposal.model_copy(
+                update={"status": MilestoneChangeStatus.REJECTED, "updated_at": datetime.now(UTC)}
+            )
+            self.state.save_milestone_change(rejected.model_dump(mode="json"))
+        except (MilestoneError, ValueError) as exc:
+            raise SidecarError(str(exc)) from exc
+        return {"status": "rejected", "proposal": rejected.model_dump(mode="json"), **self._course_payload(repo.full_name, course)}
 
     def _create_course(self, payload: dict[str, Any]) -> dict[str, Any]:
         full_name = str(payload.get("full_name") or payload.get("repository") or "").strip()
@@ -1415,7 +1886,7 @@ class SidecarServer:
         plan_path.parent.mkdir(parents=True, exist_ok=True)
         package_lines = (
             "\n".join(f"- `{package.key}`: {package.objective}" for package in course.work_packages)
-            or "- The Captain will decompose the first implementation package after baseline review."
+            or "- The Number 1 will decompose the first implementation package after baseline review."
         )
         acceptance = (
             "\n".join(f"- {item}" for item in course.acceptance_criteria)

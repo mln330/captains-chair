@@ -91,7 +91,7 @@ make_it_so --config "$MAKE_IT_SO_CONFIG" orchestrate canary --repo OWNER/REPO --
    autonomous PR pass. Use the dashboard or `openclaw make-it-so schedule`
    commands to inspect, edit, pause, resume, remove, or reconcile them. Pausing
    a live OpenClaw cron survives plugin restarts and ordinary reconciliation.
-   Keep worker reconciliation frequent enough to claim ready cards; the Captain
+   Keep worker reconciliation frequent enough to claim ready cards; the Number 1
    cycle is for planning and state review.
 
 ## Existing Queue Migration
@@ -108,7 +108,7 @@ repeat. Before resuming:
 - keep preserved migration PRs explicitly protected by repository policy;
 - dispatch only after current worker-model health and usage admission pass.
 
-Technical failures should become bounded retries or Captain recovery. Only
+Technical failures should become bounded retries or Number 1 recovery. Only
 `USER_SECRET:`, `GOAL_DIVERGENCE:`, `EXTERNAL_ACCESS:`, and
 `HIGH_RISK_DECISION:` are owner-attention categories. A user-blocked card must
 not suppress unrelated ready work.

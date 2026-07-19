@@ -274,8 +274,9 @@ def test_codex_worker_uses_a_closed_proof_schema() -> None:
     proof = schema["properties"]["proof"]["items"]
 
     assert proof["additionalProperties"] is False
-    assert proof["required"] == ["note", "status", "url"]
-    assert set(proof["properties"]) == {"note", "status", "url"}
+    assert proof["required"] == ["note", "status", "test_evidence", "url"]
+    assert set(proof["properties"]) == {"note", "status", "url", "test_evidence"}
+    assert proof["properties"]["test_evidence"]["anyOf"][1]["additionalProperties"] is False
 
 
 def test_codex_usage_ignores_non_usage_events_and_records_reported_model() -> None:

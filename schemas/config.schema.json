@@ -281,6 +281,16 @@
       "title": "HarnessConfig",
       "type": "object"
     },
+    "MilestoneApprovalPolicy": {
+      "description": "How a course pauses between delivery milestones.",
+      "enum": [
+        "mode_default",
+        "none",
+        "each_milestone"
+      ],
+      "title": "MilestoneApprovalPolicy",
+      "type": "string"
+    },
     "ModelCapability": {
       "additionalProperties": false,
       "properties": {
@@ -897,6 +907,10 @@
         "completion_policy": {
           "$ref": "#/$defs/CompletionPolicy",
           "default": "owner_approval"
+        },
+        "milestone_approval": {
+          "$ref": "#/$defs/MilestoneApprovalPolicy",
+          "default": "mode_default"
         },
         "allow_autonomous_merge": {
           "default": false,

@@ -11,6 +11,11 @@ from typing import Any
 
 import yaml
 
+from make_it_so.milestones import (
+    add_milestone_checkpoint,
+    apply_milestone_changes,
+    milestone_approval_required,
+)
 from make_it_so.models import (
     CheckpointStatus,
     Course,
@@ -330,4 +335,7 @@ __all__ = [
     "pause_course",
     "resume_course",
     "set_work_package_status",
+    "add_milestone_checkpoint",
+    "apply_milestone_changes",
+    "milestone_approval_required",
 ]

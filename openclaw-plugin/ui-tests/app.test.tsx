@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -73,6 +73,33 @@ const repo = {
         timeline: [{ id: "repair", stage: "repair", status: "done", summary: "Addressed review finding", model: "codex/gpt-5.6-terra", loop: true, pr_url: "https://github.com/example/project/pull/1" }],
       },
     ],
+    milestones: [
+      {
+        course_key: "feature-search",
+        work_package_key: "search",
+        title: "Search",
+        objective: "Implement search",
+        status: "complete",
+        policy: { required: true, minimum_pass_rate: 100, require_command: true, require_screenshot: true, minimum_screenshots: 1 },
+        evidence: {
+          status: "passed",
+          reason: "test evidence passed",
+          head_sha: "abcdef1",
+          current_head_sha: "abcdef1",
+          pass_rate: 100,
+          tests_total: 8,
+          tests_passed: 8,
+          tests_failed: 0,
+          tests_skipped: 0,
+          commands: ["pytest -q"],
+          screenshots: [{ kind: "screenshot", title: "desktop flow", url: "https://example.test/desktop.png" }],
+          artifacts: [{ kind: "screenshot", title: "desktop flow", url: "https://example.test/desktop.png" }],
+          model: "codex/gpt-5.6-luna",
+          provider: "codex",
+        },
+        pr_url: "https://github.com/example/project/pull/1",
+      },
+    ],
   },
   warnings: [],
 };
@@ -99,7 +126,7 @@ describe("shared dashboard components", () => {
       vi.fn((request: RequestInfo | URL) => {
         const path = String(request);
         if (path.includes("portfolio/status")) return Promise.resolve(response({ repos: [repo] }));
-        if (path.includes("courses/list")) return Promise.resolve(response({ courses: [{ repository: repo.full_name, course, readiness: { ready: true } }] }));
+        if (path.includes("courses/list")) return Promise.resolve(response({ courses: [{ repository: repo.full_name, course: { ...course, plan_revision: 3 }, readiness: { ready: true }, number_one: { session_id: "number-one-feature-search", model: "codex/gpt-5.6-sol", last_review_at: "2026-07-18T22:00:00Z", summary: "The course is on track." }, milestone_reviews: [{ status: "on_track", summary: "The course is on track.", next_action: "Continue with search.", model: "codex/gpt-5.6-sol" }], milestone_changes: [{ proposal_id: "proposal-1", summary: "Split search validation", reason: "The current milestone needs an explicit validation step.", status: "proposed", impact: "routine", base_revision: 3, changes: [{ kind: "add", work_package: { key: "validation", title: "Validation" } }] }] }] }));
         if (path.includes("models/config")) return Promise.resolve(response({ global_profiles: {}, runtime_profiles: {}, runtimes: ["openclaw"], usage: { daily_token_limit: null, model_daily_token_limits: {}, block_on_unknown: true } }));
         if (path.includes("schedule/status")) return Promise.resolve(response({ status: "inspected", jobs: [{ name: "make-it-so-course-review", every: "2h", enabled: true, health: "healthy" }, { name: "make-it-so-reconcile", every: "5m", enabled: true, health: "healthy" }] }));
         if (path.includes("schedule/install")) return Promise.resolve(response({ jobs: [{ name: "make-it-so-course-review" }] }));
@@ -144,19 +171,54 @@ describe("shared dashboard components", () => {
     expect(screen.getAllByText("Build").length).toBeGreaterThan(0);
   });
 
+  it("shows expandable milestone test evidence and screenshots", async () => {
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByRole("button", { name: /expand search feature/i })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: /expand search feature/i }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Milestone test evidence" })).toBeTruthy());
+    expect(screen.getByText("1/1 passing · 1 screenshot")).toBeTruthy();
+    fireEvent.click(screen.getByText("Search", { exact: true }));
+    expect(screen.getByText("desktop flow")).toBeTruthy();
+    expect(screen.getByText("pytest -q")).toBeTruthy();
+    expect(screen.getByRole("link", { name: /open linked pr/i }).getAttribute("href")).toBe("https://github.com/example/project/pull/1");
+  });
+
+  it("shows Number 1 continuity and approves a pending milestone correction", async () => {
+    const fetchMock = vi.mocked(globalThis.fetch);
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByRole("button", { name: /expand search feature/i })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: /expand search feature/i }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Course corrections" })).toBeTruthy());
+    expect(screen.getAllByText(/codex\/gpt-5.6-sol/).length).toBeGreaterThan(0);
+    expect(screen.getByText("Split search validation")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+
+    await waitFor(() => expect(fetchMock.mock.calls.some(([request]) => String(request).includes("milestone-change-approve"))).toBe(true));
+    const approval = fetchMock.mock.calls.find(([request]) => String(request).includes("milestone-change-approve"));
+    expect(String((approval?.[1] as RequestInit | undefined)?.body)).toContain("proposal-1");
+  });
+
   it("opens repository registration and sends the submitted fields", async () => {
     const fetchMock = vi.mocked(globalThis.fetch);
     render(<App />);
     await waitFor(() => expect(screen.getAllByText("example/project").length).toBeGreaterThan(0));
 
-    fireEvent.click(screen.getByRole("button", { name: "Register repository" }));
-    fireEvent.change(screen.getByLabelText("GitHub repository"), { target: { value: "example/second" } });
-    fireEvent.change(screen.getByLabelText("Local path"), { target: { value: "/workspace/second" } });
-    fireEvent.submit(screen.getByRole("button", { name: "Register repository" }).closest("form")!);
+    const registrationPanel = screen.getByRole("region", { name: "Add a repository" });
+    fireEvent.click(within(registrationPanel).getByRole("button", { name: "Register repository" }));
+    fireEvent.change(within(registrationPanel).getByLabelText("GitHub repository"), { target: { value: "https://github.com/example/second" } });
+    fireEvent.change(within(registrationPanel).getByLabelText("Discord route"), { target: { value: "project-room" } });
+    fireEvent.click(within(registrationPanel).getByRole("button", { name: "Register and inspect" }));
 
     await waitFor(() => expect(fetchMock.mock.calls.some(([request]) => String(request).includes("repos/register"))).toBe(true));
     const registration = fetchMock.mock.calls.find(([request]) => String(request).includes("repos/register"));
-    expect(String((registration?.[1] as RequestInit | undefined)?.body)).toContain("example/second");
+    const body = String((registration?.[1] as RequestInit | undefined)?.body);
+    expect(body).toContain("example/second");
+    expect(body).not.toContain("https://github.com");
+    expect(body).toContain("project-room");
+    expect(body).not.toContain("local_path");
+    expect(body).not.toContain("planning_doc");
   });
 
   it("registers a greenfield course without claiming remote creation", async () => {

@@ -115,7 +115,7 @@ def project_queue_events(
                 WorkStage.REPAIR.value: "The blocked independent gate will rerun on the repaired head.",
                 WorkStage.FINAL_REVIEW.value: "The deterministic merge gate will verify the current head next.",
                 WorkStage.MERGE.value: "Post-merge verification will inspect the default branch and CI.",
-                WorkStage.POST_MERGE.value: "This workflow is complete; the Captain can select the next work item.",
+                WorkStage.POST_MERGE.value: "This workflow is complete; the Number 1 can select the next work item.",
             }[stage]
         elif card.status == QueueStatus.BLOCKED:
             attention = _owner_blocked_event(state, repo, card)
@@ -154,7 +154,7 @@ def project_queue_events(
         )
     # Status transitions are not enough for owner blockers: a card can remain
     # blocked across many scheduled reconciliations while the owner is away.
-    # Re-emit only at ladder levels so the Captain escalates without spamming every
+    # Re-emit only at ladder levels so the Number 1 escalates without spamming every
     # two-hour pass. Acknowledgement resets the ladder for the next decision.
     for card in cards:
         if (
@@ -273,7 +273,7 @@ def _append_queue_action_events(
             technical_retries,
             "TECHNICAL_RETRY",
             "Technical failure was requeued automatically.",
-            "The Captain reclaimed the failed card and will retry it without owner intervention.",
+            "The Number 1 reclaimed the failed card and will retry it without owner intervention.",
             "The assigned worker will retry this card; unrelated ready work continues.",
         ),
         (
@@ -286,9 +286,9 @@ def _append_queue_action_events(
         (
             control_plane_recoveries,
             "CONTROL_PLANE_RECOVERY_QUEUED",
-            "Captain recovery was queued automatically.",
-            "The technical retry budget was exhausted, so the Captain will replan the failure.",
-            "The Captain recovery worker will inspect the evidence and select the next repairable action.",
+            "Number 1 recovery was queued automatically.",
+            "The technical retry budget was exhausted, so the Number 1 will replan the failure.",
+            "The Number 1 recovery worker will inspect the evidence and select the next repairable action.",
         ),
     )
     for card_ids, event_type, summary, reason, next_action in actions:
