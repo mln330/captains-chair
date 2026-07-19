@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "make-it-so"
-version = "0.2.2"
+version = "0.2.3"
 description = "An open-source, harness-neutral SDLC control plane that puts the builder in command of an agent crew."
 readme = "README.md"
 requires-python = ">=3.11"
