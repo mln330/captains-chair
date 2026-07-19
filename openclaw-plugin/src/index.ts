@@ -105,6 +105,30 @@ export function resolveDiscordRoute(route: string, config: Record<string, unknow
   return match && typeof match[1] === "string" ? match[1].trim() : normalized;
 }
 
+export async function deliverRegistrationFollowUp(
+  result: RpcResult,
+  runCommand: OpenClawCommandRunner | undefined,
+  executable: string,
+  warn: (message: string) => void = () => undefined,
+): Promise<RpcResult> {
+  const message = typeof result.follow_up_message === "string" ? result.follow_up_message : "";
+  const route = typeof result.notification_route === "string" ? result.notification_route : "";
+  if (!message || !route) return result;
+  if (!runCommand) return { ...result, notification_status: "unavailable" };
+  try {
+    const delivery = await runOpenClawCommand(runCommand, executable, [
+      "message", "send", "--channel", "discord", "--target", route, "--message", message, "--json",
+    ], 90_000);
+    if (typeof delivery.code === "number" && delivery.code !== 0) {
+      throw new Error(String(delivery.stderr ?? `openclaw exited with code ${delivery.code}`));
+    }
+    return { ...result, notification_status: "sent" };
+  } catch (error) {
+    warn(`Make It So registration follow-up could not be sent: ${String(error)}`);
+    return { ...result, notification_status: "failed", notification_error: String(error) };
+  }
+}
+
 export function parseRouteParams(raw: unknown): Record<string, unknown> {
   if (raw && typeof raw === "object" && !ArrayBuffer.isView(raw)) {
     return raw as Record<string, unknown>;
@@ -181,24 +205,13 @@ export default definePluginEntry({
       });
     };
     const runCommand = api.runtime?.system?.runCommandWithTimeout;
-    const sendRegistrationFollowUp = async (result: RpcResult): Promise<RpcResult> => {
-      const message = typeof result.follow_up_message === "string" ? result.follow_up_message : "";
-      const route = typeof result.notification_route === "string" ? result.notification_route : "";
-      if (!message || !route) return result;
-      if (!runCommand) return { ...result, notification_status: "unavailable" };
-      try {
-        const delivery = await runOpenClawCommand(runCommand, executable, [
-          "message", "send", "--channel", "discord", "--target", route, "--message", message, "--json",
-        ], 90_000);
-        if (typeof delivery.code === "number" && delivery.code !== 0) {
-          throw new Error(String(delivery.stderr ?? `openclaw exited with code ${delivery.code}`));
-        }
-        return { ...result, notification_status: "sent" };
-      } catch (error) {
-        api.logger?.warn?.(`Make It So registration follow-up could not be sent: ${String(error)}`);
-        return { ...result, notification_status: "failed" };
-      }
-    };
+    const sendRegistrationFollowUp = (result: RpcResult): Promise<RpcResult> =>
+      deliverRegistrationFollowUp(
+        result,
+        runCommand,
+        executable,
+        (message) => api.logger?.warn?.(message),
+      );
     const controlUiToken = randomBytes(32).toString("base64url");
 
     api.session?.controls?.registerControlUiDescriptor?.({

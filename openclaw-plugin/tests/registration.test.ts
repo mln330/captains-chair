@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import plugin, { parseRouteParams, readRouteParams, resolveDiscordRoute } from "../src/index.js";
+import plugin, { deliverRegistrationFollowUp, parseRouteParams, readRouteParams, resolveDiscordRoute } from "../src/index.js";
 
 describe("Make It So OpenClaw registration", () => {
   it("preserves JSON parameters from string and byte route bodies", () => {
@@ -36,6 +36,46 @@ describe("Make It So OpenClaw registration", () => {
     expect(resolveDiscordRoute("notifications", config)).toBe("channel:1483192074344988954");
     expect(resolveDiscordRoute("NOTIFICATIONS", config)).toBe("channel:1483192074344988954");
     expect(resolveDiscordRoute("channel:123", config)).toBe("channel:123");
+  });
+
+  it("delivers registration follow-ups through the host command runner", async () => {
+    const calls: unknown[][] = [];
+    const result = await deliverRegistrationFollowUp(
+      {
+        follow_up_message: "Repository registered. Number 1 will follow up in chat before any work begins.",
+        notification_route: "channel:1483192074344988954",
+      },
+      async (command, args, options) => {
+        calls.push([command, args, options]);
+        return { code: 0, stdout: '{"id":"discord-message-1"}' };
+      },
+      "openclaw",
+    );
+
+    expect(calls).toEqual([[
+      "openclaw",
+      [
+        "message", "send", "--channel", "discord", "--target", "channel:1483192074344988954",
+        "--message", "Repository registered. Number 1 will follow up in chat before any work begins.",
+        "--json",
+      ],
+      { timeoutMs: 90_000 },
+    ]]);
+    expect(result.notification_status).toBe("sent");
+  });
+
+  it("surfaces registration delivery failures to the dashboard caller", async () => {
+    const warnings: string[] = [];
+    const result = await deliverRegistrationFollowUp(
+      { follow_up_message: "follow up", notification_route: "channel:123" },
+      async () => ({ code: 1, stderr: "Discord target rejected" }),
+      "openclaw",
+      (message) => warnings.push(message),
+    );
+
+    expect(result.notification_status).toBe("failed");
+    expect(result.notification_error).toContain("Discord target rejected");
+    expect(warnings[0]).toContain("Discord target rejected");
   });
 
   it("declares every agent tool in the host manifest contract", () => {
