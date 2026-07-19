@@ -828,6 +828,29 @@ def test_sidecar_registration_discovers_clone_and_plan_without_ui_paths(tmp_path
     assert persisted.notification.route == "project-room"
 
 
+def test_sidecar_registration_persists_runtime_discord_delivery_settings(tmp_path: Path) -> None:
+    config = app_config(tmp_path, repo_config(tmp_path))
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+    server = SidecarServer(config_path)
+
+    registered = server.request(
+        "repo.register",
+        {
+            "full_name": "example/second",
+            "notification_route": "channel:1483192074344988954",
+            "notification_kind": "openclaw_discord",
+            "notification_executable": "openclaw",
+        },
+    )
+
+    assert registered["notification_route"] == "channel:1483192074344988954"
+    persisted = load_config(config_path).repo("example/second")
+    assert persisted.notification.kind == "openclaw_discord"
+    assert persisted.notification.executable == "openclaw"
+    assert persisted.notification.route == "channel:1483192074344988954"
+
+
 def test_sidecar_registration_normalizes_github_url(tmp_path: Path) -> None:
     config = app_config(tmp_path, repo_config(tmp_path))
     config_path = tmp_path / "config.yaml"

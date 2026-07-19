@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import plugin, { parseRouteParams, readRouteParams } from "../src/index.js";
+import plugin, { parseRouteParams, readRouteParams, resolveDiscordRoute } from "../src/index.js";
 
 describe("Make It So OpenClaw registration", () => {
   it("preserves JSON parameters from string and byte route bodies", () => {
@@ -29,6 +29,13 @@ describe("Make It So OpenClaw registration", () => {
     await expect(readRouteParams(requestBody())).resolves.toEqual({
       full_name: "buffer/project",
     });
+  });
+
+  it("resolves configured Discord route aliases without changing explicit targets", () => {
+    const config = { discordRouteAliases: { notifications: "channel:1483192074344988954" } };
+    expect(resolveDiscordRoute("notifications", config)).toBe("channel:1483192074344988954");
+    expect(resolveDiscordRoute("NOTIFICATIONS", config)).toBe("channel:1483192074344988954");
+    expect(resolveDiscordRoute("channel:123", config)).toBe("channel:123");
   });
 
   it("declares every agent tool in the host manifest contract", () => {

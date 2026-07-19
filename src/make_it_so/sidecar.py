@@ -1265,6 +1265,8 @@ class SidecarServer:
             + (" ".join(follow_up_reasons) if follow_up_reasons else "The local clone and planning document were found.")
             + " Number 1 will follow up in chat before any work begins."
         )
+        notification_kind = str(payload.get("notification_kind") or "stdout")
+        notification_executable = str(payload.get("notification_executable") or "").strip() or None
         repo = RepoConfig(
             full_name=full_name,
             local_path=local_path,
@@ -1283,8 +1285,9 @@ class SidecarServer:
             ),
             allow_autonomous_merge=bool(payload.get("allow_autonomous_merge", False)),
             notification=NotificationConfig(
-                kind="stdout",
+                kind=notification_kind,
                 route=str(payload.get("notification_route") or "notifications"),
+                executable=notification_executable,
             ),
         )
         self._write_config(self.config.model_copy(update={"repos": (*self.config.repos, repo)}))

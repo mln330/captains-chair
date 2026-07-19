@@ -71,6 +71,7 @@ const CONFIG_SCHEMA = {
     pythonExecutable: { type: "string", default: "python3" },
     sidecarCommand: { type: "array", items: { type: "string" }, default: ["-m", "make_it_so.sidecar"] },
     openclawExecutable: { type: "string", default: "openclaw" },
+    discordRouteAliases: { type: "object", additionalProperties: { type: "string" }, default: {} },
     installSchedules: { type: "boolean", default: false },
   },
 };
@@ -89,6 +90,19 @@ function configArgs(config: Record<string, unknown>): string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string")
     ? [...value]
     : ["-m", "make_it_so.sidecar"];
+}
+
+export function resolveDiscordRoute(route: string, config: Record<string, unknown>): string {
+  const normalized = route.trim();
+  if (!normalized) return normalized;
+  const rawAliases = config.discordRouteAliases;
+  if (!rawAliases || typeof rawAliases !== "object" || Array.isArray(rawAliases)) return normalized;
+  const aliases = rawAliases as Record<string, unknown>;
+  const exact = aliases[normalized];
+  if (typeof exact === "string" && exact.trim()) return exact.trim();
+  const lower = normalized.toLowerCase();
+  const match = Object.entries(aliases).find(([key, value]) => key.toLowerCase() === lower && typeof value === "string" && value.trim());
+  return match && typeof match[1] === "string" ? match[1].trim() : normalized;
 }
 
 export function parseRouteParams(raw: unknown): Record<string, unknown> {
@@ -155,9 +169,17 @@ export default definePluginEntry({
       },
       (message, error) => api.logger?.warn?.(`${message}${error ? `: ${String(error)}` : ""}`),
     );
-    const request = async (method: string, params?: Record<string, unknown>): Promise<RpcResult> =>
-      sidecar.request(method, params);
     const executable = configString(config, "openclawExecutable", "openclaw");
+    const request = async (method: string, params: Record<string, unknown> = {}): Promise<RpcResult> => {
+      if (method !== "repo.register") return sidecar.request(method, params);
+      const route = typeof params.notification_route === "string" ? params.notification_route : "";
+      return sidecar.request(method, {
+        ...params,
+        notification_route: resolveDiscordRoute(route, config),
+        notification_kind: "openclaw_discord",
+        notification_executable: executable,
+      });
+    };
     const runCommand = api.runtime?.system?.runCommandWithTimeout;
     const sendRegistrationFollowUp = async (result: RpcResult): Promise<RpcResult> => {
       const message = typeof result.follow_up_message === "string" ? result.follow_up_message : "";
