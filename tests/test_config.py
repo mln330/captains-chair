@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 from pydantic import ValidationError
 
 from make_it_so.config import load_config, load_project_manifest, write_json_schema
@@ -124,6 +125,26 @@ reviewer_modle: typo
     )
     with pytest.raises(ValidationError):
         load_config(path)
+
+
+def test_load_config_migrates_legacy_root_openclaw_fields(tmp_path: Path) -> None:
+    source = Path(__file__).parents[1] / "config" / "config.example.yaml"
+    raw = yaml.safe_load(source.read_text(encoding="utf-8"))
+    orchestrator = raw["orchestrators"].pop("openclaw-workers")
+    legacy_fields = set(orchestrator) - {"kind"}
+    for key in legacy_fields:
+        raw[key] = orchestrator.pop(key)
+    raw["orchestrators"]["openclaw-workers"] = orchestrator
+
+    path = tmp_path / "legacy-config.yaml"
+    path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+
+    configured = load_config(path)
+    worker_orchestrator = configured.orchestrators["openclaw-workers"]
+    assert isinstance(worker_orchestrator, OpenClawWorkboardConfig)
+    assert worker_orchestrator.codex_executable.replace("\\", "/").endswith(".bin/codex")
+    assert worker_orchestrator.worker_runtimes.coder == "codex"
+    assert worker_orchestrator.make_it_so_command[0] == "make-it-so"
 
 
 def test_config_helpers_handle_manifests_and_schema_writes(tmp_path: Path) -> None:
