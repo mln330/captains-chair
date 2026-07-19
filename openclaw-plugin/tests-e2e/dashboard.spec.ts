@@ -61,7 +61,9 @@ test("dashboard renders the course map and planning brief", async ({ page }, tes
 
   await expect(page.getByRole("heading", { name: "Make It So" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "example/project" })).toBeVisible();
-  await expect(page.getByText("Search improvements")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Project at a glance" })).toBeVisible();
+  await expect(page.getByText("Project goals", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("High-level goals for example/project").getByText("Ready to engage", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: /expand search improvements/i }).click();
   await page.getByRole("button", { name: "Open planning brief" }).click();
   await expect(page.getByRole("heading", { name: "Plan and charter review" })).toBeVisible();

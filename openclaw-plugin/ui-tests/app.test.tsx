@@ -118,8 +118,12 @@ describe("shared dashboard components", () => {
 
     await waitFor(() => expect(screen.getAllByText("example/project").length).toBeGreaterThan(0));
     expect(screen.getByText("Fleet at a glance")).toBeTruthy();
+    expect(screen.getByText("Project at a glance")).toBeTruthy();
+    expect(screen.getByText("Project goals")).toBeTruthy();
+    expect(screen.getAllByText("Complete").length).toBeGreaterThan(0);
+    expect(screen.getByText("Make search useful for customers.")).toBeTruthy();
     expect(screen.getAllByText("open PRs").length).toBeGreaterThan(0);
-    expect(screen.getByText("Search feature")).toBeTruthy();
+    expect(screen.getAllByText("Search feature").length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole("button", { name: "Reconcile" }));
 
     await waitFor(() => expect(screen.getByRole("status").textContent).toContain("Schedule install"));

@@ -5,16 +5,19 @@ import {
   BadgeCheck,
   CheckCircle2,
   CircleDot,
+  CircleAlert,
   Code2,
   Cpu,
   ExternalLink,
   FlaskConical,
   GitMerge,
   GitPullRequest,
+  ListChecks,
   RefreshCw,
   Rocket,
   RotateCcw,
   ShieldCheck,
+  Target,
   Wrench,
   XCircle,
 } from "lucide-react";
@@ -172,6 +175,9 @@ type Course = {
   kind: string;
   status: string;
   goal: string;
+  scope?: string[];
+  acceptance_criteria?: string[];
+  exit_criteria?: string[];
   readiness: ReadinessRequirement[];
   work_packages: WorkPackage[];
   checkpoints: Checkpoint[];
@@ -348,6 +354,74 @@ function PortfolioSummary({ repos }: { repos: Repo[] }) {
       <Metric label="checks" value={failedChecks ? `${failedChecks} failing` : pendingChecks ? `${pendingChecks} running` : "passing"} tone={failedChecks ? "danger" : pendingChecks ? "warn" : "good"} />
       <Metric label="blockers" value={blockers} tone={blockers ? "danger" : "good"} />
       <Metric label="tokens recorded" value={tokens.toLocaleString()} />
+    </div>
+  </section>;
+}
+
+type GoalState = "complete" | "in_progress" | "ready" | "blocked" | "paused" | "not_started";
+
+function goalStateLabel(state: GoalState): string {
+  return {
+    complete: "Complete",
+    in_progress: "In progress",
+    ready: "Ready to engage",
+    blocked: "Blocked",
+    paused: "Paused",
+    not_started: "Not started",
+  }[state];
+}
+
+function courseGoalState(item: CourseSummary, repo: Repo): GoalState {
+  const workboard = repo.workboard_status;
+  const terminal = Boolean(workboard?.terminal || workboard?.status === "completed" || repo.state === "merged");
+  const blockers = workboard?.current_blockers ?? workboard?.blockers ?? 0;
+  if (item.course.status === "blocked" || blockers > 0) return "blocked";
+  if (item.course.status === "completed" || terminal) return "complete";
+  if (item.course.status === "paused") return "paused";
+  if (item.course.status === "engaged" || workboard?.status === "in_progress") return "in_progress";
+  if (item.readiness.ready || item.course.status === "awaiting_approval") return "ready";
+  return "not_started";
+}
+
+function ExecutiveSummary({ repo, courses }: { repo: Repo; courses: Courses | null }) {
+  const workboard = repo.workboard_status;
+  const terminal = Boolean(workboard?.terminal || workboard?.status === "completed" || repo.state === "merged");
+  const blockers = workboard?.current_blockers ?? workboard?.blockers ?? 0;
+  const checks = checkStatus(repo.github_status);
+  const courseItems = courses?.courses.filter((item) => item.repository === repo.full_name) ?? [];
+  const goals = courseItems.map((item) => ({ item, state: courseGoalState(item, repo) }));
+  const workPackages = courseItems.flatMap((item) => item.course.work_packages);
+  const completedPackages = workPackages.filter((item) => item.status === "complete").length;
+  const completeGoals = goals.filter((goal) => goal.state === "complete").length;
+  const hasBlockedGoal = goals.some((goal) => goal.state === "blocked");
+  const overallState: GoalState | "loading" = courses === null
+    ? "loading"
+    : hasBlockedGoal
+    ? "blocked"
+    : goals.length > 0 && completeGoals === goals.length
+    ? "complete"
+    : goals.some((goal) => goal.state === "in_progress")
+    ? "in_progress"
+    : goals.some((goal) => goal.state === "ready")
+    ? "ready"
+    : "not_started";
+  const overallLabel = overallState === "loading" ? "Loading charter" : goalStateLabel(overallState);
+  const narrative = courses === null
+    ? "Loading the project charter and its declared goals."
+    : !goals.length
+    ? "No high-level goal is registered for this repository yet."
+    : overallState === "complete"
+    ? "The implementation course is merged and post-merge verified. Production deployment remains a separate outcome."
+    : overallState === "blocked"
+    ? "The course has work that needs attention before it can advance."
+    : overallState === "in_progress"
+    ? `${completedPackages} of ${workPackages.length || 0} delivery milestones are marked complete.`
+    : "The project has a declared direction and is waiting for the next course transition.";
+  return <section className="executive-summary" aria-labelledby="executive-summary-title">
+    <div className="executive-heading"><div><p className="eyebrow">EXECUTIVE BRIEF</p><h3 id="executive-summary-title">Project at a glance</h3><span>{repo.full_name}</span></div><span className={`executive-state ${overallState}`}>{overallLabel}</span></div>
+    <div className="executive-grid">
+      <div className="executive-narrative"><div className="executive-signal"><Target size={20} aria-hidden="true" /><div><strong>{terminal ? "Implementation verified" : repo.state.split("_").join(" ")}</strong><span>{narrative}</span></div></div><div className="executive-metrics" tabIndex={0} aria-label="Project metrics"><Metric label="goals complete" value={courses === null ? "-" : `${completeGoals}/${goals.length}`} tone={overallState === "complete" ? "good" : "neutral"} /><Metric label="milestones" value={courses === null ? "-" : `${completedPackages}/${workPackages.length}`} /><Metric label="PRs" value={workboard?.pr_count ?? repo.github_status?.open_prs ?? 0} /><Metric label="blockers" value={blockers} tone={blockers ? "danger" : "good"} /><Metric label="checks" value={checks} tone={checks === "failing" ? "danger" : checks === "passing" ? "good" : checks === "running" ? "warn" : "neutral"} /></div></div>
+      <div className="goal-board" aria-label={`High-level goals for ${repo.full_name}`}><div className="goal-board-heading"><div><ListChecks size={17} aria-hidden="true" /><strong>Project goals</strong></div><span>{courses === null ? "Loading" : `${goals.length} tracked`}</span></div>{courses === null ? <p className="muted">Loading declared goals...</p> : goals.length ? goals.map(({ item, state }) => <div className="goal-item" key={`${item.repository}:${item.course.key}`}><div className="goal-item-marker">{state === "complete" ? <CheckCircle2 size={16} aria-hidden="true" /> : state === "blocked" ? <CircleAlert size={16} aria-hidden="true" /> : <Target size={16} aria-hidden="true" />}</div><div className="goal-item-copy"><strong>{item.course.title}</strong><span>{item.course.goal}</span><small>{item.course.work_packages.length ? `${item.course.work_packages.length} delivery milestone${item.course.work_packages.length === 1 ? "" : "s"}` : "No delivery milestones recorded"}</small></div><em className={`goal-status ${state}`}>{goalStateLabel(state)}</em></div>) : <p className="muted">Register a course charter to track a high-level goal.</p>}</div>
     </div>
   </section>;
 }
@@ -923,7 +997,7 @@ export function App() {
   const selectedRepo = repos.find((repo) => repo.full_name === selectedRepoName) ?? repos[0];
   return <main className="shell"><header className="topbar"><div><p className="eyebrow">FLIGHT CONTROL</p><h1>Make It So</h1><p className="subtitle">Set the course. Engage the crew.</p></div><div className="action-row"><button className="secondary icon-label" onClick={refresh} disabled={refreshing} aria-label="Refresh portfolio"><RefreshCw size={16} aria-hidden="true" className={refreshing ? "spinning" : ""} />{refreshing ? "Refreshing" : "Refresh"}</button></div></header>
     {error && <div className="alert" role="alert">{error}</div>}
-     <section className="overview" aria-labelledby="overview-title"><div className="section-heading"><div><p className="eyebrow">MISSION OVERVIEW</p><h2 id="overview-title">Current courses</h2></div><span className="status-pill">{portfolio ? `${repos.length} registered` : "Loading"}</span></div>{portfolio === null ? <div className="loading-state" role="status"><strong>Loading fleet status...</strong><span>Course charters and repository facts are arriving independently.</span></div> : repos.length ? <><PortfolioSummary repos={repos} /><div className="mission-layout"><RepoSelector repos={repos} selected={selectedRepo?.full_name ?? ""} onSelect={setSelectedRepoName} />{selectedRepo && <RepoPanel key={selectedRepo.full_name} repo={selectedRepo} onSave={updateRepo} />}</div></> : <div className="empty"><h3>No repositories registered</h3><p>Register a repository to begin a readiness review.</p></div>}</section>
+     <section className="overview" aria-labelledby="overview-title"><div className="section-heading"><div><p className="eyebrow">MISSION OVERVIEW</p><h2 id="overview-title">Current courses</h2></div><span className="status-pill">{portfolio ? `${repos.length} registered` : "Loading"}</span></div>{portfolio === null ? <div className="loading-state" role="status"><strong>Loading fleet status...</strong><span>Course charters and repository facts are arriving independently.</span></div> : repos.length ? <><PortfolioSummary repos={repos} />{selectedRepo && <ExecutiveSummary repo={selectedRepo} courses={courses} />}<div className="mission-layout"><RepoSelector repos={repos} selected={selectedRepo?.full_name ?? ""} onSelect={setSelectedRepoName} />{selectedRepo && <RepoPanel key={selectedRepo.full_name} repo={selectedRepo} onSave={updateRepo} />}</div></> : <div className="empty"><h3>No repositories registered</h3><p>Register a repository to begin a readiness review.</p></div>}</section>
     <SchedulePanel status={scheduleStatus} onRefresh={refresh} />
     {modelConfig && <><ModelPolicyPanel config={modelConfig} onSaved={refresh} /><UsagePolicyPanel config={modelConfig} onSaved={refresh} /></>}
      <section className="courses" aria-labelledby="courses-title"><div className="section-heading"><div><p className="eyebrow">COURSE CHARTER</p><h2 id="courses-title">Readiness and work packages</h2></div><span className="status-pill">{courses ? `${courses.courses.length} courses` : "Loading"}</span></div>{courses === null ? <div className="loading-state" role="status"><strong>Loading course charters...</strong><span>This stays independent of GitHub and token reconciliation.</span></div> : courses.courses.length ? <div className="course-list">{courses.courses.map((item) => <CoursePanel key={`${item.repository}:${item.course.key}`} item={item} repo={repos.find((repo) => repo.full_name === item.repository)} onAction={courseAction} onRefresh={refresh} />)}</div> : <p className="muted">No course charter has been saved yet.</p>}</section>

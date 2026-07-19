@@ -53,6 +53,37 @@ h3 { font-size: 17px; margin-bottom: 5px; }
 .metric-good strong { color: #b8dca8; }
 .metric-warn strong { color: #f0d393; }
 .metric-danger strong { color: #f0bfc6; }
+.executive-summary { background: #121c1e; border: 1px solid #405154; border-left: 3px solid #7fc7c0; border-radius: 6px; margin: 18px 0; min-width: 0; padding: 16px; }
+.executive-heading { align-items: start; display: flex; gap: 16px; justify-content: space-between; }
+.executive-heading h3 { margin: 0; }
+.executive-heading > div > span { color: #9eb0b2; display: block; font: 10px ui-monospace, SFMono-Regular, monospace; margin-top: 4px; }
+.executive-state, .goal-status { border-radius: 999px; display: inline-flex; font-size: 10px; font-style: normal; font-weight: 700; padding: 5px 8px; white-space: nowrap; }
+.executive-state.complete, .goal-status.complete { background: #294235; color: #b8dca8; }
+.executive-state.in_progress, .goal-status.in_progress { background: #473c22; color: #f2d993; }
+.executive-state.ready, .goal-status.ready { background: #293b44; color: #b9d9ed; }
+.executive-state.blocked, .goal-status.blocked { background: #482e34; color: #f0bfc6; }
+.executive-state.paused, .goal-status.paused { background: #393445; color: #d9c9eb; }
+.executive-state.not_started, .executive-state.loading, .goal-status.not_started { background: #2e393b; color: #b5c3c5; }
+.executive-grid { display: grid; gap: 18px; grid-template-columns: minmax(0, 1fr) minmax(330px, 1fr); margin-top: 16px; min-width: 0; }
+.executive-narrative { border-top: 1px solid #2e3b3e; min-width: 0; padding-top: 14px; }
+.executive-signal { align-items: start; color: #7fc7c0; display: flex; gap: 10px; }
+.executive-signal strong, .executive-signal span { display: block; }
+.executive-signal strong { color: #d9e8e7; font-size: 14px; }
+.executive-signal span { color: #b5c3c5; font-size: 11px; line-height: 1.45; margin-top: 3px; }
+.executive-metrics { display: grid; gap: 12px; grid-template-columns: repeat(5, minmax(0, 1fr)); margin-top: 18px; min-width: 0; }
+.goal-board { border-left: 1px solid #2e3b3e; min-width: 0; padding-left: 18px; }
+.goal-board-heading { align-items: center; display: flex; justify-content: space-between; }
+.goal-board-heading > div { align-items: center; color: #7fc7c0; display: flex; gap: 7px; }
+.goal-board-heading strong { color: #d9e8e7; font-size: 12px; }
+.goal-board-heading > span { color: #9eb0b2; font-size: 10px; text-transform: uppercase; }
+.goal-item { align-items: start; border-top: 1px solid #2e3b3e; display: grid; gap: 9px; grid-template-columns: auto minmax(0, 1fr) auto; margin-top: 10px; padding-top: 10px; }
+.goal-item-marker { color: #7fc7c0; display: flex; padding-top: 2px; }
+.goal-item-copy { min-width: 0; }
+.goal-item-copy strong, .goal-item-copy span, .goal-item-copy small { display: block; overflow-wrap: anywhere; }
+.goal-item-copy strong { color: #d9e8e7; font-size: 11px; }
+.goal-item-copy span { color: #b5c3c5; font-size: 11px; line-height: 1.4; margin-top: 3px; }
+.goal-item-copy small { color: #829396; font-size: 9px; margin-top: 5px; }
+.goal-status { align-self: start; font-size: 9px; }
 .repo-stats { border-bottom: 1px solid #2e3b3e; display: grid; gap: 12px 10px; grid-template-columns: repeat(4, minmax(0, 1fr)); padding: 14px 0; }
 .repo-stats .metric strong { font-size: 14px; }
 .completion-note { border-bottom: 1px solid #2e3b3e; color: #b5c3c5; font-size: 11px; line-height: 1.45; margin: 0; padding: 11px 0; }
@@ -389,6 +420,9 @@ legend { color: #7fc7c0; font-size: 12px; padding: 0 5px; }
   .repo-stats { display: flex; gap: 16px; overflow-x: auto; padding: 10px 0; }
   .repo-stats .metric { flex: 0 0 74px; }
   .repo-meta { display: grid; gap: 3px; padding-top: 10px; }
+  .executive-grid { grid-template-columns: 1fr; }
+  .goal-board { border-left: 0; border-top: 1px solid #2e3b3e; padding-left: 0; padding-top: 14px; }
+  .executive-metrics { gap: 16px; grid-template-columns: repeat(5, minmax(62px, 1fr)); overflow-x: auto; }
   .console-heading { align-items: flex-start; flex-direction: column; }
   .stage-map { grid-template-columns: repeat(7, 112px); }
   .mission-layout > .repo-panel { padding: 16px; }
@@ -397,8 +431,9 @@ legend { color: #7fc7c0; font-size: 12px; padding: 0 5px; }
 @media (prefers-color-scheme: light) {
   .repo-switcher, .repo-switcher-heading, .repo-tab, .repo-tab:last-child,
   .stage-node, .stage-node:last-child, .completion-beacon, .workflow-run,
-  .workflow-run:last-of-type, .run-label, .run-step { border-color: #d8d2ca; }
+  .workflow-run:last-of-type, .run-label, .run-step, .executive-summary { border-color: #d8d2ca; }
   .repo-switcher-heading, .run-step { background: #f7f4ef; }
+  .executive-summary { background: #fff; border-left-color: #a83324; }
   .repo-tab { background: #fff; }
   .repo-tab:hover { background: #f8f5f1; }
   .repo-tab.selected { background: #fff7f4; box-shadow: inset 3px 0 #b33b2b; }
@@ -412,6 +447,18 @@ legend { color: #7fc7c0; font-size: 12px; padding: 0 5px; }
   .repo-tab-facts .check-passing { color: #32602b; }
   .repo-tab-facts .check-failing { color: #8d2f36; }
   .repo-tab-facts .check-running { color: #7b5b12; }
+  .executive-heading > div > span, .executive-state.not_started, .executive-state.loading,
+  .goal-board-heading > span, .goal-item-copy small { color: #6f6a63; }
+  .executive-signal strong, .goal-board-heading strong, .goal-item-copy strong { color: #292724; }
+  .executive-signal span, .goal-item-copy span { color: #5f5a54; }
+  .executive-state.complete, .goal-status.complete { background: #e1eedb; color: #32602b; }
+  .executive-state.in_progress, .goal-status.in_progress { background: #fff0c9; color: #7b5b12; }
+  .executive-state.ready, .goal-status.ready { background: #e1eef7; color: #265a7c; }
+  .executive-state.blocked, .goal-status.blocked { background: #f7dfdf; color: #8d2f36; }
+  .executive-state.paused, .goal-status.paused { background: #eee5f4; color: #654478; }
+  .executive-state.not_started, .executive-state.loading, .goal-status.not_started { background: #eeeae5; color: #6f6a63; }
+  .executive-signal, .goal-board-heading > div, .goal-item-marker { color: #a83324; }
+  .goal-board, .goal-item, .executive-narrative { border-color: #ded8d0; }
   .completion-beacon { color: #7b5b12; }
   .completion-beacon.complete { border-color: #9bb792; color: #32602b; }
   .stage-icon { border-color: #cfc8bf; color: #6f6a63; }
