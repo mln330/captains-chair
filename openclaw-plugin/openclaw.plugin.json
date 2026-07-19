@@ -35,6 +35,21 @@
         "type": "string",
         "default": "openclaw"
       },
+      "numberOneAgent": {
+        "type": "string",
+        "default": "github-captain",
+        "description": "OpenClaw agent used for initial Number 1 planning handoffs"
+      },
+      "numberOneModel": {
+        "type": "string",
+        "default": "codex/gpt-5.6-sol",
+        "description": "Strategist model used for initial Number 1 planning handoffs"
+      },
+      "numberOneThinking": {
+        "type": "string",
+        "default": "high",
+        "description": "Thinking level used for initial Number 1 planning handoffs"
+      },
       "discordRouteAliases": {
         "type": "object",
         "additionalProperties": {

@@ -822,6 +822,9 @@ def test_sidecar_registration_discovers_clone_and_plan_without_ui_paths(tmp_path
     assert registered["discovery"]["planning_document"]["found"] is True
     assert registered["follow_up_required"] is True
     assert "Number 1" in registered["follow_up_message"]
+    assert "NUMBER 1 | INITIAL PLANNING" in registered["number_one_prompt"]
+    assert "What outcome and user-facing goal" in registered["number_one_prompt"]
+    assert registered["number_one_session_key"] == "make-it-so:number-one:example-second"
     persisted = load_config(config_path).repo("example/second")
     assert persisted.local_path == clone
     assert persisted.planning_doc == "docs/IMPLEMENTATION_ROADMAP.md"

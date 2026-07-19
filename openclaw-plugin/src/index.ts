@@ -63,6 +63,9 @@ type CommandResult = {
 };
 
 const PLUGIN_ID = "make-it-so";
+const DEFAULT_NUMBER_ONE_AGENT = "github-captain";
+const DEFAULT_NUMBER_ONE_MODEL = "codex/gpt-5.6-sol";
+const DEFAULT_NUMBER_ONE_THINKING = "high";
 const CONFIG_SCHEMA = {
   type: "object",
   additionalProperties: false,
@@ -71,6 +74,9 @@ const CONFIG_SCHEMA = {
     pythonExecutable: { type: "string", default: "python3" },
     sidecarCommand: { type: "array", items: { type: "string" }, default: ["-m", "make_it_so.sidecar"] },
     openclawExecutable: { type: "string", default: "openclaw" },
+    numberOneAgent: { type: "string", default: DEFAULT_NUMBER_ONE_AGENT },
+    numberOneModel: { type: "string", default: DEFAULT_NUMBER_ONE_MODEL },
+    numberOneThinking: { type: "string", default: DEFAULT_NUMBER_ONE_THINKING },
     discordRouteAliases: { type: "object", additionalProperties: { type: "string" }, default: {} },
     installSchedules: { type: "boolean", default: false },
   },
@@ -110,22 +116,61 @@ export async function deliverRegistrationFollowUp(
   runCommand: OpenClawCommandRunner | undefined,
   executable: string,
   warn: (message: string) => void = () => undefined,
+  options: { agent?: string; model?: string; thinking?: string } = {},
 ): Promise<RpcResult> {
   const message = typeof result.follow_up_message === "string" ? result.follow_up_message : "";
+  const planningPrompt = typeof result.number_one_prompt === "string" ? result.number_one_prompt : message;
   const route = typeof result.notification_route === "string" ? result.notification_route : "";
-  if (!message || !route) return result;
+  if (!planningPrompt || !route) return result;
   if (!runCommand) return { ...result, notification_status: "unavailable" };
+  const agent = options.agent || DEFAULT_NUMBER_ONE_AGENT;
+  const model = options.model || DEFAULT_NUMBER_ONE_MODEL;
+  const thinking = options.thinking || DEFAULT_NUMBER_ONE_THINKING;
+  const sessionKey = typeof result.number_one_session_key === "string" && result.number_one_session_key.trim()
+    ? result.number_one_session_key.trim()
+    : "make-it-so:number-one:registration";
   try {
     const delivery = await runOpenClawCommand(runCommand, executable, [
-      "message", "send", "--channel", "discord", "--target", route, "--message", message, "--json",
-    ], 90_000);
+      "agent", "--agent", agent, "--model", model, "--thinking", thinking,
+      "--channel", "discord", "--deliver", "--reply-channel", "discord", "--reply-to", route,
+      "--session-key", sessionKey, "--message", planningPrompt, "--json",
+    ], 180_000);
     if (typeof delivery.code === "number" && delivery.code !== 0) {
       throw new Error(String(delivery.stderr ?? `openclaw exited with code ${delivery.code}`));
     }
-    return { ...result, notification_status: "sent" };
-  } catch (error) {
-    warn(`Make It So registration follow-up could not be sent: ${String(error)}`);
-    return { ...result, notification_status: "failed", notification_error: String(error) };
+    return {
+      ...result,
+      notification_status: "sent",
+      notification_delivery: "number_one_agent",
+      number_one_agent: agent,
+      number_one_model: model,
+      number_one_session_key: sessionKey,
+    };
+  } catch (agentError) {
+    warn(`Make It So Number 1 planning turn failed; using a direct Discord fallback: ${String(agentError)}`);
+    try {
+      const fallback = await runOpenClawCommand(runCommand, executable, [
+        "message", "send", "--channel", "discord", "--target", route, "--message", planningPrompt, "--json",
+      ], 90_000);
+      if (typeof fallback.code === "number" && fallback.code !== 0) {
+        throw new Error(String(fallback.stderr ?? `openclaw exited with code ${fallback.code}`));
+      }
+      return {
+        ...result,
+        notification_status: "sent",
+        notification_delivery: "message_fallback",
+        notification_error: `Number 1 agent failed: ${String(agentError)}`,
+        number_one_session_key: sessionKey,
+      };
+    } catch (fallbackError) {
+      warn(`Make It So registration planning handoff could not be sent: ${String(fallbackError)}`);
+      return {
+        ...result,
+        notification_status: "failed",
+        notification_error: `Number 1: ${String(agentError)}; fallback: ${String(fallbackError)}`,
+        number_one_session_key: sessionKey,
+      };
+    }
   }
 }
 
@@ -194,6 +239,9 @@ export default definePluginEntry({
       (message, error) => api.logger?.warn?.(`${message}${error ? `: ${String(error)}` : ""}`),
     );
     const executable = configString(config, "openclawExecutable", "openclaw");
+    const numberOneAgent = configString(config, "numberOneAgent", DEFAULT_NUMBER_ONE_AGENT);
+    const numberOneModel = configString(config, "numberOneModel", DEFAULT_NUMBER_ONE_MODEL);
+    const numberOneThinking = configString(config, "numberOneThinking", DEFAULT_NUMBER_ONE_THINKING);
     const request = async (method: string, params: Record<string, unknown> = {}): Promise<RpcResult> => {
       if (method !== "repo.register") return sidecar.request(method, params);
       const route = typeof params.notification_route === "string" ? params.notification_route : "";
@@ -211,6 +259,7 @@ export default definePluginEntry({
         runCommand,
         executable,
         (message) => api.logger?.warn?.(message),
+        { agent: numberOneAgent, model: numberOneModel, thinking: numberOneThinking },
       );
     const controlUiToken = randomBytes(32).toString("base64url");
 

@@ -184,6 +184,37 @@ def _planning_document_discovery(root: Path) -> dict[str, Any]:
     }
 
 
+def _number_one_registration_prompt(
+    full_name: str,
+    local_discovery: dict[str, Any],
+    planning: dict[str, Any],
+) -> str:
+    """Build the first user-facing Number 1 turn for a newly registered repo."""
+    clone_path = str(local_discovery.get("path") or "the configured workspace")
+    clone_state = "a local clone was found" if local_discovery.get("cloned") else "no local clone was found"
+    plan_path = str(planning.get("path") or _DEFAULT_PLANNING_DOC)
+    plan_state = "a durable planning document was found" if planning.get("found") else "no durable planning document was found"
+    return (
+        "You are Number 1, the first in command for Make It So. This is the initial planning conversation "
+        f"for the newly registered repository {full_name}. {clone_state} at {clone_path}; {plan_state} "
+        f"(checked path: {plan_path}).\n\n"
+        "Reply directly in this Discord channel with the heading `NUMBER 1 | INITIAL PLANNING`. "
+        "Your only job in this turn is to ask the builder for the information needed to form a complete "
+        "course charter. Do not clone the repository, run a baseline, edit files, create branches, create "
+        "issues or pull requests, dispatch workers, or claim that implementation has started.\n\n"
+        "Ask these questions in a concise numbered list, adapting them to the facts above:\n"
+        "1. What outcome and user-facing goal should this course achieve?\n"
+        "2. Is this a greenfield project, an in-progress takeover, or a new feature for a shipped product?\n"
+        "3. Which repository documents are authoritative, and may Make It So clone the repository into its managed workspace if needed?\n"
+        "4. What is in scope, explicitly out of scope, and the acceptance and exit criteria?\n"
+        "5. What test plan and user-acceptance evidence are required, including screenshots when a UI is involved?\n"
+        "6. Where will the application run or be deployed, and what environments, permissions, secrets, services, or test data are required?\n"
+        "7. What autonomy and approval checkpoints should apply after the plan is agreed?\n\n"
+        "Tell the builder to answer in this channel. Explain that Number 1 will inspect the repository and "
+        "return a proposed plan for explicit approval before any work begins."
+    )
+
+
 def _workflow_label(card: QueueCard) -> str | None:
     return next((label for label in card.labels if label.startswith("workflow:")), None)
 
@@ -1265,6 +1296,7 @@ class SidecarServer:
             + (" ".join(follow_up_reasons) if follow_up_reasons else "The local clone and planning document were found.")
             + " Number 1 will follow up in chat before any work begins."
         )
+        number_one_session_key = f"make-it-so:number-one:{full_name.replace('/', '-')}"
         notification_kind = str(payload.get("notification_kind") or "stdout")
         notification_executable = str(payload.get("notification_executable") or "").strip() or None
         repo = RepoConfig(
@@ -1300,6 +1332,8 @@ class SidecarServer:
             },
             "follow_up_required": True,
             "follow_up_message": follow_up_message,
+            "number_one_prompt": _number_one_registration_prompt(full_name, local_discovery, planning),
+            "number_one_session_key": number_one_session_key,
             "notification_route": repo.notification.route,
         }
 

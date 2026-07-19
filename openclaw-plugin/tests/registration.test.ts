@@ -43,6 +43,8 @@ describe("Make It So OpenClaw registration", () => {
     const result = await deliverRegistrationFollowUp(
       {
         follow_up_message: "Repository registered. Number 1 will follow up in chat before any work begins.",
+        number_one_prompt: "You are Number 1. Ask the builder the initial planning questions.",
+        number_one_session_key: "make-it-so:number-one:example-project",
         notification_route: "channel:1483192074344988954",
       },
       async (argv, options) => {
@@ -55,13 +57,42 @@ describe("Make It So OpenClaw registration", () => {
     expect(calls).toEqual([[
       [
         "openclaw",
-        "message", "send", "--channel", "discord", "--target", "channel:1483192074344988954",
-        "--message", "Repository registered. Number 1 will follow up in chat before any work begins.",
+        "agent", "--agent", "github-captain", "--model", "codex/gpt-5.6-sol", "--thinking", "high",
+        "--channel", "discord", "--deliver", "--reply-channel", "discord", "--reply-to", "channel:1483192074344988954",
+        "--session-key", "make-it-so:number-one:example-project",
+        "--message", "You are Number 1. Ask the builder the initial planning questions.",
         "--json",
       ],
-      { timeoutMs: 90_000 },
+      { timeoutMs: 180_000 },
     ]]);
     expect(result.notification_status).toBe("sent");
+    expect(result.notification_delivery).toBe("number_one_agent");
+  });
+
+  it("falls back to a direct planning message when the Number 1 turn fails", async () => {
+    const calls: unknown[][] = [];
+    const result = await deliverRegistrationFollowUp(
+      {
+        follow_up_message: "registration receipt",
+        number_one_prompt: "NUMBER 1 | INITIAL PLANNING\nPlease answer the goal question.",
+        number_one_session_key: "make-it-so:number-one:fallback",
+        notification_route: "channel:123",
+      },
+      async (argv, options) => {
+        calls.push([argv, options]);
+        if (String(argv[1]) === "agent") return { code: 1, stderr: "model unavailable" };
+        return { code: 0, stdout: '{"id":"discord-message-2"}' };
+      },
+      "openclaw",
+    );
+
+    expect(result.notification_status).toBe("sent");
+    expect(result.notification_delivery).toBe("message_fallback");
+    expect(calls).toHaveLength(2);
+    expect(calls[1][0]).toEqual([
+      "openclaw", "message", "send", "--channel", "discord", "--target", "channel:123",
+      "--message", "NUMBER 1 | INITIAL PLANNING\nPlease answer the goal question.", "--json",
+    ]);
   });
 
   it("surfaces registration delivery failures to the dashboard caller", async () => {
