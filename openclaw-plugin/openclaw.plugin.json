@@ -35,6 +35,14 @@
         "type": "string",
         "default": "openclaw"
       },
+      "discordRouteAliases": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "string"
+        },
+        "default": {},
+        "description": "Map friendly Discord route names such as notifications to explicit OpenClaw Discord targets"
+      },
       "installSchedules": {
         "type": "boolean",
         "default": false,

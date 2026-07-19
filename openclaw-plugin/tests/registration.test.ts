@@ -41,8 +41,13 @@ describe("Make It So OpenClaw registration", () => {
   it("declares every agent tool in the host manifest contract", () => {
     const manifest = JSON.parse(
       readFileSync(resolve(process.cwd(), "openclaw.plugin.json"), "utf8"),
-    ) as { activation?: { onStartup?: boolean }; contracts?: { tools?: string[] } };
+    ) as {
+      activation?: { onStartup?: boolean };
+      contracts?: { tools?: string[] };
+      configSchema?: { properties?: { discordRouteAliases?: { type?: string } } };
+    };
     expect(manifest.activation?.onStartup).toBe(true);
+    expect(manifest.configSchema?.properties?.discordRouteAliases?.type).toBe("object");
     expect(manifest.contracts?.tools).toEqual([
       "make_it_so_course_status",
       "make_it_so_resolve_checkpoint",
