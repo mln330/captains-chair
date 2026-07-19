@@ -258,6 +258,7 @@ type RegistrationResult = {
   follow_up_required?: boolean;
   follow_up_message?: string;
   notification_status?: string;
+  notification_error?: string;
   discovery?: {
     local_clone?: { path?: string; exists?: boolean; cloned?: boolean; remote_matches?: boolean | null };
     planning_document?: { path?: string; found?: boolean; source?: string; candidates?: string[]; reason?: string };
@@ -873,13 +874,13 @@ function UsagePolicyPanel({ config, onSaved }: { config: ModelConfig; onSaved: (
 }
 
 function RegisterPanel({ onRegistered }: { onRegistered: () => void }) {
-  const [open, setOpen] = useState(false); const [fullName, setFullName] = useState(""); const [channel, setChannel] = useState("notifications"); const [saving, setSaving] = useState(false); const [error, setError] = useState<string | null>(null); const [followUp, setFollowUp] = useState<string | null>(null);
-  const register = async () => { if (saving) return; setSaving(true); setError(null); setFollowUp(null); try { const result = await callGateway<RegistrationResult>("repos/register", { full_name: normalizeGithubRepository(fullName), notification_route: channel.trim() || "notifications" }); setFullName(""); setOpen(false); setFollowUp(result.follow_up_message ?? "Repository registered. Number 1 will follow up in chat before work begins."); onRegistered(); } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); } finally { setSaving(false); } };
+  const [open, setOpen] = useState(false); const [fullName, setFullName] = useState(""); const [channel, setChannel] = useState("notifications"); const [saving, setSaving] = useState(false); const [error, setError] = useState<string | null>(null); const [followUp, setFollowUp] = useState<string | null>(null); const [notificationStatus, setNotificationStatus] = useState<string | null>(null); const [notificationError, setNotificationError] = useState<string | null>(null);
+  const register = async () => { if (saving) return; setSaving(true); setError(null); setFollowUp(null); setNotificationStatus(null); setNotificationError(null); try { const result = await callGateway<RegistrationResult>("repos/register", { full_name: normalizeGithubRepository(fullName), notification_route: channel.trim() || "notifications" }); setFullName(""); setOpen(false); setFollowUp(result.follow_up_message ?? "Repository registered. Number 1 will follow up in chat before work begins."); setNotificationStatus(result.notification_status ?? "unavailable"); setNotificationError(result.notification_error ?? null); onRegistered(); } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); } finally { setSaving(false); } };
   const submit = (event: FormEvent) => { event.preventDefault(); void register(); };
   return <section className="register-panel" aria-labelledby="register-title"><div className="section-heading"><div><p className="eyebrow">REPOSITORY REGISTRY</p><h3 id="register-title">Add a repository</h3></div><button className="secondary" onClick={() => setOpen(!open)}>{open ? "Close" : "Register repository"}</button></div>
     <p className="muted">Make It So will locate the local clone and planning document. Number 1 will follow up in chat for anything it cannot verify.</p>
     {open && <form className="register-form registration-form" onSubmit={submit}><label>GitHub repository<input required value={fullName} onChange={(event) => setFullName(event.target.value)} placeholder="owner/repository or GitHub URL" /></label><label>Discord route<input required value={channel} onChange={(event) => setChannel(event.target.value)} placeholder="notifications or channel ID" /></label><button className="primary" type="button" onClick={() => void register()} disabled={saving}>{saving ? "Registering and inspecting..." : "Register and inspect"}</button>{error && <p className="warning" role="alert">{error}</p>}</form>}
-    {followUp && <p className="inline-status" role="status">{followUp}</p>}
+    {followUp && <div className="inline-status" role="status"><p>{followUp}</p><strong className={notificationStatus === "sent" ? "success" : "warning"}>{notificationStatus === "sent" ? "Discord follow-up sent." : notificationStatus === "failed" ? `Discord follow-up failed${notificationError ? `: ${notificationError}` : "."}` : "Discord follow-up was not confirmed."}</strong></div>}
   </section>;
 }
 

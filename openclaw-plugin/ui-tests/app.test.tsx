@@ -130,6 +130,7 @@ describe("shared dashboard components", () => {
         if (path.includes("models/config")) return Promise.resolve(response({ global_profiles: {}, runtime_profiles: {}, runtimes: ["openclaw"], usage: { daily_token_limit: null, model_daily_token_limits: {}, block_on_unknown: true } }));
         if (path.includes("schedule/status")) return Promise.resolve(response({ status: "inspected", jobs: [{ name: "make-it-so-course-review", every: "2h", enabled: true, health: "healthy" }, { name: "make-it-so-reconcile", every: "5m", enabled: true, health: "healthy" }] }));
         if (path.includes("schedule/install")) return Promise.resolve(response({ jobs: [{ name: "make-it-so-course-review" }] }));
+        if (path.includes("repos/register")) return Promise.resolve(response({ status: "registered", follow_up_required: true, follow_up_message: "Repository registered. Number 1 will follow up in chat before work begins.", notification_status: "sent" }));
         return Promise.resolve(response({ status: "updated" }));
       }),
     );
@@ -219,6 +220,7 @@ describe("shared dashboard components", () => {
     expect(body).toContain("project-room");
     expect(body).not.toContain("local_path");
     expect(body).not.toContain("planning_doc");
+    await waitFor(() => expect(within(registrationPanel).getByText("Discord follow-up sent.")).toBeTruthy());
   });
 
   it("registers a greenfield course without claiming remote creation", async () => {
