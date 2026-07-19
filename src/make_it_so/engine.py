@@ -27,6 +27,7 @@ from make_it_so.models import (
     ActionKind,
     ActionScope,
     AppConfig,
+    ApplicationSurface,
     CommentTriage,
     CompletionPolicy,
     Course,
@@ -2482,8 +2483,6 @@ class ControlPlaneEngine:
     def _requires_ux_review(
         self, repo: RepoConfig, pr: dict[str, Any], decision: PlanDecision
     ) -> bool:
-        if not repo.ux_enabled:
-            return False
         files_value = pr.get("files")
         file_rows = cast(list[Any], files_value) if isinstance(files_value, list) else []
         files = [
@@ -2493,6 +2492,8 @@ class ControlPlaneEngine:
         ]
         decision_text = json.dumps(decision.model_dump(mode="json"), default=str).lower()
         return bool(
+            ApplicationSurface.WEB_UI in repo.surfaces
+            or
             any(
                 any(
                     path.startswith(pattern.rstrip("*")) or fnmatch(path, pattern)

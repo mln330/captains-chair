@@ -210,6 +210,12 @@ tempCodeRunnerFile.py
 # Ruff stuff:
 .ruff_cache/
 
+# Disposable runtime and dashboard fixtures created by integration tests.
+.test-tmp*/
+.tmp-dashboard*/
+.tmp-sidecar*/
+.tmp-pr*/
+
 # PyPI configuration file
 .pypirc
 

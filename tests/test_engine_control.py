@@ -12,6 +12,7 @@ from make_it_so.github import RepositorySnapshot
 from make_it_so.harness import HarnessExecutionError
 from make_it_so.models import (
     ActionKind,
+    ApplicationSurface,
     CourseStatus,
     EventRecord,
     HarnessConfig,
@@ -38,6 +39,20 @@ from tests.test_courses import course, ready_course, rebind_readiness_review
 class NoopNotifier:
     def send(self, event: Any) -> None:
         del event
+
+
+def test_declared_web_ui_requires_acceptance_review_when_legacy_toggle_is_disabled(tmp_path: Path) -> None:
+    repo = repo_config(tmp_path).model_copy(
+        update={"surfaces": frozenset({ApplicationSurface.WEB_UI}), "ux_enabled": False}
+    )
+    engine = object.__new__(ControlPlaneEngine)
+    decision = PlanDecision(
+        action=ActionKind.IMPLEMENT,
+        summary="Implement the dashboard",
+        reason="The planned web UI package is ready.",
+    )
+
+    assert engine._requires_ux_review(repo, {"files": []}, decision) is True  # pyright: ignore[reportPrivateUsage]
 
 
 class SuccessfulHarness:

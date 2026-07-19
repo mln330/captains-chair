@@ -241,6 +241,10 @@ Model configuration will support:
 - Qualification states of `untested`, `shadow`, `canary`, `certified`, and
   `autonomous`.
 - Presets for `Economy`, `Balanced`, `Maximum Quality`, `Local First`, and `Custom`.
+- A separate, user-selected intelligence level that adjusts reasoning effort without
+  silently replacing the chosen model. `Economy`, `Balanced`, `Deep`, and `Maximum`
+  provide a clear starting point; every role and workflow stage remains individually
+  editable for cases such as Sol at medium versus Sol at high.
 - An effective-route preview showing which configuration layer supplied each value.
 - Adapter-driven capability discovery so unavailable models or unsupported effort
   levels cannot be saved.
@@ -285,7 +289,9 @@ The dashboard will provide:
 - Attention queue for decisions and checkpoints.
 - Crew activity with worker, model, task, duration, tokens, and outcome.
 - Repository autonomy, channel routing, schedules, QA profiles, model routes,
-  reasoning levels, and token limits.
+  intelligence levels, and token limits.
+- A visible UI acceptance gate for web work, including its current verdict, evidence,
+  reviewer model, and any required repair loop.
 - PR review and comment-triage status.
 - Token usage and efficiency views by model.
 - Direct links into Workboard only when its adapter is enabled.
@@ -294,6 +300,25 @@ The dashboard will provide:
 The visual style will use restrained command-console cues, an original futuristic
 chair illustration, and subtle optimistic science-fiction influence without copying
 Star Trek logos, uniforms, ships, or trade dress.
+
+### UI Acceptance Review
+
+Web UI changes receive a dedicated, independent UI acceptance reviewer. This is not
+a general code-review pass and never shares the coder's context. The reviewer uses a
+browser-capable worker at mobile, tablet, and desktop sizes to verify three things:
+
+- **Form:** labels, validation, disabled and error states, keyboard and touch
+  interaction, and submission behavior.
+- **Function:** primary user journeys, navigation, loading, empty, and failure states.
+- **Finish:** contrast, focus visibility, responsive text and overflow, hierarchy,
+  spacing, touch targets, and cohesion with the established design language.
+
+Detected or declared web UI work always selects this gate; it cannot be silently
+downgraded to generic QA by a repository toggle. The reviewer records the tested
+flows, current commit, screenshots where supported, and actionable findings. A
+material defect routes the work through repair and a fresh UI acceptance review before
+final review or merge. The dashboard surfaces this gate alongside tests and code
+review so a completed course cannot hide missing user acceptance evidence.
 
 The README will include generated hero artwork, project badges and icons, architecture
 and SDLC diagrams, screenshots, setup instructions, model and token guidance, and an

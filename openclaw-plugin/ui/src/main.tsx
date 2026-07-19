@@ -208,6 +208,7 @@ type ScheduleJob = { name: string; every: string; id?: string | null; enabled: b
 type ScheduleStatus = { status: string; jobs: ScheduleJob[] };
 type UpdatePayload = Record<string, unknown>;
 type ModelPreset = "economy" | "balanced" | "maximum_quality" | "local_first";
+type IntelligenceLevel = "economy" | "balanced" | "deep" | "maximum";
 
 const CONTROL_UI_TOKEN = document
   .querySelector<HTMLMetaElement>('meta[name="make-it-so-control-token"]')
@@ -554,6 +555,24 @@ const MODEL_PRESET_LABELS: Record<ModelPreset, string> = {
   local_first: "Local first",
 };
 
+const INTELLIGENCE_LEVEL_LABELS: Record<IntelligenceLevel, string> = {
+  economy: "Economy - one step lighter",
+  balanced: "Balanced - recommended per role",
+  deep: "Deep - one step stronger",
+  maximum: "Maximum - highest supported",
+};
+
+function routesForIntelligence(level: IntelligenceLevel, routes: Record<string, EditableRoute>): Record<string, EditableRoute> {
+  const efforts = ["low", "medium", "high", "xhigh"];
+  const delta = level === "economy" ? -1 : level === "deep" ? 1 : 0;
+  return Object.fromEntries(ROUTE_DEFAULTS.map(({ role, effort }) => {
+    const current = routes[role];
+    if (level === "maximum") return [role, { ...current, effort: "xhigh" }];
+    const defaultIndex = efforts.indexOf(effort);
+    return [role, { ...current, effort: efforts[Math.max(0, Math.min(efforts.length - 1, defaultIndex + delta))] }];
+  }));
+}
+
 function presetRoutes(preset: ModelPreset): Record<string, EditableRoute> {
   const expensiveRoles = new Set([
     "strategist", "course_verifier", "baseline", "baseline_analyst", "planner",
@@ -610,12 +629,13 @@ function RepoPanel({ repo, onSave }: { repo: Repo; onSave: (name: string, payloa
   const [qaProfiles, setQaProfiles] = useState<QAProfile[]>(() => (repo.qa_profiles ?? []).map(profileForEditing));
   const [routes, setRoutes] = useState<Record<string, EditableRoute>>(() => initialRoutes(repo));
   const [preset, setPreset] = useState<ModelPreset>("balanced");
+  const [intelligence, setIntelligence] = useState<IntelligenceLevel>("balanced");
   const [surface, setSurface] = useState(repo.surfaces?.[0] ?? "custom");
   const [saving, setSaving] = useState(false);
   useEffect(() => {
     setMode(repo.operation_mode); setCompletion(repo.completion_policy); setAllowMerge(repo.allow_autonomous_merge ?? false);
     setChannel(repo.notification_route ?? ""); setScheduleEnabled(repo.schedule_enabled !== false); setQaProfiles((repo.qa_profiles ?? []).map(profileForEditing));
-    setRoutes(initialRoutes(repo)); setPreset("balanced"); setSurface(repo.surfaces?.[0] ?? "custom");
+    setRoutes(initialRoutes(repo)); setPreset("balanced"); setIntelligence("balanced"); setSurface(repo.surfaces?.[0] ?? "custom");
   }, [repo]);
   const save = async () => {
     setSaving(true);
@@ -643,6 +663,9 @@ function RepoPanel({ repo, onSave }: { repo: Repo; onSave: (name: string, payloa
   const reviewCycles = workboard?.review_cycles ?? 0;
   const reviewStatus = statusLabel(workboard?.review_status);
   const testStatus = statusLabel(workboard?.test_status);
+  const uxStage = workboard?.stage_history?.find((item) => item.stage === "ux_review");
+  const needsUiAcceptance = repo.surfaces?.includes("web_ui") || Boolean(uxStage);
+  const uiAcceptance = !needsUiAcceptance ? "n/a" : (uxStage?.blocked ?? 0) > 0 && (uxStage?.done ?? 0) === 0 ? "blocked" : (uxStage?.done ?? 0) > 0 ? "passed" : "required";
   const checks = checkStatus(github);
   const terminal = workboard?.terminal || workboard?.status === "completed" || repo.state === "merged";
   const blockers = workboard?.current_blockers ?? workboard?.blockers ?? (terminal ? 0 : workboard?.counts?.blocked ?? 0);
@@ -657,6 +680,7 @@ function RepoPanel({ repo, onSave }: { repo: Repo; onSave: (name: string, payloa
       <Metric label="review cycles" value={reviewCycles} />
       <Metric label="reviews" value={reviewStatus} tone={reviewStatus === "blocked" ? "danger" : reviewStatus === "passed" ? "good" : "neutral"} />
       <Metric label="tests" value={testStatus} tone={testStatus === "blocked" ? "danger" : testStatus === "passed" ? "good" : "neutral"} />
+      {needsUiAcceptance && <Metric label="UI acceptance" value={uiAcceptance} tone={uiAcceptance === "blocked" ? "danger" : uiAcceptance === "passed" ? "good" : "warn"} />}
       <Metric label="checks" value={checks} tone={checks === "failing" ? "danger" : checks === "passing" ? "good" : checks === "running" ? "warn" : "neutral"} />
       <Metric label="blockers" value={blockers} tone={blockers ? "danger" : "good"} />
     </div>
@@ -673,9 +697,9 @@ function RepoPanel({ repo, onSave }: { repo: Repo; onSave: (name: string, payloa
         <label className="check-label"><input type="checkbox" checked={allowMerge} onChange={(event) => setAllowMerge(event.target.checked)} /> Allow autonomous merge</label>
         <label className="check-label"><input type="checkbox" checked={scheduleEnabled} onChange={(event) => setScheduleEnabled(event.target.checked)} /> Include in scheduled runs</label>
       </div>
-      <div className="settings-grid"><label>Route preset<select aria-label="Route preset" value={preset} onChange={(event) => setPreset(event.target.value as ModelPreset)}>{Object.entries(MODEL_PRESET_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><button className="secondary compact" type="button" onClick={() => setRoutes(presetRoutes(preset))}>Apply preset</button></div>
+      <div className="settings-grid"><label>Route preset<select aria-label="Route preset" value={preset} onChange={(event) => setPreset(event.target.value as ModelPreset)}>{Object.entries(MODEL_PRESET_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><button className="secondary compact" type="button" onClick={() => setRoutes(presetRoutes(preset))}>Apply preset</button><label>Intelligence level<select aria-label="Intelligence level" value={intelligence} onChange={(event) => setIntelligence(event.target.value as IntelligenceLevel)}>{Object.entries(INTELLIGENCE_LEVEL_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><button className="secondary compact" type="button" onClick={() => setRoutes(routesForIntelligence(intelligence, routes))}>Apply intelligence</button></div>
       <section className="detail-section" aria-labelledby={`qa-profiles-${repo.full_name}`}><div className="section-heading"><h4 id={`qa-profiles-${repo.full_name}`}>QA profiles</h4><button className="secondary compact" type="button" onClick={() => setQaProfiles([...qaProfiles, profileForEditing({ key: `qa-${qaProfiles.length + 1}`, title: "New QA profile", surfaces: [surface], checks: [], required_tools: [], reviewer_role: "qa_assistant", enabled: true })])}>Add QA profile</button></div>{qaProfiles.length ? <div className="package-list">{qaProfiles.map((profile, index) => <fieldset className="qa-profile" key={`${profile.key}-${index}`}><legend>{profile.title || profile.key}</legend><div className="settings-grid"><label>Profile key<input value={profile.key} onChange={(event) => setQaProfiles(qaProfiles.map((item, itemIndex) => itemIndex === index ? { ...item, key: event.target.value } : item))} /></label><label>Title<input value={profile.title} onChange={(event) => setQaProfiles(qaProfiles.map((item, itemIndex) => itemIndex === index ? { ...item, title: event.target.value } : item))} /></label><label>Surface<select value={profile.surfaces?.[0] ?? "custom"} onChange={(event) => setQaProfiles(qaProfiles.map((item, itemIndex) => itemIndex === index ? { ...item, surfaces: [event.target.value] } : item))}><option value="web_ui">Web UI</option><option value="cli">CLI</option><option value="api">API</option><option value="library">Library</option><option value="data_pipeline">Data pipeline</option><option value="custom">Custom</option></select></label><label>Reviewer role<input value={profile.reviewer_role ?? "qa_assistant"} onChange={(event) => setQaProfiles(qaProfiles.map((item, itemIndex) => itemIndex === index ? { ...item, reviewer_role: event.target.value } : item))} /></label><label className="wide">Checks<textarea value={(profile.checks ?? []).join("\n")} onChange={(event) => setQaProfiles(qaProfiles.map((item, itemIndex) => itemIndex === index ? { ...item, checks: splitLines(event.target.value) } : item))} placeholder="One deterministic check per line" /></label><label className="wide">Required tools<textarea value={(profile.required_tools ?? []).join("\n")} onChange={(event) => setQaProfiles(qaProfiles.map((item, itemIndex) => itemIndex === index ? { ...item, required_tools: splitLines(event.target.value) } : item))} placeholder="One tool per line" /></label><label className="check-label"><input type="checkbox" checked={profile.enabled !== false} onChange={(event) => setQaProfiles(qaProfiles.map((item, itemIndex) => itemIndex === index ? { ...item, enabled: event.target.checked } : item))} /> Enabled</label><button className="secondary compact" type="button" onClick={() => setQaProfiles(qaProfiles.filter((_item, itemIndex) => itemIndex !== index))}>Remove profile</button></div></fieldset>)}</div> : <p className="muted">No repository-specific QA profiles configured.</p>}</section>
-      <div className="route-grid">{ROUTE_DEFAULTS.map(({ role, label }) => <fieldset key={role}><legend>{label}</legend><label>Model<input value={routes[role].model} onChange={(event) => setRoutes({ ...routes, [role]: { ...routes[role], model: event.target.value } })} /></label><label>Reasoning<select value={routes[role].effort} onChange={(event) => setRoutes({ ...routes, [role]: { ...routes[role], effort: event.target.value } })}><option>low</option><option>medium</option><option>high</option><option>xhigh</option></select></label></fieldset>)}</div>
+      <div className="route-grid">{ROUTE_DEFAULTS.map(({ role, label }) => <fieldset key={role}><legend>{label}</legend><label>Model<input value={routes[role].model} onChange={(event) => setRoutes({ ...routes, [role]: { ...routes[role], model: event.target.value } })} /></label><label>Intelligence<select value={routes[role].effort} onChange={(event) => setRoutes({ ...routes, [role]: { ...routes[role], effort: event.target.value } })}><option>low</option><option>medium</option><option>high</option><option>xhigh</option></select></label></fieldset>)}</div>
       <button className="primary compact" onClick={save} disabled={saving}>{saving ? "Saving..." : "Save controls"}</button>
     </details>
   </section>;
@@ -685,6 +709,7 @@ function ModelPolicyPanel({ config, onSaved }: { config: ModelConfig; onSaved: (
   const [scope, setScope] = useState<"global" | "runtime">("global");
   const [runtime, setRuntime] = useState(config.runtimes[0] ?? "");
   const [preset, setPreset] = useState<ModelPreset>("balanced");
+  const [intelligence, setIntelligence] = useState<IntelligenceLevel>("balanced");
   const [routes, setRoutes] = useState<Record<string, EditableRoute>>(() => initialRoutesFromProfiles(config.global_profiles));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -692,7 +717,7 @@ function ModelPolicyPanel({ config, onSaved }: { config: ModelConfig; onSaved: (
   useEffect(() => {
     if (scope === "runtime" && !runtime && config.runtimes[0]) setRuntime(config.runtimes[0]);
     setRoutes(initialRoutesFromProfiles(selectedProfiles));
-    setPreset("balanced");
+    setPreset("balanced"); setIntelligence("balanced");
     setError(null);
   }, [config, scope, runtime]);
   const save = async () => {
@@ -715,8 +740,8 @@ function ModelPolicyPanel({ config, onSaved }: { config: ModelConfig; onSaved: (
     <p className="muted">Runtime routes override global routes. Repository, course, package, and stage routes can refine them further.</p>
     <details className="settings"><summary>Configure global/runtime routes</summary>
       <div className="settings-grid"><label>Configuration layer<select value={scope} onChange={(event) => setScope(event.target.value as "global" | "runtime")}><option value="global">Global defaults</option><option value="runtime">Runtime override</option></select></label>{scope === "runtime" && <label>Runtime<select value={runtime} onChange={(event) => setRuntime(event.target.value)} disabled={!config.runtimes.length}>{config.runtimes.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>}</div>
-      <div className="settings-grid"><label>Route preset<select aria-label="Route preset" value={preset} onChange={(event) => setPreset(event.target.value as ModelPreset)}>{Object.entries(MODEL_PRESET_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><button className="secondary compact" type="button" onClick={() => setRoutes(presetRoutes(preset))}>Apply preset</button></div>
-      <div className="route-grid">{ROUTE_DEFAULTS.map(({ role, label }) => <fieldset key={role}><legend>{label}</legend><label>Model<input value={routes[role].model} onChange={(event) => setRoutes({ ...routes, [role]: { ...routes[role], model: event.target.value } })} /></label><label>Reasoning<select value={routes[role].effort} onChange={(event) => setRoutes({ ...routes, [role]: { ...routes[role], effort: event.target.value } })}><option>low</option><option>medium</option><option>high</option><option>xhigh</option></select></label></fieldset>)}</div>
+      <div className="settings-grid"><label>Route preset<select aria-label="Route preset" value={preset} onChange={(event) => setPreset(event.target.value as ModelPreset)}>{Object.entries(MODEL_PRESET_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><button className="secondary compact" type="button" onClick={() => setRoutes(presetRoutes(preset))}>Apply preset</button><label>Intelligence level<select aria-label="Intelligence level" value={intelligence} onChange={(event) => setIntelligence(event.target.value as IntelligenceLevel)}>{Object.entries(INTELLIGENCE_LEVEL_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><button className="secondary compact" type="button" onClick={() => setRoutes(routesForIntelligence(intelligence, routes))}>Apply intelligence</button></div>
+      <div className="route-grid">{ROUTE_DEFAULTS.map(({ role, label }) => <fieldset key={role}><legend>{label}</legend><label>Model<input value={routes[role].model} onChange={(event) => setRoutes({ ...routes, [role]: { ...routes[role], model: event.target.value } })} /></label><label>Intelligence<select value={routes[role].effort} onChange={(event) => setRoutes({ ...routes, [role]: { ...routes[role], effort: event.target.value } })}><option>low</option><option>medium</option><option>high</option><option>xhigh</option></select></label></fieldset>)}</div>
       <button className="primary compact" onClick={save} disabled={saving || (scope === "runtime" && !runtime)}>{saving ? "Saving..." : "Save global/runtime routes"}</button>{error && <p className="warning" role="alert">{error}</p>}
     </details>
   </section>;
@@ -851,6 +876,7 @@ function CourseModelSettings({ repository, repo, course, onSaved }: { repository
   const [stageName, setStageName] = useState("implementation");
   const [packageKey, setPackageKey] = useState(course.work_packages[0]?.key ?? "");
   const [preset, setPreset] = useState<ModelPreset>("balanced");
+  const [intelligence, setIntelligence] = useState<IntelligenceLevel>("balanced");
   const [routes, setRoutes] = useState<Record<string, EditableRoute>>(() => initialRoutesFromProfiles(course.model_profiles));
   const [stageRoute, setStageRoute] = useState<EditableRoute>(() => initialStageRoute(course.model_profiles?.["stage:implementation"], stageName));
   const [saving, setSaving] = useState(false);
@@ -861,7 +887,7 @@ function CourseModelSettings({ repository, repo, course, onSaved }: { repository
   useEffect(() => {
     if (layer === "stage") setStageRoute(initialStageRoute(stageProfiles?.[`stage:${stageName}`], stageName));
     else setRoutes(initialRoutesFromProfiles(selectedProfiles));
-    setPreset("balanced");
+    setPreset("balanced"); setIntelligence("balanced");
     setError(null);
   }, [course, layer, packageKey, stageName, stageScope]);
   const save = async () => {
@@ -898,8 +924,8 @@ function CourseModelSettings({ repository, repo, course, onSaved }: { repository
       {layer === "stage" && <><label>Stage scope<select value={stageScope} onChange={(event) => setStageScope(event.target.value as "course" | "work_package")}><option value="course">Course stage</option><option value="work_package">Work package stage</option></select></label><label>Stage name<input value={stageName} onChange={(event) => setStageName(event.target.value)} pattern="[A-Za-z0-9._-]+" /></label></>}
       {(layer === "work_package" || (layer === "stage" && stageScope === "work_package")) && <label>Work package<select value={packageKey} onChange={(event) => setPackageKey(event.target.value)} disabled={!course.work_packages.length}>{course.work_packages.map((item) => <option key={item.key} value={item.key}>{item.key}</option>)}</select></label>}
     </div>
-    {layer !== "stage" && <div className="settings-grid"><label>Route preset<select aria-label="Course route preset" value={preset} onChange={(event) => setPreset(event.target.value as ModelPreset)}>{Object.entries(MODEL_PRESET_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><button className="secondary compact" type="button" onClick={() => setRoutes(presetRoutes(preset))}>Apply course preset</button></div>}
-    {layer === "stage" ? <fieldset className="stage-route"><legend>{stageName || "Workflow stage"} route</legend><label>Model<input value={stageRoute.model} onChange={(event) => setStageRoute({ ...stageRoute, model: event.target.value })} /></label><label>Reasoning<select value={stageRoute.effort} onChange={(event) => setStageRoute({ ...stageRoute, effort: event.target.value })}><option>low</option><option>medium</option><option>high</option><option>xhigh</option></select></label></fieldset> : <div className="route-grid">{ROUTE_DEFAULTS.map(({ role, label }) => <fieldset key={role}><legend>{label}</legend><label>Model<input value={routes[role].model} onChange={(event) => setRoutes({ ...routes, [role]: { ...routes[role], model: event.target.value } })} /></label><label>Reasoning<select value={routes[role].effort} onChange={(event) => setRoutes({ ...routes, [role]: { ...routes[role], effort: event.target.value } })}><option>low</option><option>medium</option><option>high</option><option>xhigh</option></select></label></fieldset>)}</div>}
+    {layer !== "stage" && <div className="settings-grid"><label>Route preset<select aria-label="Course route preset" value={preset} onChange={(event) => setPreset(event.target.value as ModelPreset)}>{Object.entries(MODEL_PRESET_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><button className="secondary compact" type="button" onClick={() => setRoutes(presetRoutes(preset))}>Apply course preset</button><label>Intelligence level<select aria-label="Course intelligence level" value={intelligence} onChange={(event) => setIntelligence(event.target.value as IntelligenceLevel)}>{Object.entries(INTELLIGENCE_LEVEL_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><button className="secondary compact" type="button" onClick={() => setRoutes(routesForIntelligence(intelligence, routes))}>Apply course intelligence</button></div>}
+    {layer === "stage" ? <fieldset className="stage-route"><legend>{stageName || "Workflow stage"} route</legend><label>Model<input value={stageRoute.model} onChange={(event) => setStageRoute({ ...stageRoute, model: event.target.value })} /></label><label>Intelligence<select value={stageRoute.effort} onChange={(event) => setStageRoute({ ...stageRoute, effort: event.target.value })}><option>low</option><option>medium</option><option>high</option><option>xhigh</option></select></label></fieldset> : <div className="route-grid">{ROUTE_DEFAULTS.map(({ role, label }) => <fieldset key={role}><legend>{label}</legend><label>Model<input value={routes[role].model} onChange={(event) => setRoutes({ ...routes, [role]: { ...routes[role], model: event.target.value } })} /></label><label>Intelligence<select value={routes[role].effort} onChange={(event) => setRoutes({ ...routes, [role]: { ...routes[role], effort: event.target.value } })}><option>low</option><option>medium</option><option>high</option><option>xhigh</option></select></label></fieldset>)}</div>}
     <section className="route-preview" aria-labelledby={`route-preview-${course.key}`}><h3 id={`route-preview-${course.key}`}>Effective route preview</h3>{ROUTE_DEFAULTS.map(({ role, label, model, effort }) => { const route = effectiveRoute(repo, course, previewPackage, role, model, effort, stageName); return <div key={role}><span>{label}</span><strong>{route.model}</strong><small>{route.effort} / {route.source}</small></div>; })}</section>
     <button className="primary compact" onClick={save} disabled={saving || ((layer === "work_package" || (layer === "stage" && stageScope === "work_package")) && !selectedPackage)}>{saving ? "Saving..." : "Save model routes"}</button>{error && <p className="warning" role="alert">{error}</p>}
   </details>;

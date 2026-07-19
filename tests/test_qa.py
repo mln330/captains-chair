@@ -79,6 +79,18 @@ def test_web_ui_selection_uses_dedicated_ux_worker(tmp_path: Path) -> None:
     assert selection.worker_roles[selection.profiles[0].key] == "ux_reviewer"
 
 
+def test_web_ui_selection_cannot_be_downgraded_by_legacy_ux_toggle(tmp_path: Path) -> None:
+    repo = repo_config(tmp_path).model_copy(
+        update={"surfaces": frozenset({ApplicationSurface.WEB_UI}), "ux_enabled": False}
+    )
+
+    selection = select_qa(repo, [])
+
+    assert selection.profiles[0].key == "web-ui-qa"
+    assert selection.profiles[0].required_tools == ("browser",)
+    assert selection.worker_roles["web-ui-qa"] == "ux_reviewer"
+
+
 def test_surface_inference_covers_api_library_infrastructure_and_cli_markers() -> None:
     surfaces = infer_surfaces(
         [

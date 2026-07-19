@@ -209,6 +209,26 @@ describe("shared dashboard components", () => {
     expect(screen.getAllByDisplayValue("ollama/qualified-local").length).toBeGreaterThan(0);
   });
 
+  it("changes intelligence without silently changing selected models", async () => {
+    render(<App />);
+    await waitFor(() => expect(screen.getAllByText("example/project").length).toBeGreaterThan(0));
+
+    fireEvent.click(screen.getByText("Repository controls"));
+    const strategistModel = screen.getAllByDisplayValue("codex/gpt-5.6-sol")[0] as HTMLInputElement;
+    fireEvent.change(screen.getAllByLabelText("Intelligence level")[0], { target: { value: "deep" } });
+    fireEvent.click(screen.getAllByRole("button", { name: "Apply intelligence" })[0]);
+
+    expect(strategistModel.value).toBe("codex/gpt-5.6-sol");
+    expect(screen.getAllByDisplayValue("xhigh").length).toBeGreaterThan(0);
+  });
+
+  it("shows UI acceptance as a first-class repository fact for web work", async () => {
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText("UI acceptance")).toBeTruthy());
+    expect(screen.getAllByText("required").length).toBeGreaterThan(0);
+  });
+
   it("saves token safeguards and model-specific limits", async () => {
     const fetchMock = vi.mocked(globalThis.fetch);
     render(<App />);
