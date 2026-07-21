@@ -58,6 +58,50 @@ def test_managed_completion_proof_preserves_policy_marker_from_summary() -> None
     assert proof[0]["note"].endswith("AUTO_MERGE_ALLOWED:749a3a45de43fc2d6eeaf1cb2d2a91b549fd04b3")
 
 
+def test_managed_completion_proof_persists_nested_test_evidence_in_flat_workboard_note() -> None:
+    proof = _managed_completion_proof(
+        (
+            {
+                "status": "passed",
+                "note": "pytest passed",
+                "test_evidence": {
+                    "status": "passed",
+                    "head_sha": "abcdef1234567",
+                    "commands": ["pytest -q"],
+                    "tests_total": 4,
+                    "tests_passed": 4,
+                    "tests_failed": 0,
+                    "tests_skipped": 0,
+                    "pass_rate": 100,
+                    "screenshots": [],
+                },
+            },
+        )
+    )
+
+    assert "MAKE_IT_SO_TEST_EVIDENCE_JSON:" in proof[0]["note"]
+
+
+def test_card_rehydrates_managed_metadata_from_workboard_notes() -> None:
+    raw = {
+        "id": "card-1",
+        "title": "Test",
+        "status": "done",
+        "notes": (
+            "Repository: example/project\n"
+            "MAKE_IT_SO_METADATA_JSON:{\"courseKey\":\"course-1\",\"workPackageKey\":\"package-1\","
+            "\"testEvidenceRequired\":true}"
+        ),
+        "metadata": {"proof": [{"status": "passed", "note": "pytest"}]},
+    }
+
+    card = OpenClawWorkboardAdapter._card(raw)  # pyright: ignore[reportPrivateUsage]
+
+    assert card.metadata["courseKey"] == "course-1"
+    assert card.metadata["workPackageKey"] == "package-1"
+    assert card.metadata["testEvidenceRequired"] is True
+
+
 @pytest.mark.parametrize(
     "output",
     (
@@ -131,6 +175,56 @@ def test_recovery_treats_missing_session_as_ended() -> None:
     assert recovered == ("card-1",)
 
 
+def test_recovery_uses_loose_workboard_session_link() -> None:
+    commands: list[Sequence[str]] = []
+
+    def runner(
+        command: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        input_text: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        del cwd, input_text, timeout
+        commands.append(command)
+        if "sessions" in command:
+            return CommandResult(0, "session ended: direct launch exited\n", "")
+        if "workboard.cards.reclaim" in command:
+            return CommandResult(
+                0,
+                json.dumps({"card": {"id": "card-1", "title": "Test", "status": "review"}}),
+                "",
+            )
+        raise AssertionError(f"unexpected command: {command}")
+
+    adapter = OpenClawWorkboardAdapter(config(), runner)
+    card = QueueCard(
+        id="card-1",
+        title="Test",
+        status=QueueStatus.RUNNING,
+        agent_id="coder",
+        linked_session_id="agent:coder:subagent:workboard-card-1",
+    )
+
+    assert adapter.recover_ended_workers("board", [card]) == ("card-1",)
+    session_command = next(command for command in commands if "sessions" in command)
+    assert "agent:coder:subagent:workboard-card-1" in session_command
+
+
+def test_card_preserves_loose_workboard_session_link() -> None:
+    raw = {
+        "id": "card-1",
+        "title": "Test",
+        "status": "running",
+        "agentId": "coder",
+        "sessionId": "agent:coder:subagent:workboard-card-1",
+    }
+
+    card = OpenClawWorkboardAdapter._card(raw)  # pyright: ignore[reportPrivateUsage]
+
+    assert card.linked_session_id == "agent:coder:subagent:workboard-card-1"
+
+
 def test_create_card_uses_gateway_rpc_and_preserves_worker_metadata(tmp_path: Path) -> None:
     commands: list[Sequence[str]] = []
 
@@ -199,6 +293,7 @@ def test_create_card_uses_gateway_rpc_and_preserves_worker_metadata(tmp_path: Pa
     assert params["workspace"]["kind"] == "worktree"
     assert params["workspace"]["pushBranch"] == "feature/current-pr"
     assert params["metadata"] == {"courseKey": "course-1", "workPackageKey": "package-1"}
+    assert "MAKE_IT_SO_METADATA_JSON:" in params["notes"]
     assert card.workspace == WorkspaceRef(
         kind="worktree",
         path=tmp_path,
@@ -699,6 +794,46 @@ def test_recover_expired_claim_without_session_lookup() -> None:
     assert any("workboard.cards.reclaim" in command for command in commands)
 
 
+def test_recover_stale_heartbeat_before_lease_expiry_without_session_lookup() -> None:
+    commands: list[Sequence[str]] = []
+
+    def runner(
+        command: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        input_text: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        del cwd, input_text, timeout
+        commands.append(command)
+        if "workboard.cards.reclaim" in command:
+            return CommandResult(
+                0,
+                json.dumps({"card": {"id": "card-1", "title": "Test", "status": "review"}}),
+                "",
+            )
+        raise AssertionError(f"unexpected command: {command}")
+
+    adapter = OpenClawWorkboardAdapter(config(), runner)
+    card = QueueCard(
+        id="card-1",
+        title="Test",
+        status=QueueStatus.RUNNING,
+        metadata={
+            "claim": {
+                "ownerId": "tester",
+                "claimedAt": 1,
+                "lastHeartbeatAt": 1,
+                "expiresAt": 9999999999999,
+            },
+        },
+    )
+
+    assert adapter.recover_ended_workers("board", [card]) == ("card-1",)
+    assert not any("sessions" in command for command in commands)
+    assert any("workboard.cards.reclaim" in command for command in commands)
+
+
 def test_recover_stopped_attempt_without_session_lookup() -> None:
     commands: list[Sequence[str]] = []
 
@@ -1072,6 +1207,69 @@ def test_managed_dispatch_routes_coder_through_direct_codex(
     execution = cards["card-1"]["metadata"]["proof"][0]["execution"]
     assert execution["runtime"] == "codex"
     assert execution["usage"]["input_tokens"] == 100
+
+
+def test_host_controller_publishes_coder_worktree_without_sandbox_network(
+    tmp_path: Path,
+) -> None:
+    calls: list[list[str]] = []
+    pr_list_calls = 0
+
+    def runner(
+        command: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        input_text: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        del cwd, input_text, timeout
+        nonlocal pr_list_calls
+        argv = list(command)
+        calls.append(argv)
+        if argv[:4] == ["git", "-C", str(tmp_path), "status"]:
+            return CommandResult(0, " M apps/server/src/index.ts\n", "")
+        if argv[:4] == ["git", "-C", str(tmp_path), "symbolic-ref"]:
+            return CommandResult(0, "refs/remotes/origin/HEAD -> refs/remotes/origin/main\n", "")
+        if argv[:4] == ["git", "-C", str(tmp_path), "rev-parse"]:
+            return CommandResult(0, "a" * 40, "")
+        if argv[:3] == ["gh", "pr", "list"]:
+            pr_list_calls += 1
+            return CommandResult(
+                0,
+                "[]" if pr_list_calls == 1 else json.dumps(
+                    [{"number": 7, "url": "https://github.com/mln330/example/pull/7", "isDraft": False}]
+                ),
+                "",
+            )
+        if argv[:3] == ["gh", "pr", "create"]:
+            return CommandResult(0, "https://github.com/mln330/example/pull/7\n", "")
+        return CommandResult(0, "", "")
+
+    card = QueueCard(
+        id="coder-card",
+        title="Implement the viewer",
+        status=QueueStatus.RUNNING,
+        labels=("stage:implementation",),
+        source_url="https://github.com/mln330/example",
+        workspace=WorkspaceRef(
+            kind="worktree",
+            path=tmp_path,
+            branch="make_it_so/work/coder-card",
+        ),
+    )
+    result = OpenClawWorkboardAdapter(config(), runner)._publish_worker_changes(  # pyright: ignore[reportPrivateUsage]
+        card,
+        WorkerExecutionResult(
+            status="completed",
+            summary="implemented viewer",
+            proof=({"status": "passed", "note": "targeted tests passed"},),
+        ),
+    )
+
+    assert result.proof[0]["url"] == "https://github.com/mln330/example/pull/7"
+    assert "head aaaaaaaaaa" in result.proof[0]["note"]
+    assert ["git", "-C", str(tmp_path), "push", "--set-upstream", "origin", "HEAD:refs/heads/make_it_so/work/coder-card"] in calls
+    assert any(argv[:3] == ["gh", "pr", "create"] for argv in calls)
 
 
 def test_managed_dispatch_collapses_multiple_worker_proof_records(

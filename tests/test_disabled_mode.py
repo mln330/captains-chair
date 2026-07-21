@@ -14,12 +14,12 @@ from tests.helpers import app_config, model_policy, repo_config
 
 class ExplodingGitHub:
     def snapshot(self, repo: Any) -> Any:
-        raise AssertionError("disabled Number 1 must not read GitHub")
+        raise AssertionError("disabled Number One must not read GitHub")
 
 
 class ExplodingHarness:
     def run(self, **kwargs: Any) -> Any:
-        raise AssertionError("disabled Number 1 must not invoke a model")
+        raise AssertionError("disabled Number One must not invoke a model")
 
 
 class MemoryNotifier:

@@ -48,6 +48,15 @@
       "title": "CompletionPolicy",
       "type": "string"
     },
+    "CourseKind": {
+      "enum": [
+        "greenfield",
+        "takeover",
+        "feature"
+      ],
+      "title": "CourseKind",
+      "type": "string"
+    },
     "DirectOrchestratorConfig": {
       "additionalProperties": false,
       "description": "Durable board-free orchestration for Codex and portable runtimes.",
@@ -641,6 +650,117 @@
       "title": "NotificationConfig",
       "type": "object"
     },
+    "OnboardingPreferences": {
+      "additionalProperties": false,
+      "description": "Structured choices captured before Number One begins the conversation.",
+      "properties": {
+        "phase": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CourseKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "goal": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Goal"
+        },
+        "clone_allowed": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Clone Allowed"
+        },
+        "planning_doc_choice": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Planning Doc Choice"
+        },
+        "detected_surface": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ApplicationSurface"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "uat_required": {
+          "default": true,
+          "title": "Uat Required",
+          "type": "boolean"
+        },
+        "screenshots_required": {
+          "default": false,
+          "title": "Screenshots Required",
+          "type": "boolean"
+        },
+        "deployment_required": {
+          "default": false,
+          "title": "Deployment Required",
+          "type": "boolean"
+        },
+        "deployment_authority": {
+          "default": "always_ask",
+          "enum": [
+            "always_ask",
+            "non_production"
+          ],
+          "title": "Deployment Authority",
+          "type": "string"
+        },
+        "checkpoint_policy": {
+          "default": "major_changes",
+          "enum": [
+            "each_milestone",
+            "major_changes",
+            "updates_only"
+          ],
+          "title": "Checkpoint Policy",
+          "type": "string"
+        },
+        "intelligence_level": {
+          "default": "balanced",
+          "enum": [
+            "economy",
+            "balanced",
+            "deep",
+            "maximum"
+          ],
+          "title": "Intelligence Level",
+          "type": "string"
+        }
+      },
+      "title": "OnboardingPreferences",
+      "type": "object"
+    },
     "OpenClawWorkboardConfig": {
       "additionalProperties": false,
       "properties": {
@@ -999,6 +1119,22 @@
             "webhook_env": null,
             "executable": null,
             "settings": {}
+          }
+        },
+        "onboarding": {
+          "$ref": "#/$defs/OnboardingPreferences",
+          "default": {
+            "phase": null,
+            "goal": null,
+            "clone_allowed": null,
+            "planning_doc_choice": null,
+            "detected_surface": null,
+            "uat_required": true,
+            "screenshots_required": false,
+            "deployment_required": false,
+            "deployment_authority": "always_ask",
+            "checkpoint_policy": "major_changes",
+            "intelligence_level": "balanced"
           }
         },
         "model_profiles": {

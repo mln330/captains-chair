@@ -14,6 +14,7 @@ from make_it_so.direct_orchestrator import DirectOrchestrator
 from make_it_so.direct_workers import (
     CommandWorkerExecutor,
     WorkerExecutionResult,
+    _codex_additional_writable_dirs,  # pyright: ignore[reportPrivateUsage]
     _codex_usage,  # pyright: ignore[reportPrivateUsage]
     _worker_output_schema,  # pyright: ignore[reportPrivateUsage]
     _worker_prompt,  # pyright: ignore[reportPrivateUsage]
@@ -442,6 +443,47 @@ def test_openclaw_retry_uses_fresh_attempt_session_key(tmp_path: Path) -> None:
     assert session_keys[0] != session_keys[1]
     assert session_keys[0].endswith(":attempt-one")
     assert session_keys[1].endswith(":attempt-two")
+
+
+def test_codex_worker_adds_linked_worktree_git_metadata_to_sandbox(tmp_path: Path) -> None:
+    workspace = tmp_path / "worktree"
+    workspace.mkdir()
+    common_git = tmp_path / "repo" / ".git"
+    worktree_admin = common_git / "worktrees" / "attempt"
+    worktree_admin.mkdir(parents=True)
+    (worktree_admin / "commondir").write_text("../..\n", encoding="utf-8")
+    (workspace / ".git").write_text(
+        f"gitdir: {worktree_admin.resolve()}\n",
+        encoding="utf-8",
+    )
+
+    writable = _codex_additional_writable_dirs(workspace)
+
+    assert writable == (worktree_admin.resolve(), common_git.resolve())
+
+    runner = StructuredWorkerRunner()
+    executor = CommandWorkerExecutor("codex", "codex", runner)
+    executor.execute(
+        QueueCard(
+            id="implementation-linked-worktree",
+            title="Implement the bounded change",
+            status=QueueStatus.READY,
+            labels=("stage:implementation",),
+        ),
+        attempt_id="attempt-linked-worktree",
+        workspace=workspace,
+        model="codex/gpt-5.3-codex-spark",
+        timeout_seconds=60,
+    )
+    command = runner.commands[0]
+    add_dirs = [
+        command[index + 1]
+        for index, value in enumerate(command)
+        if value == "--add-dir"
+    ]
+    assert add_dirs == [str(worktree_admin.resolve()), str(common_git.resolve())]
+    assert command[-1] == "-"
+    assert all(command.index("--add-dir") < command.index("-") for _ in add_dirs)
 
 
 def test_worker_execution_result_rejects_unproven_completion() -> None:

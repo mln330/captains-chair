@@ -62,6 +62,31 @@ def test_snapshot_collects_and_normalizes_all_github_collections(tmp_path: Path)
     assert all(cwd == tmp_path for _, cwd in calls)
 
 
+def test_json_retries_transient_github_failure_before_succeeding(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = 0
+
+    def runner(
+        command: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        input_text: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        nonlocal calls
+        del command, cwd, input_text, timeout
+        calls += 1
+        if calls < 3:
+            return CommandResult(1, "", "HTTP 503 Service Unavailable")
+        return json_result({"ok": True})
+
+    sleeps: list[float] = []
+    monkeypatch.setattr("make_it_so.github.time.sleep", sleeps.append)
+
+    assert GhGitHubProvider(runner)._json(["repo", "view"]) == {"ok": True}  # pyright: ignore[reportPrivateUsage]
+    assert calls == 3
+    assert sleeps == [0.5, 1.0]
+
+
 def test_readiness_evidence_collects_live_proof_without_issue_or_pr_bodies(tmp_path: Path) -> None:
     def runner(
         command: Sequence[str],

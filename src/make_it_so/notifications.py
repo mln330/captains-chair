@@ -63,7 +63,7 @@ _OWNER_BLOCKER_PREFIXES = (
 def requires_owner_attention(
     event_type: str, evidence: Mapping[str, Any] | None = None
 ) -> bool:
-    """Return whether an event needs an owner decision rather than Number 1 recovery."""
+    """Return whether an event needs an owner decision rather than Number One recovery."""
     if event_type in _OWNER_ATTENTION_EVENTS:
         return True
     if event_type == "COMPLETION_READY":
@@ -108,7 +108,7 @@ def render_event(event: EventRecord) -> str:
 
     if event.event_type in _TECHNICAL_STATUS_EVENTS:
         lines = [
-            "Number 1 HANDLING",
+            "Number One HANDLING",
             f"{repo_name}: {_event_label(event.event_type)}",
             f"What happened: {_one_line(event.summary)}",
             f"Why: {_one_line(event.reason)}",
@@ -142,7 +142,7 @@ def _event_label(event_type: str) -> str:
         "PR_OPENED": "PR opened",
         "PR_REPAIRED": "PR repaired",
         "PR_MERGED": "PR merged",
-        "CONTROL_PLANE_COMPLETED": "Number 1 review complete",
+        "CONTROL_PLANE_COMPLETED": "Number One review complete",
         "COMPLETION_READY": "Completion ready",
         "POST_MERGE_VERIFIED": "Post-merge verified",
         "REVIEW_BLOCKED": "Review found changes",
@@ -153,7 +153,7 @@ def _event_label(event_type: str) -> str:
         "WORK_REQUEUED": "Work requeued",
         "TECHNICAL_RETRY": "Technical retry",
         "REPAIR_QUEUED": "Repair queued",
-        "CONTROL_PLANE_RECOVERY_QUEUED": "Number 1 recovery queued",
+        "CONTROL_PLANE_RECOVERY_QUEUED": "Number One recovery queued",
         "WORKFLOW_ALREADY_QUEUED": "Workflow already active",
         "WORK_COMPLETED": "Implementation complete",
         "WORKSPACE_CLEANUP_FAILED": "Worktree cleanup failed",
@@ -211,7 +211,7 @@ def _attention_prefix(event: EventRecord) -> str:
         return "ACTION NEEDED, second ping. Tiny flag is now waving."
     if level == 3:
         return "ACTION NEEDED, third ping. Clipboard stare has intensified."
-    return "ACTION NEEDED, polite flare launched. The Number 1 is still blocked."
+    return "ACTION NEEDED, polite flare launched. The Number One is still blocked."
 
 
 def _one_line(value: str) -> str:

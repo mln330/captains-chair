@@ -8,7 +8,7 @@ typed adapters.
 
 OpenClaw P0 will be a real TypeScript plugin. The SDK supports dashboard tabs,
 HTTP routes, services, commands, tools, hooks, and Gateway methods. Make It So's
-Number 1 leadership layer will use those surfaces while offering OpenClaw Workboard as its preferred
+Number One leadership layer will use those surfaces while offering OpenClaw Workboard as its preferred
 built-in orchestration adapter, not as a core requirement. Scheduling will remain
 owned by the Gateway cron service and managed idempotently by the plugin UI.
 [OpenClaw Plugin SDK](https://docs.openclaw.ai/plugins/sdk-overview),
@@ -21,15 +21,15 @@ task board by default while permitting optional custom kanban integrations.
 [Codex plugins](https://learn.chatgpt.com/docs/build-plugins.md),
 [Codex apps](https://learn.chatgpt.com/docs/build-app.md).
 
-## Number 1 Leadership
+## Number One Leadership
 
-Number 1 is Make It So's first-in-command agent. Number 1 owns requirements
+Number One is Make It So's first-in-command agent. Number One owns requirements
 gathering, readiness, course planning, milestone governance, progress review,
 and final course corrections. The role uses the highest-power configured
 strategist route and has authority to reject an implementation, request repair,
 or revise the approved course when the evidence no longer supports the plan.
 
-Each repository/course receives one durable Number 1 leadership session. The
+Each repository/course receives one durable Number One leadership session. The
 session identifier is stable for the life of that course, while every call still
 records its own telemetry identifier. The runtime also persists a compact context
 package containing the approved course, plan revision, recent reviews, pending
@@ -37,19 +37,19 @@ milestone proposals, and evidence. OpenClaw may continue the provider session;
 other harnesses can use the same durable context contract without inheriting
 OpenClaw session assumptions.
 
-The configurable course-review cadence is the Number 1 review cycle. It is a
+The configurable course-review cadence is the Number One review cycle. It is a
 bounded review and planning checkpoint, not a separate project-manager role.
-Worker agents remain role-separated and independent; Number 1 reviews their
+Worker agents remain role-separated and independent; Number One reviews their
 evidence and controls the course rather than pretending to be the coder or
 reviewer.
 
 Completing a milestone creates a typed milestone checkpoint. In supervised mode,
 the checkpoint pauses dependent work until the owner approves it. In autonomous
-mode, routine graph-safe changes can be validated and applied by Number 1, while
+mode, routine graph-safe changes can be validated and applied by Number One, while
 major, destructive, or ambiguous changes remain owner-gated. Every add, update,
 or removal is versioned against the course revision, recorded in SQLite, and
 rejected when stale or graph-invalid. The dashboard exposes the current revision,
-Number 1's latest review, pending proposals, and direct approve/reject actions.
+Number One's latest review, pending proposals, and direct approve/reject actions.
 
 ## Architecture
 
@@ -132,7 +132,7 @@ Planning will use a hybrid wizard and agent conversation:
 
 - The UI starts "Set Course," selects greenfield, in-progress takeover, or
   shipped-product feature work, and collects structured prerequisites.
-- A capable Number 1 model asks only questions that cannot be answered through
+- A capable Number One model asks only questions that cannot be answered through
   repository and environment inspection.
 - A readiness review checks goals, non-goals, users, architecture constraints,
   permissions, secret references, external access, environments, test data, CI,

@@ -16,6 +16,7 @@ const definition: ScheduleDefinition = {
   every: "2h",
   kind: "course_review",
   command: ["python", "-m", "make_it_so.sidecar", "--once", "review"],
+  timeout_seconds: 3900,
 };
 
 const expectedArgv = [
@@ -68,7 +69,7 @@ describe("OpenClaw schedule reconciliation", () => {
       name: definition.name,
       enabled: true,
       schedule: { kind: "every", everyMs: 7_200_000 },
-      payload: { kind: "command", argv: expectedArgv },
+      payload: { kind: "command", argv: expectedArgv, timeoutSeconds: 3900 },
     };
     expect(
       findExistingCronJob([existing], definition, "python3", "/tmp/make-it-so.yaml"),
@@ -77,7 +78,7 @@ describe("OpenClaw schedule reconciliation", () => {
     expect(inspectCronJob([drifted, existing], definition, "python3", "/tmp/make-it-so.yaml")).toMatchObject({
       primary: drifted,
       duplicates: [existing],
-      drift: ["command"],
+      drift: ["command", "timeout"],
       enabled: false,
     });
     expect(buildCronEditArgs("job-1", definition, "python3", "/tmp/make-it-so.yaml", "/tmp")).toContain("edit");
@@ -89,6 +90,17 @@ describe("OpenClaw schedule reconciliation", () => {
       definition,
       "python3",
       "/tmp/make-it-so.yaml",
-    ).drift).toEqual(["command_unreadable"]);
+    ).drift).toEqual(["command_unreadable", "timeout"]);
+  });
+
+  it("repairs a missing timeout instead of accepting a short-lived worker job", () => {
+    const job = {
+      id: "job-1",
+      name: definition.name,
+      schedule: { kind: "every", everyMs: 7_200_000 },
+      payload: { kind: "command", argv: expectedArgv },
+    };
+    expect(inspectCronJob([job], definition, "python3", "/tmp/make-it-so.yaml").drift).toContain("timeout");
+    expect(buildCronEditArgs("job-1", definition, "python3", "/tmp/make-it-so.yaml", "/tmp")).toContain("3900");
   });
 });

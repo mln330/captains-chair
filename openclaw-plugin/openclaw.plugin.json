@@ -9,9 +9,11 @@
     "tools": [
       "make_it_so_course_status",
       "make_it_so_resolve_checkpoint",
-      "make_it_so_answer_readiness",
-      "make_it_so_start_planning",
-      "make_it_so_ready_work"
+    "make_it_so_answer_readiness",
+    "make_it_so_start_planning",
+    "make_it_so_review_readiness",
+    "make_it_so_ready_work",
+      "make_it_so_approve_course"
     ]
   },
   "configSchema": {
@@ -33,22 +35,23 @@
       },
       "openclawExecutable": {
         "type": "string",
-        "default": "openclaw"
+        "default": "",
+        "description": "Optional OpenClaw executable path; when omitted, Make It So discovers the host installation."
       },
       "numberOneAgent": {
         "type": "string",
         "default": "github-captain",
-        "description": "OpenClaw agent used for initial Number 1 planning handoffs"
+        "description": "OpenClaw agent used for initial Number One planning handoffs"
       },
       "numberOneModel": {
         "type": "string",
         "default": "codex/gpt-5.6-sol",
-        "description": "Strategist model used for initial Number 1 planning handoffs"
+        "description": "Strategist model used for initial Number One planning handoffs"
       },
       "numberOneThinking": {
         "type": "string",
         "default": "high",
-        "description": "Thinking level used for initial Number 1 planning handoffs"
+        "description": "Thinking level used for initial Number One planning handoffs"
       },
       "discordRouteAliases": {
         "type": "object",

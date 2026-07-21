@@ -107,6 +107,25 @@ def test_evidence_validator_fails_closed_then_accepts_complete_proof() -> None:
     assert valid.summary["screenshots"][0]["url"].endswith("desktop.png")
 
 
+def test_evidence_validator_reads_flat_workboard_note_marker() -> None:
+    value = [
+        {
+            "status": "passed",
+            "note": (
+                'pytest passed\nMAKE_IT_SO_TEST_EVIDENCE_JSON:'
+                '{"status":"passed","head_sha":"abcdef1234567","commands":["pytest -q"],'
+                '"tests_total":4,"tests_passed":4,"tests_failed":0,"tests_skipped":0,"pass_rate":100,'
+                '"screenshots":[{"kind":"screenshot","url":"https://example.test/evidence.png"}]}'
+            ),
+        }
+    ]
+
+    result = validate_test_evidence(value, policy(), HEAD)
+
+    assert result.allowed is True
+    assert result.summary["tests_total"] == 4
+
+
 def _course_with_evidence_policy() -> Course:
     value = course()
     packages = tuple(

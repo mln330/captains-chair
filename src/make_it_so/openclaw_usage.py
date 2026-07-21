@@ -27,6 +27,7 @@ def sync_openclaw_sessions(
     session_filter: str | None = None,
     expected_models: Mapping[str, str] | None = None,
     session_context: Mapping[str, Mapping[str, str]] | None = None,
+    number_one_context: Mapping[str, Mapping[str, str]] | None = None,
     session_limit: int = DEFAULT_SESSION_LIMIT,
 ) -> dict[str, Any]:
     """Import OpenClaw's metadata-only session usage into portable MAKE_IT_SO state."""
@@ -63,6 +64,9 @@ def sync_openclaw_sessions(
             if session_context is not None and card_id
             else {}
         )
+        named_context = (number_one_context or {}).get(external_id, {})
+        if named_context:
+            context = {**context, **named_context}
         haystack = external_id.lower()
         if (session_filter and session_filter.lower() not in haystack) or (
             not session_filter
@@ -72,13 +76,18 @@ def sync_openclaw_sessions(
         ):
             continue
         agent = str(row.get("agentId") or "unknown")
-        role = agent.removeprefix("github-") or agent
+        role = "number_one" if ":number-one:" in external_id else (agent.removeprefix("github-") or agent)
         observed_model = row.get("model")
-        expected_model = (
-            (expected_models or {}).get(agent)
-            or (expected_models or {}).get(role)
-            or (expected_models or {}).get(_OPENCLAW_ROLE_ALIASES.get(role, ""))
-        )
+        if role == "number_one":
+            expected_model = (expected_models or {}).get("number_one") or (
+                expected_models or {}
+            ).get("strategist")
+        else:
+            expected_model = (
+                (expected_models or {}).get(agent)
+                or (expected_models or {}).get(role)
+                or (expected_models or {}).get(_OPENCLAW_ROLE_ALIASES.get(role, ""))
+            )
         model_mismatch = int(
             bool(expected_model)
             and bool(observed_model)

@@ -215,7 +215,7 @@ class ControlPlaneEngine:
     def _number_one_context(self, repo: RepoConfig, course: Course) -> dict[str, Any]:
         session = self._number_one_session(repo, course)
         return {
-            "role": "Number 1",
+            "role": "Number One",
             "session_id": session["session_id"],
             "course_key": course.key,
             "plan_revision": course.plan_revision,
@@ -264,7 +264,7 @@ class ControlPlaneEngine:
             course_key=course.key,
             plan_revision=course.plan_revision,
             status=status,
-            summary=str(getattr(decision, "summary", "Number 1 reviewed the course.")),
+            summary=str(getattr(decision, "summary", "Number One reviewed the course.")),
             next_action=str(getattr(decision, "reason", "Continue with the next eligible milestone.")),
             number_one_session_id=str(session["session_id"]),
             model=model,
@@ -282,7 +282,7 @@ class ControlPlaneEngine:
         decision: PlanDecision,
         fingerprint: str,
     ) -> CycleResult | None:
-        """Persist Number 1's course corrections and apply only autonomous routine changes."""
+        """Persist Number One's course corrections and apply only autonomous routine changes."""
         if course is None or not decision.milestone_changes:
             return None
         now = datetime.now(UTC)
@@ -346,7 +346,7 @@ class ControlPlaneEngine:
                     proposal.summary,
                     str(exc),
                     fingerprint,
-                    {"next_action": "Number 1 must propose a graph-safe milestone change.", "proposal_id": proposal.proposal_id},
+                    {"next_action": "Number One must propose a graph-safe milestone change.", "proposal_id": proposal.proposal_id},
                 ),
                 2,
             )
@@ -469,7 +469,7 @@ class ControlPlaneEngine:
             "number_one_context": self._number_one_context(repo, course),
         }
         prompt = (
-            "Number 1 is the first in command for this course. Maintain the durable course context, "
+            "Number One is the first in command for this course. Maintain the durable course context, "
             "ask for missing information, and do not authorize implementation until readiness is complete.\n\n"
             + build_readiness_prompt(course, source_evidence)
         )
@@ -537,7 +537,7 @@ class ControlPlaneEngine:
                 updated = add_milestone_checkpoint(
                     updated,
                     package.key,
-                    reason="Number 1 completed the milestone review; owner approval is required before dependent work advances.",
+                    reason="Number One completed the milestone review; owner approval is required before dependent work advances.",
                     owner_decision_required=True,
                 )
             store.save(updated)
@@ -593,7 +593,7 @@ class ControlPlaneEngine:
                 role,
                 {
                     "allowed": False,
-                    "reason": "repository Number 1 is disabled; model invocation was skipped",
+                    "reason": "repository is disabled; model invocation was skipped",
                     "daily_token_limit": self.config.usage.daily_token_limit,
                 },
             )
@@ -1014,11 +1014,11 @@ class ControlPlaneEngine:
                     run_id,
                     RunState.DEGRADED,
                     "PLANNING_CONTEXT_UNAVAILABLE",
-                    "The Number 1 could not obtain a trustworthy default-branch planning document.",
+                    "The Number One could not obtain a trustworthy default-branch planning document.",
                     str(exc)[:2000],
                     fingerprint,
                     {
-                        "next_action": "Restore the repository remote/default branch, then rerun the Number 1 cycle; no model call was made.",
+                        "next_action": "Restore the repository remote/default branch, then rerun the Number One cycle; no model call was made.",
                         "snapshot_fingerprint": snapshot_fingerprint,
                         "repo_policy_fingerprint": repo_policy_fingerprint,
                     },
@@ -1111,7 +1111,7 @@ class ControlPlaneEngine:
                     RunState.DEGRADED,
                     "STALLED",
                     recent[0].summary,
-                    "The previous Number 1 attempt failed and the evidence is unchanged; planning and retry are suppressed until evidence changes or force-replan is requested.",
+                    "The previous Number One attempt failed and the evidence is unchanged; planning and retry are suppressed until evidence changes or force-replan is requested.",
                     plan_input_fingerprint,
                     {
                         **recent[0].evidence,
@@ -1173,7 +1173,7 @@ class ControlPlaneEngine:
                     run_id,
                     RunState.DEGRADED,
                     "PLANNING_FAILED",
-                    "The Number 1 planner failed before selecting a work item.",
+                    "The Number One planner failed before selecting a work item.",
                     str(exc)[:2000],
                     plan_input_fingerprint,
                     {
@@ -1448,7 +1448,7 @@ class ControlPlaneEngine:
                     cycle_fingerprint,
                     {
                         "next_action": (
-                            "The Number 1 will retry this deterministic issue action automatically on the next cycle."
+                            "The Number One will retry this deterministic issue action automatically on the next cycle."
                             if decision.action in _DIRECT_RETRYABLE_ACTIONS
                             else "Inspect the failure and retry only after the underlying evidence changes."
                         ),
@@ -1810,7 +1810,7 @@ class ControlPlaneEngine:
                 str(exc)[:2000],
                 event.fingerprint,
                 {
-                    "next_action": "The Number 1 will retry only after the failure evidence changes.",
+                    "next_action": "The Number One will retry only after the failure evidence changes.",
                     "action_id": action_id,
                 },
             )
@@ -2163,7 +2163,7 @@ class ControlPlaneEngine:
                 RunState.PR_OPEN,
                 "PR_CHECKS_WAITING",
                 f"PR #{number} is waiting on required checks.",
-                "The Number 1 will not spend reviewer tokens until required checks are green.",
+                "The Number One will not spend reviewer tokens until required checks are green.",
                 gate_fingerprint,
                 {
                     "next_action": "Wait for GitHub checks to finish or repair failed checks if they stay red.",
@@ -2191,11 +2191,11 @@ class ControlPlaneEngine:
             run_id,
             RunState.DEGRADED,
             "CONTROL_PLANE_DISABLED",
-            "Repository Number 1 is disabled",
-            f"The configured repository Number 1 mode is disabled; {operation} performed no model, GitHub, or Workboard work.",
+            "Repository Number One is disabled",
+            f"The configured repository mode is disabled; {operation} performed no model, GitHub, or Workboard work.",
             "captain-disabled",
             {
-                "next_action": "Set operation_mode to advisory, supervised, or autonomous before resuming Number 1 work.",
+                "next_action": "Set operation_mode to advisory, supervised, or autonomous before resuming Number One work.",
                 "operation_mode": repo.operation_mode.value,
             },
         )
@@ -2221,7 +2221,7 @@ class ControlPlaneEngine:
             )
         evidence = {
             "next_action": (
-                "Resolve the owner blocker, then rerun the active Number 1 cycle."
+                "Resolve the owner blocker, then rerun the active Number One cycle."
                 if owner_required
                 else "Retry the worker after the technical cause changes; unrelated work can continue."
             ),
@@ -2433,7 +2433,7 @@ class ControlPlaneEngine:
             fingerprint,
             {
                 "next_action": (
-                    "Approve or change repo policy before the Number 1 continues this active PR."
+                    "Approve or change repo policy before the Number One continues this active PR."
                     if requires_owner
                     else "Fix the policy block, then rerun the cycle."
                 ),
@@ -3047,7 +3047,7 @@ class ControlPlaneEngine:
                     final.owner_blocker,
                     fingerprint,
                     {
-                        "next_action": "Resolve the owner blocker, then rerun the active Number 1 cycle.",
+                        "next_action": "Resolve the owner blocker, then rerun the active Number One cycle.",
                         "links": [pr.get("url")],
                         "pr": number,
                         "head_sha": head_sha,
@@ -3062,7 +3062,7 @@ class ControlPlaneEngine:
             self.github.comment_pull_request(
                 repo,
                 number,
-                _final_review_comment("Final Number 1 review requested changes", head_sha, final),
+                _final_review_comment("Final Number One review requested changes", head_sha, final),
             )
             self.state.update_active_work(repo.full_name, status="repair_requested", head_sha=head_sha)
             self.state.transition(repo.full_name, RunState.REPAIRING)
@@ -3073,7 +3073,7 @@ class ControlPlaneEngine:
                     RunState.REPAIRING,
                     "FINAL_REVIEW_BLOCKED",
                     final.summary,
-                    "The final Number 1 gate requested changes.",
+                    "The final Number One gate requested changes.",
                     fingerprint,
                     {
                         "next_action": "Repair the stated final-gate blockers.",
@@ -3132,7 +3132,7 @@ class ControlPlaneEngine:
             next_action = (
                 "Apply the configured owner completion decision."
                 if owner_completion
-                else "The Number 1 work item is complete; merge remains an owner action."
+                else "The Number One work item is complete; merge remains an owner action."
             )
             self.github.comment_pull_request(
                 repo,

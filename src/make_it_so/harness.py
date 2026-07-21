@@ -13,7 +13,7 @@ from pydantic import BaseModel
 
 from make_it_so.command import CommandRunner, run_command
 from make_it_so.json_tools import decode_first_json
-from make_it_so.model_policy import models_match
+from make_it_so.model_policy import models_match, runtime_model
 from make_it_so.models import (
     HarnessConfig,
     HarnessInvocation,
@@ -216,7 +216,7 @@ class OpenClawAdapter(HarnessAdapter):
             "--agent",
             agent,
             "--model",
-            model.model,
+            runtime_model("openclaw", model.model),
             "--thinking",
             model.thinking,
             "--session-key",

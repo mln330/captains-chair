@@ -36,6 +36,7 @@ try {
     "make_it_so_answer_readiness",
     "make_it_so_start_planning",
     "make_it_so_ready_work",
+    "make_it_so_approve_course",
   ]) {
     if (!plugin.toolNames.includes(tool)) throw new Error(`missing registered tool: ${tool}`);
   }

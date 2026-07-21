@@ -33,7 +33,7 @@ def evaluate_action(
     approved: bool = False,
 ) -> PolicyResult:
     if repo.operation_mode == OperationMode.DISABLED:
-        return PolicyResult(False, False, "repository Number 1 is disabled")
+        return PolicyResult(False, False, "repository is disabled")
     if decision.target_pr in repo.preserved_prs and decision.action in {
         ActionKind.REPAIR_PR,
         ActionKind.REVIEW_PR,
@@ -75,7 +75,7 @@ def evaluate_action(
 
 def evaluate_merge(repo: RepoConfig, verdict: FinalVerdict, gate: PullRequestGate) -> PolicyResult:
     if repo.operation_mode == OperationMode.DISABLED:
-        return PolicyResult(False, False, "repository Number 1 is disabled")
+        return PolicyResult(False, False, "repository is disabled")
     if repo.completion_policy != CompletionPolicy.AUTO_MERGE:
         return PolicyResult(False, True, f"completion policy is {repo.completion_policy.value}")
     if repo.operation_mode != OperationMode.AUTONOMOUS or not repo.allow_autonomous_merge:
@@ -97,7 +97,7 @@ def evaluate_merge(repo: RepoConfig, verdict: FinalVerdict, gate: PullRequestGat
 
 def evaluate_control_plane_completion(repo: RepoConfig, verdict: FinalVerdict, gate: PullRequestGate) -> PolicyResult:
     if repo.operation_mode == OperationMode.DISABLED:
-        return PolicyResult(False, False, "repository Number 1 is disabled")
+        return PolicyResult(False, False, "repository is disabled")
     if repo.completion_policy != CompletionPolicy.CONTROL_PLANE_COMPLETE:
         return PolicyResult(False, True, f"completion policy is {repo.completion_policy.value}")
     if verdict not in {FinalVerdict.CONTROL_PLANE_COMPLETE, FinalVerdict.AUTO_MERGE_ALLOWED}:
@@ -112,7 +112,7 @@ def evaluate_control_plane_completion(repo: RepoConfig, verdict: FinalVerdict, g
         return PolicyResult(False, False, "unresolved review threads remain")
     if gate.review_head_sha != gate.head_sha:
         return PolicyResult(False, False, "final review is not anchored to the current PR head")
-    return PolicyResult(True, False, "Number 1 completion gates passed; merge remains an owner action")
+    return PolicyResult(True, False, "Number One completion gates passed; merge remains an owner action")
 
 
 def evaluate_owner_completion(
@@ -121,7 +121,7 @@ def evaluate_owner_completion(
     gate: PullRequestGate,
 ) -> PolicyResult:
     if repo.operation_mode == OperationMode.DISABLED:
-        return PolicyResult(False, False, "repository Number 1 is disabled")
+        return PolicyResult(False, False, "repository is disabled")
     if repo.completion_policy != CompletionPolicy.OWNER_APPROVAL:
         return PolicyResult(False, True, f"completion policy is {repo.completion_policy.value}")
     if verdict != FinalVerdict.READY_FOR_OWNER:

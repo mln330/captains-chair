@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, cast
@@ -127,6 +129,19 @@ def _looks_like_test_evidence(raw: Mapping[str, object]) -> bool:
     return bool(keys.intersection(count_keys) and keys.intersection(identity_keys))
 
 
+def _marked_test_evidence(value: object) -> dict[str, object] | None:
+    if not isinstance(value, str):
+        return None
+    match = re.search(r"MAKE_IT_SO_TEST_EVIDENCE_JSON:(\{[^\r\n]+\})", value)
+    if not match:
+        return None
+    try:
+        parsed = json.loads(match.group(1))
+    except json.JSONDecodeError:
+        return None
+    return cast(dict[str, object], parsed) if isinstance(parsed, dict) else None
+
+
 def _candidate_mappings(value: object, depth: int = 0) -> list[Mapping[str, object]]:
     if depth > 5:
         return []
@@ -142,10 +157,13 @@ def _candidate_mappings(value: object, depth: int = 0) -> list[Mapping[str, obje
                 candidates.extend(_candidate_mappings(cast(Mapping[str, object], nested), depth + 1))
             elif isinstance(nested, list):
                 candidates.extend(_candidate_mappings(cast(list[object], nested), depth + 1))
+        marked = _marked_test_evidence(raw.get("note"))
+        if marked is not None:
+            candidates.extend(_candidate_mappings(marked, depth + 1))
         return candidates
-    if isinstance(value, list):
+    if isinstance(value, (list, tuple)):
         candidates = []
-        for item in cast(list[object], value):
+        for item in value:
             candidates.extend(_candidate_mappings(item, depth + 1))
         return candidates
     return []

@@ -4,6 +4,7 @@ import {
   Activity,
   BadgeCheck,
   CheckCircle2,
+  ChevronDown,
   CircleDot,
   CircleAlert,
   Code2,
@@ -264,7 +265,30 @@ type RegistrationResult = {
   discovery?: {
     local_clone?: { path?: string; exists?: boolean; cloned?: boolean; remote_matches?: boolean | null };
     planning_document?: { path?: string; found?: boolean; source?: string; candidates?: string[]; reason?: string };
+    git?: { branch?: string | null; dirty?: boolean | null };
   };
+};
+type RegistrationLocalClone = {
+  full_name: string;
+  local_path: string;
+  branch?: string | null;
+  dirty?: boolean | null;
+  registered?: boolean;
+};
+type RegistrationDiscordRoute = {
+  route: string;
+  channel_id: string;
+  guild_id?: string;
+  name: string;
+  label: string;
+  alias?: string;
+};
+type RegistrationOptions = {
+  local_clones: RegistrationLocalClone[];
+  discord_routes: RegistrationDiscordRoute[];
+  default_discord_route?: string;
+  discord_discovery_pending?: boolean;
+  warnings?: string[];
 };
 type ModelPreset = "economy" | "balanced" | "maximum_quality" | "local_first";
 type IntelligenceLevel = "economy" | "balanced" | "deep" | "maximum";
@@ -274,7 +298,7 @@ const CONTROL_UI_TOKEN = document
   ?.content ?? "";
 
 const ROUTE_DEFAULTS = [
-  { role: "number_one", label: "Number 1 leadership", model: "codex/gpt-5.6-sol", effort: "high" },
+  { role: "number_one", label: "Number One leadership", model: "codex/gpt-5.6-sol", effort: "high" },
   { role: "strategist", label: "Course strategist", model: "codex/gpt-5.6-sol", effort: "high" },
   { role: "course_verifier", label: "Course verifier", model: "codex/gpt-5.6-sol", effort: "high" },
   { role: "baseline", label: "Baseline analyst", model: "codex/gpt-5.6-terra", effort: "high" },
@@ -339,7 +363,9 @@ function normalizeGithubRepository(value: string): string {
       if (parts.length === 2) return `${parts[0]}/${parts[1]}`;
     }
   } catch (reason) {
-    if (reason instanceof Error && reason.message !== "Invalid URL") throw reason;
+    // URL() rejects the documented owner/repository shorthand. Only that
+    // expected parse failure should fall through to the shorthand validator.
+    if (!(reason instanceof TypeError) || !/invalid url/i.test(reason.message)) throw reason;
   }
   if (/^[^/\s]+\/[^/\s]+$/.test(trimmed)) return trimmed;
   throw new Error("Enter owner/repository or a GitHub repository URL.");
@@ -445,7 +471,7 @@ function PortfolioSummary({ repos }: { repos: Repo[] }) {
   </section>;
 }
 
-type GoalState = "complete" | "in_progress" | "ready" | "blocked" | "paused" | "not_started";
+type GoalState = "complete" | "in_progress" | "ready" | "blocked" | "paused" | "evidence_pending" | "not_started";
 
 function goalStateLabel(state: GoalState): string {
   return {
@@ -454,8 +480,14 @@ function goalStateLabel(state: GoalState): string {
     ready: "Ready to engage",
     blocked: "Blocked",
     paused: "Paused",
+    evidence_pending: "Evidence pending",
     not_started: "Not started",
   }[state];
+}
+
+function requiredMilestonesHaveEvidence(repo: Repo): boolean {
+  const milestones = repo.workboard_status?.milestones ?? [];
+  return milestones.every((milestone) => milestone.policy?.required === false || milestone.evidence?.status === "passed");
 }
 
 function courseGoalState(item: CourseSummary, repo: Repo): GoalState {
@@ -463,6 +495,7 @@ function courseGoalState(item: CourseSummary, repo: Repo): GoalState {
   const terminal = Boolean(workboard?.terminal || workboard?.status === "completed" || repo.state === "merged");
   const blockers = workboard?.current_blockers ?? workboard?.blockers ?? 0;
   if (item.course.status === "blocked" || blockers > 0) return "blocked";
+  if (terminal && !requiredMilestonesHaveEvidence(repo)) return "evidence_pending";
   if (item.course.status === "completed" || terminal) return "complete";
   if (item.course.status === "paused") return "paused";
   if (item.course.status === "engaged" || workboard?.status === "in_progress") return "in_progress";
@@ -484,10 +517,13 @@ function ExecutiveSummary({ repo, courses }: { repo: Repo; courses: Courses | nu
   const passedEvidence = milestones.filter((item) => item.evidence?.status === "passed").length;
   const screenshotCount = milestones.reduce((total, item) => total + (item.evidence?.screenshots?.length ?? 0), 0);
   const hasBlockedGoal = goals.some((goal) => goal.state === "blocked");
+  const hasPendingEvidence = goals.some((goal) => goal.state === "evidence_pending");
   const overallState: GoalState | "loading" = courses === null
     ? "loading"
     : hasBlockedGoal
     ? "blocked"
+    : hasPendingEvidence
+    ? "evidence_pending"
     : goals.length > 0 && completeGoals === goals.length
     ? "complete"
     : goals.some((goal) => goal.state === "in_progress")
@@ -504,14 +540,16 @@ function ExecutiveSummary({ repo, courses }: { repo: Repo; courses: Courses | nu
     ? "The implementation course is merged and post-merge verified. Production deployment remains a separate outcome."
     : overallState === "blocked"
     ? "The course has work that needs attention before it can advance."
+    : overallState === "evidence_pending"
+    ? "Implementation is terminal, but required milestone evidence has not been recorded."
     : overallState === "in_progress"
     ? `${completedPackages} of ${workPackages.length || 0} delivery milestones are marked complete.`
     : "The project has a declared direction and is waiting for the next course transition.";
   return <section className="executive-summary" aria-labelledby="executive-summary-title">
     <div className="executive-heading"><div><p className="eyebrow">EXECUTIVE BRIEF</p><h3 id="executive-summary-title">Project at a glance</h3><span>{repo.full_name}</span></div><span className={`executive-state ${overallState}`}>{overallLabel}</span></div>
     <div className="executive-grid">
-      <div className="executive-narrative"><div className="executive-signal"><Target size={20} aria-hidden="true" /><div><strong>{terminal ? "Implementation verified" : repo.state.split("_").join(" ")}</strong><span>{narrative}</span></div></div><div className="executive-metrics" tabIndex={0} aria-label="Project metrics"><Metric label="goals complete" value={courses === null ? "-" : `${completeGoals}/${goals.length}`} tone={overallState === "complete" ? "good" : "neutral"} /><Metric label="milestones" value={courses === null ? "-" : `${completedPackages}/${workPackages.length}`} /><Metric label="evidence passed" value={milestones.length ? `${passedEvidence}/${milestones.length}` : "-"} tone={milestones.length && passedEvidence === milestones.length ? "good" : "neutral"} /><Metric label="screenshots" value={screenshotCount} /><Metric label="PRs" value={workboard?.pr_count ?? repo.github_status?.open_prs ?? 0} /><Metric label="blockers" value={blockers} tone={blockers ? "danger" : "good"} /><Metric label="checks" value={checks} tone={checks === "failing" ? "danger" : checks === "passing" ? "good" : checks === "running" ? "warn" : "neutral"} /></div></div>
-      <div className="goal-board" aria-label={`High-level goals for ${repo.full_name}`}><div className="goal-board-heading"><div><ListChecks size={17} aria-hidden="true" /><strong>Project goals</strong></div><span>{courses === null ? "Loading" : `${goals.length} tracked`}</span></div>{courses === null ? <p className="muted">Loading declared goals...</p> : goals.length ? goals.map(({ item, state }) => <div className="goal-item" key={`${item.repository}:${item.course.key}`}><div className="goal-item-marker">{state === "complete" ? <CheckCircle2 size={16} aria-hidden="true" /> : state === "blocked" ? <CircleAlert size={16} aria-hidden="true" /> : <Target size={16} aria-hidden="true" />}</div><div className="goal-item-copy"><strong>{item.course.title}</strong><span>{item.course.goal}</span><small>{item.course.work_packages.length ? `${item.course.work_packages.length} delivery milestone${item.course.work_packages.length === 1 ? "" : "s"}` : "No delivery milestones recorded"}</small></div><em className={`goal-status ${state}`}>{goalStateLabel(state)}</em></div>) : <p className="muted">Register a course charter to track a high-level goal.</p>}</div>
+      <div className="executive-narrative"><div className="executive-signal"><Target size={20} aria-hidden="true" /><div><strong>{overallState === "evidence_pending" ? "Evidence gate pending" : terminal ? "Implementation verified" : repo.state.split("_").join(" ")}</strong><span>{narrative}</span></div></div><div className="executive-metrics" tabIndex={0} aria-label="Project metrics"><Metric label="goals complete" value={courses === null ? "-" : `${completeGoals}/${goals.length}`} tone={overallState === "complete" ? "good" : "neutral"} /><Metric label="milestones" value={courses === null ? "-" : `${completedPackages}/${workPackages.length}`} /><Metric label="evidence passed" value={milestones.length ? `${passedEvidence}/${milestones.length}` : "-"} tone={milestones.length && passedEvidence === milestones.length ? "good" : "neutral"} /><Metric label="screenshots" value={screenshotCount} /><Metric label="PRs" value={workboard?.pr_count ?? repo.github_status?.open_prs ?? 0} /><Metric label="blockers" value={blockers} tone={blockers ? "danger" : "good"} /><Metric label="checks" value={checks} tone={checks === "failing" ? "danger" : checks === "passing" ? "good" : checks === "running" ? "warn" : "neutral"} /></div></div>
+      <div className="goal-board" aria-label={`High-level goals for ${repo.full_name}`}><div className="goal-board-heading"><div><ListChecks size={17} aria-hidden="true" /><strong>Project goals</strong></div><span>{courses === null ? "Loading" : `${goals.length} tracked`}</span></div>{courses === null ? <p className="muted">Loading declared goals...</p> : goals.length ? goals.map(({ item, state }) => <div className="goal-item" key={`${item.repository}:${item.course.key}`}><div className="goal-item-marker">{state === "complete" ? <CheckCircle2 size={16} aria-hidden="true" /> : state === "blocked" || state === "evidence_pending" ? <CircleAlert size={16} aria-hidden="true" /> : <Target size={16} aria-hidden="true" />}</div><div className="goal-item-copy"><strong>{item.course.title}</strong><span>{item.course.goal}</span><small>{item.course.work_packages.length ? `${item.course.work_packages.length} delivery milestone${item.course.work_packages.length === 1 ? "" : "s"}` : "No delivery milestones recorded"}</small></div><em className={`goal-status ${state}`}>{goalStateLabel(state)}</em></div>) : <p className="muted">Register a course charter to track a high-level goal.</p>}</div>
     </div>
   </section>;
 }
@@ -522,13 +560,14 @@ function ExecutionPath({ repo }: { repo: Repo }) {
   const runs = workboard.workflow_runs ?? [];
   const stageHistory: StageHistory[] = workboard.stage_history ?? workboard.stages ?? [];
   const terminal = workboard.terminal || workboard.status === "completed" || repo.state === "merged";
+  const evidenceReady = requiredMilestonesHaveEvidence(repo);
   const totalLoops = workboard.total_loop_count ?? workboard.loop_count ?? 0;
   const coderRoute = repo.worker_models?.coder;
   const coderRuntime = repo.worker_runtimes?.coder ?? "openclaw";
   return <section className="execution-console" aria-label={`Execution evidence for ${repo.full_name}`}>
     <div className="console-heading">
       <div><p className="eyebrow">MISSION TELEMETRY</p><h4>How the work moved</h4><span>Every recorded build, review, repair, test, and completion workflow.</span></div>
-      <div className={`completion-beacon ${terminal ? "complete" : "active"}`}><Activity size={15} aria-hidden="true" /><span>{terminal ? "Course verified" : workboard.current_stage ? `Active: ${stageLabel(workboard.current_stage)}` : "Awaiting next transition"}</span></div>
+      <div className={`completion-beacon ${terminal && evidenceReady ? "complete" : terminal ? "pending" : "active"}`}><Activity size={15} aria-hidden="true" /><span>{terminal && evidenceReady ? "Course verified" : terminal ? "Evidence pending" : workboard.current_stage ? `Active: ${stageLabel(workboard.current_stage)}` : "Awaiting next transition"}</span></div>
     </div>
     <div className="stage-map" role="list" aria-label="SDLC stage evidence" tabIndex={0}>
       {EXECUTION_LANES.map(({ stage, label, icon: Icon }, index) => {
@@ -551,26 +590,28 @@ function ExecutionPath({ repo }: { repo: Repo }) {
       <div className="feedback-counts"><span><b>{workboard.reviews_passed ?? 0}</b> reviews passed</span><span><b>{workboard.superseded_retries ?? 0}</b> superseded retr{(workboard.superseded_retries ?? 0) === 1 ? "y" : "ies"}</span>{(workboard.historical_blockers ?? 0) > 0 && <span><b>{workboard.historical_blockers ?? 0}</b> historical blockers</span>}<span><b>{workboard.current_blockers ?? workboard.blockers ?? 0}</b> current blockers</span></div>
     </div>
     {coderRoute && <div className="model-route-note"><Cpu size={17} aria-hidden="true" /><div><strong>Coding route: {shortModel(coderRoute)} via {coderRuntime === "codex" ? "direct Codex" : "OpenClaw"}</strong><span>{coderRuntime === "codex" ? "OpenClaw owns the Workboard lifecycle; the coding card executes through your ChatGPT-authenticated Codex CLI and records provider token telemetry." : "This coding card executes through the OpenClaw agent route configured for the repository."}</span></div></div>}
-    <div className="run-history">
-      <div className="run-history-heading"><div><p className="eyebrow">FLIGHT RECORDER</p><h5>Workflow runs</h5></div><span>{runs.length} recorded run{runs.length === 1 ? "" : "s"}</span></div>
-      {runs.length ? runs.map((run) => <article className={`workflow-run ${run.status ?? "unknown"}`} key={run.workflow ?? run.index}>
-        <div className="run-label"><span>RUN {String(run.index ?? 0).padStart(2, "0")}</span><strong>{run.kind ?? "workflow"}</strong><em>{statusLabel(run.status)}</em></div>
-        <div className="run-body">
-          <div className="run-title"><div><strong>{run.title ?? "Workboard workflow"}</strong><span>{run.status === "completed" ? "Complete" : `${run.done ?? 0}/${run.cards ?? 0} cards complete`}{run.superseded_retries ? ` | ${run.superseded_retries} superseded retr${run.superseded_retries === 1 ? "y" : "ies"}` : run.loops ? ` | ${run.loops} feedback loop${run.loops === 1 ? "" : "s"}` : ""}</span></div>{run.current && <span className="current-run">current</span>}</div>
-          <div className="run-steps" role="list">
-            {(run.timeline ?? []).slice(-12).map((item, index) => {
-              const supersededRetry = item.superseded_retry || (item.status === "blocked" && item.loop && run.status === "completed");
-              return <div className={`run-step ${supersededRetry ? "superseded" : item.status ?? "unknown"} ${item.loop ? "loop" : ""}`} role="listitem" key={item.id ?? `${run.workflow}-${item.stage}-${index}`}>
-              <span className="run-step-marker" aria-hidden="true">{item.status === "done" || supersededRetry ? <CheckCircle2 size={14} /> : item.status === "blocked" ? <XCircle size={14} /> : <CircleDot size={14} />}</span>
-              <div><strong>{stageLabel(item.stage)}{supersededRetry ? " - superseded retry" : ""}</strong><span>{item.model ? shortModel(item.model) : item.agent ?? "deterministic"}</span><small title={item.summary ?? item.title}>{supersededRetry ? "Retry preserved as audit history; successful path completed." : item.summary ?? item.title ?? "Workboard transition"}</small></div>
-              {item.pr_url && <a href={item.pr_url} target="_blank" rel="noreferrer" aria-label={`Open PR for ${item.title ?? item.stage}`}><GitPullRequest size={14} /><span>PR</span><ExternalLink size={11} /></a>}
-            </div>;
-            })}
+    <details className="run-history flight-recorder">
+      <summary className="run-history-heading"><div><p className="eyebrow">FLIGHT RECORDER</p><h5>Workflow runs</h5></div><span>{runs.length} recorded run{runs.length === 1 ? "" : "s"} <ChevronDown size={15} aria-hidden="true" /></span></summary>
+      <div className="run-history-body">
+        {runs.length ? runs.map((run) => <article className={`workflow-run ${run.status ?? "unknown"}`} key={run.workflow ?? run.index}>
+          <div className="run-label"><span>RUN {String(run.index ?? 0).padStart(2, "0")}</span><strong>{run.kind ?? "workflow"}</strong><em>{statusLabel(run.status)}</em></div>
+          <div className="run-body">
+            <div className="run-title"><div><strong>{run.title ?? "Workboard workflow"}</strong><span>{run.status === "completed" ? "Complete" : `${run.done ?? 0}/${run.cards ?? 0} cards complete`}{run.superseded_retries ? ` | ${run.superseded_retries} superseded retr${run.superseded_retries === 1 ? "y" : "ies"}` : run.loops ? ` | ${run.loops} feedback loop${run.loops === 1 ? "" : "s"}` : ""}</span></div>{run.current && <span className="current-run">current</span>}</div>
+            <div className="run-steps" role="list">
+              {(run.timeline ?? []).slice(-12).map((item, index) => {
+                const supersededRetry = item.superseded_retry || (item.status === "blocked" && item.loop && run.status === "completed");
+                return <div className={`run-step ${supersededRetry ? "superseded" : item.status ?? "unknown"} ${item.loop ? "loop" : ""}`} role="listitem" key={item.id ?? `${run.workflow}-${item.stage}-${index}`}>
+                <span className="run-step-marker" aria-hidden="true">{item.status === "done" || supersededRetry ? <CheckCircle2 size={14} /> : item.status === "blocked" ? <XCircle size={14} /> : <CircleDot size={14} />}</span>
+                <div><strong>{stageLabel(item.stage)}{supersededRetry ? " - superseded retry" : ""}</strong><span>{item.model ? shortModel(item.model) : item.agent ?? "deterministic"}</span><small title={item.summary ?? item.title}>{supersededRetry ? "Retry preserved as audit history; successful path completed." : item.summary ?? item.title ?? "Workboard transition"}</small></div>
+                {item.pr_url && <a href={item.pr_url} target="_blank" rel="noreferrer" aria-label={`Open PR for ${item.title ?? item.stage}`}><GitPullRequest size={14} /><span>PR</span><ExternalLink size={11} /></a>}
+              </div>;
+              })}
+            </div>
           </div>
-        </div>
-      </article>) : <p className="muted">No durable Workboard workflow history has been recorded yet.</p>}
-    </div>
-    {terminal && <div className="completion-strip"><BadgeCheck size={18} aria-hidden="true" /><div><strong>Implementation complete</strong><span>Merged and post-merge verification passed. Superseded retry cards above are audit history, not failed work. Production deployment remains a separately verified outcome.</span></div></div>}
+        </article>) : <p className="muted">No durable Workboard workflow history has been recorded yet.</p>}
+      </div>
+    </details>
+    {terminal && <div className="completion-strip"><BadgeCheck size={18} aria-hidden="true" /><div><strong>{evidenceReady ? "Implementation complete" : "Evidence pending"}</strong><span>{evidenceReady ? "Merged and post-merge verification passed. Superseded retry cards above are audit history, not failed work. Production deployment remains a separately verified outcome." : "The implementation is terminal, but one or more required milestones still lack passing test evidence. Production readiness is not established."}</span></div></div>}
   </section>;
 }
 
@@ -714,6 +755,8 @@ function RepoPanel({ repo, onSave }: { repo: Repo; onSave: (name: string, payloa
   const [completion, setCompletion] = useState(repo.completion_policy);
   const [allowMerge, setAllowMerge] = useState(repo.allow_autonomous_merge ?? false);
   const [channel, setChannel] = useState(repo.notification_route ?? "");
+  const [orchestrator, setOrchestrator] = useState(repo.orchestrator === "direct" ? "" : (repo.orchestrator ?? ""));
+  const [orchestrationBoard, setOrchestrationBoard] = useState(repo.orchestration_board ?? "");
   const [scheduleEnabled, setScheduleEnabled] = useState(repo.schedule_enabled !== false);
   const [qaProfiles, setQaProfiles] = useState<QAProfile[]>(() => (repo.qa_profiles ?? []).map(profileForEditing));
   const [routes, setRoutes] = useState<Record<string, EditableRoute>>(() => initialRoutes(repo));
@@ -723,7 +766,7 @@ function RepoPanel({ repo, onSave }: { repo: Repo; onSave: (name: string, payloa
   const [saving, setSaving] = useState(false);
   useEffect(() => {
     setMode(repo.operation_mode); setCompletion(repo.completion_policy); setAllowMerge(repo.allow_autonomous_merge ?? false);
-    setChannel(repo.notification_route ?? ""); setScheduleEnabled(repo.schedule_enabled !== false); setQaProfiles((repo.qa_profiles ?? []).map(profileForEditing));
+    setChannel(repo.notification_route ?? ""); setOrchestrator(repo.orchestrator === "direct" ? "" : (repo.orchestrator ?? "")); setOrchestrationBoard(repo.orchestration_board ?? ""); setScheduleEnabled(repo.schedule_enabled !== false); setQaProfiles((repo.qa_profiles ?? []).map(profileForEditing));
     setRoutes(initialRoutes(repo)); setPreset("balanced"); setIntelligence("balanced"); setSurface(repo.surfaces?.[0] ?? "custom");
   }, [repo]);
   const save = async () => {
@@ -735,6 +778,8 @@ function RepoPanel({ repo, onSave }: { repo: Repo; onSave: (name: string, payloa
       await onSave(repo.full_name, {
         operation_mode: mode, completion_policy: completion, allow_autonomous_merge: allowMerge,
         notification_route: channel, surfaces: surface ? [surface] : [],
+        orchestrator: orchestrator || null,
+        orchestration_board: orchestrationBoard.trim() || null,
         schedule_enabled: scheduleEnabled,
         qa_profiles: qaProfiles,
         model_profiles: modelProfiles,
@@ -761,7 +806,7 @@ function RepoPanel({ repo, onSave }: { repo: Repo; onSave: (name: string, payloa
   const historicalBlockers = workboard?.historical_blockers ?? 0;
   const supersededRetries = workboard?.superseded_retries ?? 0;
   return <section className="repo-panel">
-    <div className="repo-heading"><div><h3>{repo.full_name}</h3><p>{repo.local_path}</p></div><span className={`mode ${repo.operation_mode}`}>{repo.operation_mode}</span></div>
+    <div className="repo-heading"><div><div className="repo-title-line"><Rocket size={17} aria-hidden="true" /><h3>{repo.full_name}</h3></div><p>{repo.local_path}</p></div><span className={`mode ${repo.operation_mode}`}>{repo.operation_mode}</span></div>
     <div className="repo-meta"><span>{repo.state.split("_").join(" ")}</span><span className={usagePending ? "usage-pending" : ""}>{usageLabel}</span><span>{repo.dirty ? "Uncommitted changes" : "Clean checkout"}</span></div>
     <div className="repo-stats" aria-label={`Repository facts for ${repo.full_name}`} tabIndex={0}>
       <Metric label="open PRs" value={github?.open_prs ?? "-"} />
@@ -782,6 +827,8 @@ function RepoPanel({ repo, onSave }: { repo: Repo; onSave: (name: string, payloa
         <label>Autonomy<select value={mode} onChange={(event) => setMode(event.target.value)}><option value="disabled">Disabled</option><option value="advisory">Advisory</option><option value="supervised">Supervised</option><option value="autonomous">Autonomous</option></select></label>
         <label>Completion<select value={completion} onChange={(event) => setCompletion(event.target.value)}><option value="owner_approval">Owner approval</option><option value="control_plane_complete">Control plane complete</option><option value="auto_merge">Auto merge</option></select></label>
         <label>Discord route<input value={channel} onChange={(event) => setChannel(event.target.value)} placeholder="notifications or channel id" /></label>
+        <label>Worker orchestrator<input value={orchestrator} onChange={(event) => setOrchestrator(event.target.value)} placeholder="openclaw-workers" /></label>
+        <label>Workboard name<input value={orchestrationBoard} onChange={(event) => setOrchestrationBoard(event.target.value)} placeholder="Leave blank for the repo board" /></label>
         <label>Application surface<select value={surface} onChange={(event) => setSurface(event.target.value)}><option value="web_ui">Web UI</option><option value="cli">CLI</option><option value="api">API</option><option value="library">Library</option><option value="data_pipeline">Data pipeline</option><option value="infrastructure_release">Infrastructure/release</option><option value="custom">Custom</option></select></label>
         <label className="check-label"><input type="checkbox" checked={allowMerge} onChange={(event) => setAllowMerge(event.target.checked)} /> Allow autonomous merge</label>
         <label className="check-label"><input type="checkbox" checked={scheduleEnabled} onChange={(event) => setScheduleEnabled(event.target.checked)} /> Include in scheduled runs</label>
@@ -875,15 +922,174 @@ function UsagePolicyPanel({ config, onSaved }: { config: ModelConfig; onSaved: (
   return <section className="model-policy-panel" aria-labelledby="usage-policy-title"><div className="section-heading"><div><p className="eyebrow">TOKEN CONTROL</p><h2 id="usage-policy-title">Token safeguards</h2></div></div><p className="muted">Limits use provider-reported tokens only. Unknown telemetry remains unknown and can block autonomous work.</p><div className="settings-grid"><label>Daily token limit<input inputMode="numeric" value={dailyLimit} onChange={(event) => setDailyLimit(event.target.value)} placeholder="No limit" /></label><label className="check-label"><input type="checkbox" checked={blockOnUnknown} onChange={(event) => setBlockOnUnknown(event.target.checked)} /> Block when telemetry is unknown</label></div><div className="package-list">{limits.map((item, index) => <fieldset className="qa-profile" key={`${item.model}-${index}`}><legend>Model limit</legend><div className="settings-grid"><label>Model<input value={item.model} onChange={(event) => setLimits(limits.map((row, rowIndex) => rowIndex === index ? { ...row, model: event.target.value } : row))} placeholder="codex/gpt-5.3-codex-spark" /></label><label>Daily tokens<input inputMode="numeric" value={item.limit} onChange={(event) => setLimits(limits.map((row, rowIndex) => rowIndex === index ? { ...row, limit: event.target.value } : row))} /></label><button className="secondary compact" type="button" onClick={() => setLimits(limits.filter((_row, rowIndex) => rowIndex !== index))}>Remove limit</button></div></fieldset>)}</div><div className="action-row"><button className="secondary compact" type="button" onClick={() => setLimits([...limits, { model: "", limit: "" }])}>Add model limit</button><button className="primary compact" type="button" onClick={save} disabled={saving}>{saving ? "Saving..." : "Save token safeguards"}</button></div>{error && <p className="warning" role="alert">{error}</p>}</section>;
 }
 
+type RegistrationStep = 1 | 2 | 3 | 4;
+
+function ChoiceButton({ selected, label, description, onClick }: { selected: boolean; label: string; description: string; onClick: () => void }) {
+  return <button className={`choice-card${selected ? " selected" : ""}`} type="button" aria-pressed={selected} onClick={onClick}><strong>{label}</strong><span>{description}</span></button>;
+}
+
 function RegisterPanel({ onRegistered }: { onRegistered: () => void }) {
-  const [open, setOpen] = useState(false); const [fullName, setFullName] = useState(""); const [channel, setChannel] = useState("notifications"); const [saving, setSaving] = useState(false); const [error, setError] = useState<string | null>(null); const [followUp, setFollowUp] = useState<string | null>(null); const [notificationStatus, setNotificationStatus] = useState<string | null>(null); const [notificationDelivery, setNotificationDelivery] = useState<string | null>(null); const [notificationError, setNotificationError] = useState<string | null>(null);
-  const register = async () => { if (saving) return; setSaving(true); setError(null); setFollowUp(null); setNotificationStatus(null); setNotificationDelivery(null); setNotificationError(null); try { const result = await callGateway<RegistrationResult>("repos/register", { full_name: normalizeGithubRepository(fullName), notification_route: channel.trim() || "notifications" }); setFullName(""); setOpen(false); setFollowUp(result.follow_up_message ?? "Repository registered. Number 1 will begin the initial planning conversation before work starts."); setNotificationStatus(result.notification_status ?? "unavailable"); setNotificationDelivery(result.notification_delivery ?? null); setNotificationError(result.notification_error ?? null); onRegistered(); } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); } finally { setSaving(false); } };
-  const submit = (event: FormEvent) => { event.preventDefault(); void register(); };
-  return <section className="register-panel" aria-labelledby="register-title"><div className="section-heading"><div><p className="eyebrow">REPOSITORY REGISTRY</p><h3 id="register-title">Add a repository</h3></div><button className="secondary" onClick={() => setOpen(!open)}>{open ? "Close" : "Register repository"}</button></div>
-    <p className="muted">Make It So will locate the local clone and planning document. Number 1 will follow up in chat for anything it cannot verify.</p>
-    {open && <form className="register-form registration-form" onSubmit={submit}><label>GitHub repository<input required value={fullName} onChange={(event) => setFullName(event.target.value)} placeholder="owner/repository or GitHub URL" /></label><label>Discord route<input required value={channel} onChange={(event) => setChannel(event.target.value)} placeholder="notifications or channel ID" /></label><button className="primary" type="button" onClick={() => void register()} disabled={saving}>{saving ? "Registering and inspecting..." : "Register and inspect"}</button>{error && <p className="warning" role="alert">{error}</p>}</form>}
-    {followUp && <div className="inline-status" role="status"><p>{followUp}</p><strong className={notificationStatus === "sent" ? "success" : "warning"}>{notificationStatus === "sent" ? notificationDelivery === "number_one_agent" ? "Number 1 planning message sent." : notificationDelivery === "message_fallback" ? "Number 1 planning message sent via fallback." : "Discord follow-up sent." : notificationStatus === "failed" ? `Number 1 planning handoff failed${notificationError ? `: ${notificationError}` : "."}` : "Number 1 planning handoff was not confirmed."}</strong></div>}
+  const [open, setOpen] = useState(false);
+  const [step, setStep] = useState<RegistrationStep>(1);
+  const [sourceMode, setSourceMode] = useState<"github" | "local">("github");
+  const [fullName, setFullName] = useState("");
+  const [selectedLocalRepository, setSelectedLocalRepository] = useState("");
+  const [selectedLocalPath, setSelectedLocalPath] = useState("");
+  const [channel, setChannel] = useState("");
+  const [options, setOptions] = useState<RegistrationOptions | null>(null);
+  const [optionsLoading, setOptionsLoading] = useState(false);
+  const [optionsError, setOptionsError] = useState<string | null>(null);
+  const [phase, setPhase] = useState("takeover");
+  const [goal, setGoal] = useState("");
+  const [cloneAllowed, setCloneAllowed] = useState(true);
+  const [operationMode, setOperationMode] = useState("supervised");
+  const [completionPolicy, setCompletionPolicy] = useState("owner_approval");
+  const [checkpointPolicy, setCheckpointPolicy] = useState("major_changes");
+  const [deploymentAuthority, setDeploymentAuthority] = useState("always_ask");
+  const [intelligenceLevel, setIntelligenceLevel] = useState("balanced");
+  const [surface, setSurface] = useState("web_ui");
+  const [uatRequired, setUatRequired] = useState(true);
+  const [screenshotsRequired, setScreenshotsRequired] = useState(true);
+  const [deploymentRequired, setDeploymentRequired] = useState(false);
+  const [inspection, setInspection] = useState<RegistrationResult["discovery"] | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [followUp, setFollowUp] = useState<string | null>(null);
+  const [notificationStatus, setNotificationStatus] = useState<string | null>(null);
+  const [notificationDelivery, setNotificationDelivery] = useState<string | null>(null);
+  const [notificationError, setNotificationError] = useState<string | null>(null);
+
+  useEffect(() => { if (surface === "web_ui") setScreenshotsRequired(true); }, [surface]);
+
+  const loadOptions = async () => {
+    if (optionsLoading) return;
+    setOptionsLoading(true); setOptionsError(null);
+    try {
+      const discovered = await callGateway<RegistrationOptions>("registration/options");
+      setOptions(discovered);
+      setChannel((current) => current || discovered.default_discord_route || discovered.discord_routes[0]?.route || "");
+    } catch (reason) {
+      setOptionsError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setOptionsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (open && options === null && !optionsLoading && optionsError === null) void loadOptions();
+  }, [open, options, optionsLoading, optionsError]);
+
+  useEffect(() => {
+    if (!open || !options?.discord_discovery_pending) return undefined;
+    const timer = window.setTimeout(() => void loadOptions(), 2_000);
+    return () => window.clearTimeout(timer);
+  }, [open, options?.discord_discovery_pending, optionsLoading]);
+
+  const chooseLocalClone = (localPath: string) => {
+    const clone = options?.local_clones.find((item) => item.local_path === localPath);
+    setSelectedLocalPath(localPath);
+    setFullName(clone?.full_name ?? "");
+    setInspection(null);
+  };
+
+  const chooseLocalRepository = (repository: string) => {
+    setSelectedLocalRepository(repository);
+    const candidates = (options?.local_clones ?? []).filter((item) => item.full_name === repository);
+    const selected = [...candidates].sort((left, right) => {
+      const leftMain = ["main", "master"].includes(left.branch ?? "") ? 0 : 1;
+      const rightMain = ["main", "master"].includes(right.branch ?? "") ? 0 : 1;
+      return leftMain - rightMain || Number(Boolean(left.dirty)) - Number(Boolean(right.dirty)) || left.local_path.length - right.local_path.length;
+    })[0];
+    chooseLocalClone(selected?.local_path ?? "");
+  };
+
+  const chooseSourceMode = (mode: "github" | "local") => {
+    setSourceMode(mode); setInspection(null); setError(null);
+    if (mode === "github") {
+      setSelectedLocalRepository(""); setSelectedLocalPath(""); setFullName("");
+    } else {
+      const first = options?.local_clones.find((item) => !item.registered);
+      chooseLocalRepository(first?.full_name ?? "");
+    }
+  };
+
+  const inspect = async () => {
+    if (saving) return;
+    setSaving(true); setError(null);
+    try {
+      const normalized = normalizeGithubRepository(fullName);
+      const result = await callGateway<RegistrationResult>("repos/inspect", {
+        full_name: normalized,
+        ...(sourceMode === "local" && selectedLocalPath ? { local_path: selectedLocalPath } : {}),
+      });
+      setFullName(normalized); setInspection(result.discovery ?? null); setStep(2);
+    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { setSaving(false); }
+  };
+
+  const register = async () => {
+    if (saving) return;
+    if (completionPolicy === "auto_merge" && operationMode !== "autonomous") {
+      setError("Auto-merge requires Autonomous operation. Choose Autonomous or keep owner approval.");
+      return;
+    }
+    setSaving(true); setError(null); setFollowUp(null); setNotificationStatus(null); setNotificationDelivery(null); setNotificationError(null);
+    try {
+      const result = await callGateway<RegistrationResult>("repos/register", {
+        full_name: normalizeGithubRepository(fullName),
+        ...(sourceMode === "local" && selectedLocalPath ? { local_path: selectedLocalPath } : {}),
+        notification_route: channel,
+        phase,
+        goal: goal.trim() || undefined,
+        clone_allowed: cloneAllowed,
+        operation_mode: operationMode,
+        completion_policy: completionPolicy,
+        allow_autonomous_merge: completionPolicy === "auto_merge",
+        milestone_approval: checkpointPolicy === "each_milestone" ? "each_milestone" : checkpointPolicy === "updates_only" ? "none" : "mode_default",
+        checkpoint_policy: checkpointPolicy,
+        deployment_authority: deploymentAuthority,
+        intelligence_level: intelligenceLevel,
+        detected_surface: surface,
+        surfaces: [surface],
+        uat_required: uatRequired,
+        screenshots_required: screenshotsRequired,
+        deployment_required: deploymentRequired,
+        planning_doc_choice: inspection?.planning_document?.path,
+      });
+      setOpen(false); setStep(1); setInspection(null); setFullName(""); setSelectedLocalRepository(""); setSelectedLocalPath(""); setSourceMode("github");
+      setFollowUp(result.follow_up_message ?? "Repository registered. Number One will begin the initial planning conversation before work starts.");
+      setNotificationStatus(result.notification_status ?? "unavailable"); setNotificationDelivery(result.notification_delivery ?? null); setNotificationError(result.notification_error ?? null);
+      onRegistered();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { setSaving(false); }
+  };
+
+  const advance = () => { if (step === 1) void inspect(); else if (step === 4) void register(); else setStep((step + 1) as RegistrationStep); };
+  const submit = (event: FormEvent) => { event.preventDefault(); advance(); };
+  const selectedChannel = options?.discord_routes.find((item) => item.route === channel);
+  const availableLocalClones = options?.local_clones ?? [];
+  const localRepositories = [...new Map(availableLocalClones.map((clone) => [clone.full_name, clone])).values()];
+  const selectedRepositoryClones = availableLocalClones.filter((clone) => clone.full_name === selectedLocalRepository);
+  const sourceReady = sourceMode === "local" ? Boolean(selectedLocalPath && fullName) : Boolean(fullName.trim());
+  const stepLabels = ["Repository", "Mission", "Controls", "Evidence"];
+  return <section className="register-panel" aria-labelledby="register-title"><div className="section-heading"><div><p className="eyebrow">REPOSITORY REGISTRY</p><h3 id="register-title">Set a course</h3></div><button className="secondary" onClick={() => { setOpen(!open); setError(null); }}>{open ? "Close" : "Register repository"}</button></div>
+    <p className="muted">Give Make It So the repository and Discord route. Inspection fills in the facts; Number One handles the nuanced questions conversationally.</p>
+    {open && <form className="onboarding-shell" onSubmit={submit}>
+      <div className="onboarding-steps" aria-label="Registration steps">{stepLabels.map((label, index) => <button key={label} type="button" className={step === index + 1 ? "active" : step > index + 1 ? "complete" : ""} onClick={() => { if (index === 0 || inspection) setStep((index + 1) as RegistrationStep); }}><span>{index + 1}</span>{label}</button>)}</div>
+      {step === 1 && <div className="onboarding-step"><div><h4>Start with the source</h4><p className="step-note">Choose a checkout already on this machine, or point Make It So at a GitHub repository. Inspection is read-only and does not contact Discord.</p></div><div className="source-switch" role="group" aria-label="Repository source"><button type="button" className={sourceMode === "local" ? "selected" : ""} aria-pressed={sourceMode === "local"} onClick={() => chooseSourceMode("local")}>Local clone</button><button type="button" className={sourceMode === "github" ? "selected" : ""} aria-pressed={sourceMode === "github"} onClick={() => chooseSourceMode("github")}>GitHub repository</button></div>{optionsLoading && options === null && <p className="step-note" role="status">Scanning local repositories...</p>}{optionsError && <p className="warning" role="alert">Could not load registration choices: {optionsError} <button type="button" className="text-button" onClick={() => void loadOptions()}>Retry</button></p>}{sourceMode === "local" ? <div className="onboarding-fields"><label>Local repository<select required value={selectedLocalRepository} onChange={(event) => chooseLocalRepository(event.target.value)} disabled={optionsLoading && options === null}><option value="">{localRepositories.length ? "Select a repository" : "No verified GitHub clones found"}</option>{localRepositories.map((clone) => <option key={clone.full_name} value={clone.full_name} disabled={clone.registered}>{clone.full_name}{clone.registered ? " - already registered" : ""}</option>)}</select></label>{selectedRepositoryClones.length > 1 && <label>Checkout<select required value={selectedLocalPath} onChange={(event) => chooseLocalClone(event.target.value)}>{selectedRepositoryClones.map((clone) => <option key={clone.local_path} value={clone.local_path}>{clone.branch ?? "detached"}{clone.dirty ? " - modified" : " - clean"} - {clone.local_path}</option>)}</select></label>}</div> : <label className="wide-field">GitHub repository<input required value={fullName} onChange={(event) => { setFullName(event.target.value); setInspection(null); }} placeholder="owner/repository or GitHub URL" /></label>}<label className="wide-field">Discord channel<select required value={channel} onChange={(event) => setChannel(event.target.value)} disabled={optionsLoading && options === null || !options?.discord_routes.length}><option value="">Select a Discord channel</option>{options?.discord_routes.map((route) => <option key={route.route} value={route.route}>{route.label}{route.alias && route.alias !== route.name ? ` (${route.alias})` : ""}</option>)}</select></label>{options?.discord_discovery_pending && <p className="step-note" role="status">Loading additional Discord channels in the background...</p>}{options?.warnings?.map((warning) => <p className="warning" key={warning}>{warning}</p>)}{inspection && <DiscoveryCard discovery={inspection} />}</div>}
+      {step === 2 && <div className="onboarding-step"><div><h4>What are we setting out to do?</h4><p className="step-note">A sentence is enough. Number One will refine the outcome, users, scope, and exit criteria in Discord.</p></div>{inspection && <DiscoveryCard discovery={inspection} />}<div className="choice-grid"><ChoiceButton selected={phase === "greenfield"} label="New project" description="Create the course and repository foundation after approval." onClick={() => setPhase("greenfield")} /><ChoiceButton selected={phase === "takeover"} label="Continue existing work" description="Understand the current state and drive the remaining work." onClick={() => setPhase("takeover")} /><ChoiceButton selected={phase === "feature"} label="Add a feature" description="Plan a substantial change for a shipped product." onClick={() => setPhase("feature")} /></div><label className="wide-field">Desired outcome <textarea value={goal} onChange={(event) => setGoal(event.target.value)} placeholder="What should this course make true for its users? (optional if you want Number One to lead with this question)" /></label></div>}
+      {step === 3 && <div className="onboarding-step"><div><h4>Set the operating rules</h4><p className="step-note">These are repeatable controls, so they belong here instead of in a long Discord questionnaire.</p></div><h5>Autonomy</h5><div className="choice-grid"><ChoiceButton selected={operationMode === "advisory"} label="Advisory" description="Inspect and recommend; never mutate." onClick={() => setOperationMode("advisory")} /><ChoiceButton selected={operationMode === "supervised"} label="Supervised" description="Act after approval at the configured checkpoints." onClick={() => setOperationMode("supervised")} /><ChoiceButton selected={operationMode === "autonomous"} label="Autonomous" description="Continue safely and report meaningful transitions." onClick={() => setOperationMode("autonomous")} /></div><h5>Completion</h5><div className="choice-grid"><ChoiceButton selected={completionPolicy === "owner_approval"} label="Owner approval" description="Number One can prepare completion; you merge." onClick={() => setCompletionPolicy("owner_approval")} /><ChoiceButton selected={completionPolicy === "control_plane_complete"} label="Make It So complete" description="Complete the course after all gates, without merging." onClick={() => setCompletionPolicy("control_plane_complete")} /><ChoiceButton selected={completionPolicy === "auto_merge"} label="Auto-merge" description="Only available with autonomous operation and merge gates." onClick={() => setCompletionPolicy("auto_merge")} /></div><div className="onboarding-fields"><label>Milestone check-ins<select value={checkpointPolicy} onChange={(event) => setCheckpointPolicy(event.target.value)}><option value="each_milestone">Every milestone</option><option value="major_changes">Major changes only</option><option value="updates_only">Updates only</option></select></label><label>Intelligence level<select value={intelligenceLevel} onChange={(event) => setIntelligenceLevel(event.target.value)}><option value="economy">Economy</option><option value="balanced">Balanced</option><option value="deep">Deep</option><option value="maximum">Maximum</option></select></label><label>Deployment authority<select value={deploymentAuthority} onChange={(event) => setDeploymentAuthority(event.target.value)}><option value="always_ask">Always ask</option><option value="non_production">Allow verified non-production</option></select></label></div></div>}
+      {step === 4 && <div className="onboarding-step"><div><h4>Choose the proof</h4><p className="step-note">Tests remain required for every milestone. These choices define the extra evidence Number One expects.</p></div><h5>Detected application surface</h5><div className="choice-grid"><ChoiceButton selected={surface === "web_ui"} label="Web UI" description="Include usability, visual, and screenshot evidence." onClick={() => setSurface("web_ui")} /><ChoiceButton selected={surface === "cli"} label="Command line" description="Focus on commands, output, errors, and workflows." onClick={() => setSurface("cli")} /><ChoiceButton selected={surface === "api"} label="API or service" description="Focus on contracts, integration, and operational proof." onClick={() => setSurface("api")} /><ChoiceButton selected={surface === "library"} label="Library" description="Focus on public behavior, compatibility, and examples." onClick={() => setSurface("library")} /></div><div className="choice-grid compact-choices"><ChoiceButton selected={uatRequired} label="UAT required" description="Require human-facing acceptance evidence." onClick={() => setUatRequired(!uatRequired)} /><ChoiceButton selected={screenshotsRequired} label="Screenshots required" description={surface === "web_ui" ? "Capture UI evidence at milestone completion." : "Capture screenshots when they add useful proof."} onClick={() => setScreenshotsRequired(!screenshotsRequired)} /><ChoiceButton selected={deploymentRequired} label="Deployment is an exit gate" description="Keep completion separate if this remains off." onClick={() => setDeploymentRequired(!deploymentRequired)} /></div><div className="review-box"><strong>Ready to register</strong><span>{fullName} will be registered on <b>{selectedChannel?.label ?? channel}</b>. Number One will receive the choices above, ask one unresolved question, and wait for course approval before work starts.</span></div></div>}
+      <div className="onboarding-actions">{step > 1 && <button className="secondary" type="button" onClick={() => setStep((step - 1) as RegistrationStep)}>Back</button>}<span className="action-spacer" />{step < 4 ? <button className="primary" type="button" onClick={advance} disabled={saving || optionsLoading || !channel || (step === 1 && !sourceReady)}>{saving ? "Inspecting..." : step === 1 ? "Inspect repository" : "Continue"}</button> : <button className="primary" type="button" onClick={advance} disabled={saving}>{saving ? "Registering and starting planning..." : "Register and start planning"}</button>}</div>{error && <p className="warning" role="alert">{error}</p>}
+    </form>}
+    {followUp && <div className="inline-status" role="status"><p>{followUp}</p><strong className={notificationStatus === "sent" ? "success" : "warning"}>{notificationStatus === "sent" ? notificationDelivery === "number_one_agent" ? "Number One planning message sent." : notificationDelivery === "message_fallback" ? "Planning message sent via fallback; Number One session was unavailable." : "Discord follow-up sent." : notificationStatus === "failed" ? `Number One planning handoff failed${notificationError ? `: ${notificationError}` : "."}` : "Number One planning handoff was not confirmed."}</strong></div>}
   </section>;
+}
+
+function DiscoveryCard({ discovery }: { discovery: NonNullable<RegistrationResult["discovery"]> }) {
+  const clone = discovery.local_clone;
+  const plan = discovery.planning_document;
+  return <div className="discovery-card" role="status"><strong>Inspection complete</strong><div><span className={clone?.cloned ? "good" : "warn"}>{clone?.cloned ? "Local clone found" : "No local clone found"}</span><small>{clone?.path ?? "Managed workspace will be determined by Number One."}</small></div><div><span className={plan?.found ? "good" : "warn"}>{plan?.found ? "Planning document found" : "Planning document needs confirmation"}</span><small>{plan?.path ?? "Number One will ask for the plan source."}</small></div>{discovery.git?.branch && <div><span>Git state</span><small>{discovery.git.branch}{discovery.git.dirty ? " · uncommitted changes" : " · clean"}</small></div>}</div>;
 }
 
 function GreenfieldPanel({ onCreated }: { onCreated: () => void }) {
@@ -1030,6 +1236,14 @@ function SchedulePanel({ status, onRefresh }: { status: ScheduleStatus | null; o
     setReconcileEvery(status?.jobs.find((job) => job.name === "make-it-so-reconcile")?.every ?? "5m");
     setReviewEvery(status?.jobs.find((job) => job.name === "make-it-so-course-review")?.every ?? "2h");
   }, [status]);
+  const runNow = async () => {
+    setMessage(null);
+    try {
+      const result = await callGateway<{ status?: string }>("run/start", { kind: "review", force_replan: true });
+      setMessage(result.status === "started" ? "Course review started." : "Course review requested.");
+      onRefresh();
+    } catch (reason) { setMessage(String(reason)); }
+  };
   const action = async (path: string, params: Record<string, unknown> = {}) => {
     setMessage(null);
     try {
@@ -1038,7 +1252,7 @@ function SchedulePanel({ status, onRefresh }: { status: ScheduleStatus | null; o
       onRefresh();
     } catch (reason) { setMessage(String(reason)); }
   };
-  return <section className="schedule-section" aria-labelledby="schedule-title"><div className="section-heading"><div><p className="eyebrow">AUTOMATION</p><h2 id="schedule-title">Managed schedules</h2></div><button className="secondary compact" onClick={() => action("install")}>Reconcile</button></div>
+  return <section className="schedule-section" aria-labelledby="schedule-title"><div className="section-heading"><div><p className="eyebrow">AUTOMATION</p><h2 id="schedule-title">Managed schedules</h2></div><button className="secondary compact" onClick={runNow}>Run course review</button></div>
     <div className="schedule-grid">{status?.jobs?.map((job) => <div className="schedule-row" key={job.name}><div><strong>{job.name}</strong><span>Every {job.every}</span></div><span className={`health ${job.health}`}>{job.health}</span><div className="action-row"><button className="secondary compact" onClick={() => action(job.enabled ? "pause" : "resume", { name: job.name })}>{job.enabled ? "Pause" : "Resume"}</button><button className="secondary compact danger" onClick={() => action("remove", { name: job.name })}>Remove</button></div></div>) ?? <p className="muted">Schedule state is unavailable.</p>}</div>
     <div className="settings-grid schedule-editor"><label>Reconcile cadence<input aria-label="Reconcile cadence" value={reconcileEvery} onChange={(event) => setReconcileEvery(event.target.value)} pattern="[1-9][0-9]*(s|m|h|d)" /></label><label>Course review cadence<input aria-label="Course review cadence" value={reviewEvery} onChange={(event) => setReviewEvery(event.target.value)} pattern="[1-9][0-9]*(s|m|h|d)" /></label><button className="primary compact" onClick={() => action("edit", { reconcile_every: reconcileEvery, review_every: reviewEvery })}>Save cadence</button></div>
     {message && <p className="inline-status" role="status">{message}</p>}
@@ -1102,8 +1316,8 @@ function MilestoneGovernancePanel({ item, onAction }: { item: CourseSummary; onA
   const pending = proposals.filter((proposal) => proposal.status === "proposed");
   const latestReview = item.milestone_reviews?.[0];
   return <section className="detail-section milestone-governance" aria-labelledby={`milestone-governance-${item.course.key}`}>
-    <div className="detail-heading"><div><p className="eyebrow">NUMBER 1</p><h3 id={`milestone-governance-${item.course.key}`}>Course corrections</h3></div><span className="evidence-summary">Revision {item.course.plan_revision ?? 1} · {pending.length} awaiting decision</span></div>
-    <p className="muted">Number 1 owns the course direction. Supervised mode pauses here before a milestone graph change is applied.</p>
+    <div className="detail-heading"><div><p className="eyebrow">NUMBER ONE</p><h3 id={`milestone-governance-${item.course.key}`}>Course corrections</h3></div><span className="evidence-summary">Revision {item.course.plan_revision ?? 1} · {pending.length} awaiting decision</span></div>
+    <p className="muted">Number One owns the course direction. Supervised mode pauses here before a milestone graph change is applied.</p>
     {item.number_one && <div className="number-one-context"><strong>Leadership session</strong><span>{item.number_one.model ?? "configured leadership route"} · {item.number_one.last_review_at ? new Date(item.number_one.last_review_at).toLocaleString() : "not reviewed yet"}</span>{item.number_one.summary && <small>{item.number_one.summary}</small>}</div>}
     {latestReview && <div className={`number-one-review ${latestReview.status ?? "on_track"}`}><strong>Latest course review: {(latestReview.status ?? "on track").split("_").join(" ")}</strong><span>{latestReview.summary}</span><small>Next: {latestReview.next_action}</small></div>}
     {pending.length ? <div className="proposal-list">{pending.map((proposal) => <div className="proposal-row" key={proposal.proposal_id}><div><strong>{proposal.summary}</strong><span>{proposal.reason}</span><small>{proposal.impact ?? "routine"} · base revision {proposal.base_revision ?? "?"} · {proposal.changes?.map((change) => `${change.kind ?? "change"} ${change.work_package_key ?? change.work_package?.key ?? "milestone"}`).join(", ")}</small></div><div className="action-row"><button className="primary compact" onClick={() => onAction("course/milestone-change-approve", { full_name: item.repository, course_key: item.course.key, proposal_id: proposal.proposal_id, approved_by: "owner" })}>Approve</button><button className="secondary compact danger" onClick={() => onAction("course/milestone-change-reject", { full_name: item.repository, course_key: item.course.key, proposal_id: proposal.proposal_id })}>Reject</button></div></div>)}</div> : <p className="muted">No milestone changes are awaiting a decision.</p>}
@@ -1115,11 +1329,11 @@ function CoursePanel({ item, repo, onAction, onRefresh }: { item: CourseSummary;
   const { course, repository, readiness } = item;
   const params = { full_name: repository, course_key: course.key };
   const openPlanning = async () => { setPlanningLoading(true); try { setPlanning(await callGateway<PlanningSession>("course/planning-session", params)); } finally { setPlanningLoading(false); } };
-  return <article className="course-card"><div className="course-heading"><div><strong>{course.title}</strong><span>{repository} / {course.kind} / {course.status}</span></div><span className={`readiness ${readiness.ready ? "ready" : "waiting"}`}>{readiness.ready ? "Ready for approval" : `${readiness.unresolved?.length ?? 0} readiness items`}</span><button className="icon-button" aria-label={`${open ? "Collapse" : "Expand"} ${course.title}`} onClick={() => setOpen(!open)}>{open ? "-" : "+"}</button></div>
+  return <article className={`course-card ${open ? "is-open" : ""}`}><div className="course-heading"><div><strong>{course.title}</strong><span>{repository} / {course.kind} / {course.status}</span></div><span className={`readiness ${readiness.ready ? "ready" : "waiting"}`}>{readiness.ready ? "Ready for approval" : `${readiness.unresolved?.length ?? 0} readiness items`}</span><button className="icon-button" aria-label={`${open ? "Collapse" : "Expand"} ${course.title}`} title={`${open ? "Collapse" : "Expand"} course details`} onClick={() => setOpen(!open)}><ChevronDown size={18} aria-hidden="true" /></button></div>
     {open && <div className="course-detail"><p className="course-goal">{course.goal}</p><div className="course-actions"><label>Decision owner<input value={actor} onChange={(event) => setActor(event.target.value)} /></label><button className="secondary" onClick={openPlanning} disabled={planningLoading}>{planningLoading ? "Preparing..." : "Open planning brief"}</button>{readiness.ready && course.status !== "engaged" && course.status !== "paused" && <button className="primary" onClick={() => onAction("course/approve", { ...params, approved_by: actor })}>Engage course</button>}{course.status === "engaged" && <button className="secondary" onClick={() => onAction("course/pause", params)}>Pause</button>}{course.status === "paused" && <button className="primary" onClick={() => onAction("course/resume", params)}>Resume</button>}</div>
       {planning && <section className="detail-section planning-brief"><h3>Plan and charter review</h3><p>{planning.prompt}</p><dl className="plan-diff"><div><dt>Goal</dt><dd>{course.goal}</dd></div><div><dt>Readiness</dt><dd>{readiness.unresolved?.length ?? 0} unresolved, {readiness.verified?.length ?? 0} verified</dd></div><div><dt>Delivery plan</dt><dd>{course.work_packages.length} work packages, {course.checkpoints.length} checkpoints</dd></div></dl>{planning.next_questions.length ? <><strong>Next questions</strong><ul>{planning.next_questions.map((question) => <li key={question}>{question}</li>)}</ul></> : <p className="muted">The charter is ready for owner review. Approval is still required before mutation.</p>}</section>}
       <section className="detail-section"><h3>Readiness</h3>{course.readiness.length ? course.readiness.map((requirement) => <div className="requirement" key={requirement.key}><div><strong>{requirement.key}</strong><span>{requirement.question}</span></div><span className="status-text">{requirement.status}</span>{requirement.status !== "verified" && <><textarea aria-label={`Answer ${requirement.key}`} value={answers[requirement.key] ?? requirement.answer ?? ""} onChange={(event) => setAnswers({ ...answers, [requirement.key]: event.target.value })} placeholder="Answer or evidence" /><button className="secondary compact" onClick={() => onAction("course/requirement", { ...params, requirement_key: requirement.key, status: "answered", answer: answers[requirement.key] ?? requirement.answer ?? "", evidence: ["owner-dashboard-answer"] })}>Submit answer</button></>}</div>) : <p className="muted">No readiness questions recorded.</p>}</section>
-      <section className="detail-section"><h3>Work-package dependency map</h3>{course.work_packages.length ? <div className="package-list">{course.work_packages.map((pkg) => <div key={pkg.key}><strong>{pkg.key}</strong><span>{pkg.title}{pkg.dependencies?.length ? ` | after ${pkg.dependencies.join(", ")}` : " | ready when engaged"}</span><em>{pkg.status}</em></div>)}</div> : <p className="muted">Number 1 will decompose work after course approval.</p>}</section>
+      <section className="detail-section"><h3>Work-package dependency map</h3>{course.work_packages.length ? <div className="package-list">{course.work_packages.map((pkg) => <div key={pkg.key}><strong>{pkg.key}</strong><span>{pkg.title}{pkg.dependencies?.length ? ` | after ${pkg.dependencies.join(", ")}` : " | ready when engaged"}</span><em>{pkg.status}</em></div>)}</div> : <p className="muted">Number One will decompose work after course approval.</p>}</section>
       <MilestoneGovernancePanel item={item} onAction={onAction} />
       <MilestoneEvidencePanel item={item} repo={repo} />
       <section className="detail-section"><h3>Checkpoints</h3>{course.checkpoints.length ? course.checkpoints.map((checkpoint) => <div className="checkpoint" key={checkpoint.key}><div><strong>{checkpoint.title}</strong><span>{checkpoint.reason}</span></div><span className="status-text">{checkpoint.status}</span>{checkpoint.status === "pending" && <button className="secondary compact" onClick={() => onAction("course/checkpoint", { ...params, checkpoint_key: checkpoint.key, status: "resolved", resolved_by: actor, evidence: ["dashboard"] })}>Resolve</button>}</div>) : <p className="muted">No checkpoints are currently defined.</p>}</section>
@@ -1148,7 +1362,7 @@ function ActivityPanel({ repos, onRefresh }: { repos: Repo[]; onRefresh: () => v
     <div className="section-heading"><div><p className="eyebrow">SHIP STATUS</p><h2>Attention and crew activity</h2></div></div>
     <div className="activity-grid">
       <div className="activity-panel"><h3>Attention queue</h3>{attention.length ? attention.map((event) => <div className="event-row attention" key={`${event.repo}:${event.created_at}:${event.event_type}`}><strong>{event.event_type.split("_").join(" ")}</strong><span>{event.repo} | {event.summary}</span><small>{event.reason}</small><div className="event-actions">{evidenceLink(event.evidence) && <a href={evidenceLink(event.evidence)!} target="_blank" rel="noreferrer">Open on GitHub</a>}{Boolean(event.evidence.fingerprint) && <button className="secondary compact" onClick={() => acknowledge(event)}>Acknowledge</button>}</div></div>) : <p className="muted">No blocking decisions.</p>}</div>
-      <div className="activity-panel"><h3>PR review and crew activity</h3>{crew.length ? crew.map((event) => <div className="event-row" key={`${event.repo}:${event.created_at}:${event.event_type}`}><strong>{event.event_type.split("_").join(" ")}</strong><span>{event.repo} | {event.summary}</span><small>{String(event.evidence.worker ?? event.evidence.model ?? "Number 1")}</small>{evidenceLink(event.evidence) && <a href={evidenceLink(event.evidence)!} target="_blank" rel="noreferrer">Review evidence</a>}</div>) : <p className="muted">No recent crew events.</p>}</div>
+      <div className="activity-panel"><h3>PR review and crew activity</h3>{crew.length ? crew.map((event) => <div className="event-row" key={`${event.repo}:${event.created_at}:${event.event_type}`}><strong>{event.event_type.split("_").join(" ")}</strong><span>{event.repo} | {event.summary}</span><small>{String(event.evidence.worker ?? event.evidence.model ?? "Number One")}</small>{evidenceLink(event.evidence) && <a href={evidenceLink(event.evidence)!} target="_blank" rel="noreferrer">Review evidence</a>}</div>) : <p className="muted">No recent crew events.</p>}</div>
       <div className="activity-panel"><h3>Token efficiency by course, package, stage, model, and date</h3>{Object.keys(models).length ? Object.entries(models).sort((a, b) => b[1] - a[1]).map(([model, tokens]) => <div className="token-row" key={model}><span>{model}</span><strong>{tokens.toLocaleString()}</strong></div>) : <p className="muted">Provider token telemetry is not available yet.</p>}{repos.flatMap((repo) => repo.usage_detail?.dimensions ?? []).slice(0, 8).map((row, index) => <div className="token-row token-dimension" key={`${row.date}:${row.course_key}:${row.work_package_key}:${row.stage}:${row.model}:${index}`}><span>{row.date ?? "date unknown"} | {row.course_key ?? "portfolio"} / {row.work_package_key ?? "unscoped"} | {row.stage ?? "stage unknown"} | {row.model ?? "model unknown"}</span><strong>{(row.tokens ?? 0).toLocaleString()}</strong></div>)}</div>
     </div>
   </section>;
@@ -1179,13 +1393,13 @@ export function App() {
     setSelectedRepoName(latest.full_name);
   }, [repos, selectedRepoName]);
   const selectedRepo = repos.find((repo) => repo.full_name === selectedRepoName) ?? repos[0];
-  return <main className="shell"><header className="topbar"><div><p className="eyebrow">FLIGHT CONTROL</p><h1>Make It So</h1><p className="subtitle">Set the course. Engage the crew.</p></div><div className="action-row"><button className="secondary icon-label" onClick={refresh} disabled={refreshing} aria-label="Refresh portfolio"><RefreshCw size={16} aria-hidden="true" className={refreshing ? "spinning" : ""} />{refreshing ? "Refreshing" : "Refresh"}</button></div></header>
+  return <main className="shell"><header className="topbar"><div className="brand-lockup"><div className="brand-mark" aria-hidden="true"><Rocket size={22} /></div><div><p className="eyebrow">COMMAND DECK <span className="eyebrow-divider">/</span> OPENCLAW</p><h1>Make It So</h1><p className="subtitle">Set the course. Engage the crew.</p></div></div><div className="topbar-actions"><span className="connection-state"><span className="connection-dot" aria-hidden="true" />Control surface online</span><div className="action-row"><button className="secondary icon-label" onClick={refresh} disabled={refreshing} aria-label="Refresh portfolio"><RefreshCw size={16} aria-hidden="true" className={refreshing ? "spinning" : ""} />{refreshing ? "Refreshing" : "Refresh"}</button></div></div></header>
     {error && <div className="alert" role="alert">{error}</div>}
      <section className="overview" aria-labelledby="overview-title"><div className="section-heading"><div><p className="eyebrow">MISSION OVERVIEW</p><h2 id="overview-title">Current courses</h2></div><span className="status-pill">{portfolio ? `${repos.length} registered` : "Loading"}</span></div><RegisterPanel onRegistered={refresh} />{portfolio === null ? <div className="loading-state" role="status"><strong>Loading fleet status...</strong><span>Course charters and repository facts are arriving independently.</span></div> : repos.length ? <><PortfolioSummary repos={repos} />{selectedRepo && <ExecutiveSummary repo={selectedRepo} courses={courses} />}<div className="mission-layout"><RepoSelector repos={repos} selected={selectedRepo?.full_name ?? ""} onSelect={setSelectedRepoName} />{selectedRepo && <RepoPanel key={selectedRepo.full_name} repo={selectedRepo} onSave={updateRepo} />}</div></> : <div className="empty"><h3>No repositories registered</h3><p>Register a repository to begin a readiness review.</p></div>}</section>
     <SchedulePanel status={scheduleStatus} onRefresh={refresh} />
     {modelConfig && <><ModelPolicyPanel config={modelConfig} onSaved={refresh} /><UsagePolicyPanel config={modelConfig} onSaved={refresh} /></>}
      <section className="courses" aria-labelledby="courses-title"><div className="section-heading"><div><p className="eyebrow">COURSE CHARTER</p><h2 id="courses-title">Readiness and work packages</h2></div><span className="status-pill">{courses ? `${courses.courses.length} courses` : "Loading"}</span></div>{courses === null ? <div className="loading-state" role="status"><strong>Loading course charters...</strong><span>This stays independent of GitHub and token reconciliation.</span></div> : courses.courses.length ? <div className="course-list">{courses.courses.map((item) => <CoursePanel key={`${item.repository}:${item.course.key}`} item={item} repo={repos.find((repo) => repo.full_name === item.repository)} onAction={courseAction} onRefresh={refresh} />)}</div> : <p className="muted">No course charter has been saved yet.</p>}</section>
-    <CourseCreatePanel repos={repos} onCreated={refresh} /><ActivityPanel repos={repos} onRefresh={refresh} /><GreenfieldPanel onCreated={refresh} />
+    <CourseCreatePanel repos={repos} onCreated={refresh} /><ActivityPanel repos={repos} onRefresh={refresh} />
   </main>;
 }
 

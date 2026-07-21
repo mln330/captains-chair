@@ -12,6 +12,7 @@ describe("shared control UI contract", () => {
     expect(source).toContain("repos/create");
     expect(source).toContain("repository is created only after the course passes readiness");
     expect(source).toContain("Managed schedules");
+    expect(source).toContain("Run course review");
     expect(source).toContain("Save cadence");
     expect(source).toContain("Application surface");
     expect(source).toContain("model_profiles");

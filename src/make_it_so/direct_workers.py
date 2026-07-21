@@ -12,6 +12,7 @@ from pydantic import Field, PrivateAttr, model_validator
 from make_it_so.command import CommandRunner, run_command
 from make_it_so.harness import strict_output_schema
 from make_it_so.json_tools import decode_first_json
+from make_it_so.model_policy import runtime_model
 from make_it_so.models import ModelUsage, StrictModel
 from make_it_so.orchestration import QueueCard
 
@@ -201,8 +202,10 @@ class CommandWorkerExecutor:
                 str(workspace),
                 "--model",
                 _runtime_model("codex", model),
-                "-",
             ]
+            for writable_dir in _codex_additional_writable_dirs(workspace):
+                command.extend(("--add-dir", str(writable_dir)))
+            command.append("-")
             started = time.monotonic()
             try:
                 result = self.runner(
@@ -296,6 +299,13 @@ def _worker_prompt(card: QueueCard, *, attempt_id: str, workspace: Path) -> str:
         if "stage:merge" in card.labels
         else "Do not merge, release, deploy, expose secrets, force-push, or delete branches."
     )
+    publish_rule = (
+        "For implementation and repair cards, do not commit, push, or create/update a pull request. "
+        "The trusted host controller will publish the isolated worktree after you return; report the code "
+        "changes, checks, and evidence in your structured result."
+        if any(label in {"stage:implementation", "stage:repair"} for label in card.labels)
+        else ""
+    )
     return (
         "You are a Make It So worker in a fresh context. Execute only the assigned card.\n"
         f"Card ID: {card.id}\n"
@@ -311,7 +321,7 @@ def _worker_prompt(card: QueueCard, *, attempt_id: str, workspace: Path) -> str:
             if runtime_canary
             else "Inspect current repository state before mutating it. Keep changes inside the exact working directory. "
         )
-        + f"{merge_rule} Run the checks relevant "
+        + f"{merge_rule} {publish_rule} Run the checks relevant "
         "to this card. Return blocked with a TECHNICAL:, USER_SECRET:, GOAL_DIVERGENCE:, EXTERNAL_ACCESS:, or "
         "HIGH_RISK_DECISION: reason when completion is not justified. Never invent proof.\n\n"
         "For non-test cards set `test_evidence` to null. For test and UX cards return the complete evidence object.\n"
@@ -338,9 +348,40 @@ def _parse_result(text: str) -> WorkerExecutionResult:
 
 
 def _runtime_model(runtime: Literal["openclaw", "codex"], model: str) -> str:
-    if runtime == "codex" and model.startswith("codex/"):
-        return model.split("/", 1)[1]
-    return model
+    return runtime_model(runtime, model)
+
+
+def _codex_additional_writable_dirs(workspace: Path) -> tuple[Path, ...]:
+    """Include linked-worktree Git metadata in Codex's workspace-write scope."""
+    marker = workspace / ".git"
+    if marker.is_dir():
+        return (marker.resolve(),)
+    if not marker.is_file():
+        return ()
+
+    try:
+        line = marker.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ()
+    if not line.lower().startswith("gitdir:"):
+        return ()
+
+    raw_git_dir = line.split(":", 1)[1].strip()
+    git_dir = Path(raw_git_dir)
+    if not git_dir.is_absolute():
+        git_dir = workspace / git_dir
+    git_dir = git_dir.resolve()
+    candidates = [git_dir]
+    commondir = git_dir / "commondir"
+    try:
+        common_name = commondir.read_text(encoding="utf-8").strip()
+    except OSError:
+        common_name = ""
+    if common_name:
+        common_dir = (git_dir / common_name).resolve()
+        if common_dir not in candidates:
+            candidates.append(common_dir)
+    return tuple(path for path in candidates if path.exists())
 
 
 def _codex_usage(stdout: str, *, prompt_bytes: int, response_bytes: int) -> ModelUsage:

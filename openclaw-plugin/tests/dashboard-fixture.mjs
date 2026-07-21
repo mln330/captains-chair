@@ -78,6 +78,7 @@ createServer(async (request, response) => {
   if (path === "/make-it-so/api/courses/list") return json(response, { courses: [{ repository: repo.full_name, course, readiness: { ready: true, unresolved: [] } }] });
   if (path === "/make-it-so/api/models/config") return json(response, { global_profiles: {}, runtime_profiles: {}, runtimes: ["openclaw"], usage: { block_on_unknown: true } });
   if (path === "/make-it-so/api/schedule/status") return json(response, { status: "inspected", jobs: [{ name: "make-it-so-reconcile", every: "5m", enabled: true, health: "healthy" }, { name: "make-it-so-course-review", every: "2h", enabled: true, health: "healthy" }] });
+  if (path === "/make-it-so/api/run/start") return json(response, { status: "started", kind: "review" });
   if (path.startsWith("/make-it-so/api/")) return json(response, { status: "ok" });
   const relative = path === "/" ? "index.html" : path.replace(/^\//, "");
   try {

@@ -115,6 +115,8 @@ const course = {
   checkpoints: [],
 };
 
+let mockRepo = repo;
+
 function response(payload: unknown): Response {
   return { ok: true, status: 200, json: async () => payload } as Response;
 }
@@ -125,12 +127,22 @@ describe("shared dashboard components", () => {
       "fetch",
       vi.fn((request: RequestInfo | URL) => {
         const path = String(request);
-        if (path.includes("portfolio/status")) return Promise.resolve(response({ repos: [repo] }));
+        if (path.includes("portfolio/status")) return Promise.resolve(response({ repos: [mockRepo] }));
         if (path.includes("courses/list")) return Promise.resolve(response({ courses: [{ repository: repo.full_name, course: { ...course, plan_revision: 3 }, readiness: { ready: true }, number_one: { session_id: "number-one-feature-search", model: "codex/gpt-5.6-sol", last_review_at: "2026-07-18T22:00:00Z", summary: "The course is on track." }, milestone_reviews: [{ status: "on_track", summary: "The course is on track.", next_action: "Continue with search.", model: "codex/gpt-5.6-sol" }], milestone_changes: [{ proposal_id: "proposal-1", summary: "Split search validation", reason: "The current milestone needs an explicit validation step.", status: "proposed", impact: "routine", base_revision: 3, changes: [{ kind: "add", work_package: { key: "validation", title: "Validation" } }] }] }] }));
         if (path.includes("models/config")) return Promise.resolve(response({ global_profiles: {}, runtime_profiles: {}, runtimes: ["openclaw"], usage: { daily_token_limit: null, model_daily_token_limits: {}, block_on_unknown: true } }));
         if (path.includes("schedule/status")) return Promise.resolve(response({ status: "inspected", jobs: [{ name: "make-it-so-course-review", every: "2h", enabled: true, health: "healthy" }, { name: "make-it-so-reconcile", every: "5m", enabled: true, health: "healthy" }] }));
         if (path.includes("schedule/install")) return Promise.resolve(response({ jobs: [{ name: "make-it-so-course-review" }] }));
-        if (path.includes("repos/register")) return Promise.resolve(response({ status: "registered", follow_up_required: true, follow_up_message: "Repository registered. Number 1 will begin initial planning.", notification_status: "sent", notification_delivery: "number_one_agent" }));
+        if (path.includes("run/start")) return Promise.resolve(response({ status: "started", kind: "review" }));
+        if (path.includes("registration/options")) return Promise.resolve(response({
+          local_clones: [{ full_name: "example/local", local_path: "/workspace/local", branch: "main", dirty: false, registered: false }],
+          discord_routes: [
+            { route: "channel:111111111111111111", channel_id: "111111111111111111", name: "notifications", label: "#notifications", alias: "notifications" },
+            { route: "channel:200", channel_id: "200", name: "project-room", label: "#project-room" },
+          ],
+          default_discord_route: "channel:111111111111111111",
+        }));
+        if (path.includes("repos/inspect")) return Promise.resolve(response({ status: "inspected", mutation_started: false, discovery: { local_clone: { path: "/workspace/second", exists: false, cloned: false }, planning_document: { path: "docs/IMPLEMENTATION_PLAN.md", found: false, candidates: [] }, git: { branch: null, dirty: null } } }));
+        if (path.includes("repos/register")) return Promise.resolve(response({ status: "registered", follow_up_required: true, follow_up_message: "Repository registered. Number One will begin initial planning.", notification_status: "sent", notification_delivery: "number_one_agent" }));
         return Promise.resolve(response({ status: "updated" }));
       }),
     );
@@ -138,10 +150,11 @@ describe("shared dashboard components", () => {
 
   afterEach(() => {
     cleanup();
+    mockRepo = repo;
     vi.unstubAllGlobals();
   });
 
-  it("renders loaded course state and exercises schedule installation", async () => {
+  it("renders loaded course state and starts an immediate course review", async () => {
     render(<App />);
 
     await waitFor(() => expect(screen.getAllByText("example/project").length).toBeGreaterThan(0));
@@ -152,9 +165,9 @@ describe("shared dashboard components", () => {
     expect(screen.getByText("Make search useful for customers.")).toBeTruthy();
     expect(screen.getAllByText("open PRs").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Search feature").length).toBeGreaterThan(0);
-    fireEvent.click(screen.getByRole("button", { name: "Reconcile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Run course review" }));
 
-    await waitFor(() => expect(screen.getByRole("status").textContent).toContain("Schedule install"));
+    await waitFor(() => expect(screen.getByRole("status").textContent).toContain("Course review started"));
   });
 
   it("shows implementation evidence, feedback loops, models, and workflow runs", async () => {
@@ -185,7 +198,7 @@ describe("shared dashboard components", () => {
     expect(screen.getByRole("link", { name: /open linked pr/i }).getAttribute("href")).toBe("https://github.com/example/project/pull/1");
   });
 
-  it("shows Number 1 continuity and approves a pending milestone correction", async () => {
+  it("shows Number One continuity and approves a pending milestone correction", async () => {
     const fetchMock = vi.mocked(globalThis.fetch);
     render(<App />);
 
@@ -206,38 +219,63 @@ describe("shared dashboard components", () => {
     render(<App />);
     await waitFor(() => expect(screen.getAllByText("example/project").length).toBeGreaterThan(0));
 
-    const registrationPanel = screen.getByRole("region", { name: "Add a repository" });
+    const registrationPanel = screen.getByRole("region", { name: "Set a course" });
     fireEvent.click(within(registrationPanel).getByRole("button", { name: "Register repository" }));
     fireEvent.change(within(registrationPanel).getByLabelText("GitHub repository"), { target: { value: "https://github.com/example/second" } });
-    fireEvent.change(within(registrationPanel).getByLabelText("Discord route"), { target: { value: "project-room" } });
-    fireEvent.click(within(registrationPanel).getByRole("button", { name: "Register and inspect" }));
+    await waitFor(() => expect(within(registrationPanel).getByLabelText("Discord channel")).toBeTruthy());
+    fireEvent.change(within(registrationPanel).getByLabelText("Discord channel"), { target: { value: "channel:200" } });
+    fireEvent.click(within(registrationPanel).getByRole("button", { name: "Inspect repository" }));
+    await waitFor(() => expect(within(registrationPanel).getByText("Inspection complete")).toBeTruthy());
+    fireEvent.click(within(registrationPanel).getByRole("button", { name: "Continue" }));
+    fireEvent.click(within(registrationPanel).getByRole("button", { name: "Continue" }));
+    fireEvent.click(within(registrationPanel).getByRole("button", { name: "Register and start planning" }));
 
     await waitFor(() => expect(fetchMock.mock.calls.some(([request]) => String(request).includes("repos/register"))).toBe(true));
     const registration = fetchMock.mock.calls.find(([request]) => String(request).includes("repos/register"));
     const body = String((registration?.[1] as RequestInit | undefined)?.body);
     expect(body).toContain("example/second");
     expect(body).not.toContain("https://github.com");
-    expect(body).toContain("project-room");
+    expect(body).toContain("channel:200");
     expect(body).not.toContain("local_path");
-    expect(body).not.toContain("planning_doc");
-    await waitFor(() => expect(within(registrationPanel).getByText("Number 1 planning message sent.")).toBeTruthy());
+    expect(body).toContain("planning_doc_choice");
+    expect(body).toContain("operation_mode");
+    await waitFor(() => expect(screen.getByText("Number One planning message sent.")).toBeTruthy());
+    expect(screen.queryByRole("button", { name: "New greenfield repo" })).toBeNull();
   });
 
-  it("registers a greenfield course without claiming remote creation", async () => {
+  it("accepts the owner/repository shorthand during inspection", async () => {
+    render(<App />);
+    await waitFor(() => expect(screen.getAllByText("example/project").length).toBeGreaterThan(0));
+
+    const registrationPanel = screen.getByRole("region", { name: "Set a course" });
+    fireEvent.click(within(registrationPanel).getByRole("button", { name: "Register repository" }));
+    await waitFor(() => expect((within(registrationPanel).getByLabelText("Discord channel") as HTMLSelectElement).value).toBe("channel:111111111111111111"));
+    fireEvent.change(within(registrationPanel).getByLabelText("GitHub repository"), { target: { value: "example/second" } });
+    fireEvent.click(within(registrationPanel).getByRole("button", { name: "Inspect repository" }));
+    await waitFor(() => expect(within(registrationPanel).getByText("Inspection complete")).toBeTruthy());
+  });
+
+  it("selects a verified local clone and carries its path through inspection and registration", async () => {
     const fetchMock = vi.mocked(globalThis.fetch);
     render(<App />);
     await waitFor(() => expect(screen.getAllByText("example/project").length).toBeGreaterThan(0));
 
-    fireEvent.click(screen.getByRole("button", { name: "New greenfield repo" }));
-    fireEvent.change(screen.getByLabelText("GitHub repository"), { target: { value: "example/new-project" } });
-    fireEvent.change(screen.getByLabelText("Local path"), { target: { value: "/workspace/new-project" } });
-    fireEvent.change(screen.getByLabelText("Course title"), { target: { value: "New project" } });
-    fireEvent.change(screen.getByLabelText("Goal"), { target: { value: "Deliver a useful new product." } });
-    fireEvent.submit(screen.getByRole("button", { name: "Create readiness review" }).closest("form")!);
+    const registrationPanel = screen.getByRole("region", { name: "Set a course" });
+    fireEvent.click(within(registrationPanel).getByRole("button", { name: "Register repository" }));
+    await waitFor(() => expect((within(registrationPanel).getByLabelText("Discord channel") as HTMLSelectElement).value).toBe("channel:111111111111111111"));
+    fireEvent.click(within(registrationPanel).getByRole("button", { name: "Local clone" }));
+    fireEvent.change(within(registrationPanel).getByLabelText("Local repository"), { target: { value: "example/local" } });
+    fireEvent.change(within(registrationPanel).getByLabelText("Discord channel"), { target: { value: "channel:200" } });
+    fireEvent.click(within(registrationPanel).getByRole("button", { name: "Inspect repository" }));
+    await waitFor(() => expect(within(registrationPanel).getByText("Inspection complete")).toBeTruthy());
 
-    await waitFor(() => expect(fetchMock.mock.calls.some(([request]) => String(request).includes("repos/create"))).toBe(true));
-    const creation = fetchMock.mock.calls.find(([request]) => String(request).includes("repos/create"));
-    expect(String((creation?.[1] as RequestInit | undefined)?.body)).toContain("greenfield");
+    const inspectionCall = fetchMock.mock.calls.find(([request]) => String(request).includes("repos/inspect"));
+    expect(String((inspectionCall?.[1] as RequestInit | undefined)?.body)).toContain('"local_path":"/workspace/local"');
+    for (let index = 0; index < 2; index += 1) fireEvent.click(within(registrationPanel).getByRole("button", { name: "Continue" }));
+    fireEvent.click(within(registrationPanel).getByRole("button", { name: "Register and start planning" }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([request]) => String(request).includes("repos/register"))).toBe(true));
+    const registrationCall = fetchMock.mock.calls.find(([request]) => String(request).includes("repos/register"));
+    expect(String((registrationCall?.[1] as RequestInit | undefined)?.body)).toContain('"local_path":"/workspace/local"');
   });
 
   it("saves repository autonomy, channel, and model controls", async () => {
@@ -291,6 +329,28 @@ describe("shared dashboard components", () => {
 
     await waitFor(() => expect(screen.getByText("UI acceptance")).toBeTruthy());
     expect(screen.getAllByText("required").length).toBeGreaterThan(0);
+  });
+
+  it("does not call a terminal course complete when required evidence is missing", async () => {
+    mockRepo = {
+      ...repo,
+      state: "merged",
+      workboard_status: {
+        ...repo.workboard_status,
+        status: "completed",
+        terminal: true,
+        milestones: [{
+          ...repo.workboard_status.milestones[0],
+          evidence: { status: "not_run" },
+        }],
+      },
+    };
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText("Evidence gate pending")).toBeTruthy());
+    expect(screen.getAllByText("Evidence pending").length).toBeGreaterThan(0);
+    expect(screen.getByText("Implementation is terminal, but required milestone evidence has not been recorded.")).toBeTruthy();
+    expect(screen.queryByText("Implementation verified")).toBeNull();
   });
 
   it("saves token safeguards and model-specific limits", async () => {

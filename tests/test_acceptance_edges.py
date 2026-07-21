@@ -72,7 +72,7 @@ def test_worker_result_and_parser_fail_closed_on_untrustworthy_outcomes() -> Non
     )
     assert fenced.status == "completed"
     assert direct_workers._runtime_model("codex", "codex/gpt-test") == "gpt-test"  # pyright: ignore[reportPrivateUsage]
-    assert direct_workers._runtime_model("openclaw", "codex/gpt-test") == "codex/gpt-test"  # pyright: ignore[reportPrivateUsage]
+    assert direct_workers._runtime_model("openclaw", "codex/gpt-test") == "openai/gpt-test"  # pyright: ignore[reportPrivateUsage]
 
     with pytest.raises(WorkerExecutionError, match="JSON object"):
         direct_workers._parse_result("no structured result")  # pyright: ignore[reportPrivateUsage]

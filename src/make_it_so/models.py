@@ -291,7 +291,7 @@ class ModelPolicy(StrictModel):
     profiles: dict[str, ModelProfile] = Field(default_factory=dict)
 
     def for_role(self, role: str) -> ModelProfile:
-        # Number 1 is the durable leadership role. `planner` and `strategist`
+        # Number One is the durable leadership role. `planner` and `strategist`
         # remain accepted as configuration aliases during the rename.
         aliases = {
             "number_one": ("number_one", "strategist", "planner"),
@@ -517,6 +517,22 @@ class NotificationConfig(StrictModel):
         return self
 
 
+class OnboardingPreferences(StrictModel):
+    """Structured choices captured before Number One begins the conversation."""
+
+    phase: CourseKind | None = None
+    goal: str | None = None
+    clone_allowed: bool | None = None
+    planning_doc_choice: str | None = None
+    detected_surface: ApplicationSurface | None = None
+    uat_required: bool = True
+    screenshots_required: bool = False
+    deployment_required: bool = False
+    deployment_authority: Literal["always_ask", "non_production"] = "always_ask"
+    checkpoint_policy: Literal["each_milestone", "major_changes", "updates_only"] = "major_changes"
+    intelligence_level: Literal["economy", "balanced", "deep", "maximum"] = "balanced"
+
+
 class UsageConfig(StrictModel):
     """Provider-reported token safeguards; missing telemetry remains unknown."""
 
@@ -582,6 +598,7 @@ class RepoConfig(StrictModel):
     surfaces: frozenset[ApplicationSurface] = frozenset()
     qa_profiles: tuple[QAProfile, ...] = ()
     notification: NotificationConfig = NotificationConfig()
+    onboarding: OnboardingPreferences = OnboardingPreferences()
     model_profiles: dict[str, ModelProfile] = Field(default_factory=dict)
     approval_whitelist: frozenset[ActionKind] = frozenset()
     max_parallel_prs: int = Field(default=1, ge=1, le=10)
@@ -837,7 +854,7 @@ class MilestoneChangeStatus(enum.StrEnum):
 
 
 class MilestoneChangeRequest(StrictModel):
-    """A bounded Number 1 request to change the course milestone graph."""
+    """A bounded Number One request to change the course milestone graph."""
 
     kind: MilestoneChangeKind
     summary: str = Field(min_length=1)
@@ -922,6 +939,8 @@ class Course(StrictModel):
     exit_criteria: tuple[str, ...] = ()
     readiness: tuple[ReadinessRequirement, ...] = ()
     readiness_review: ReadinessReviewRecord | None = None
+    pending_readiness_key: str | None = None
+    pending_readiness_question: str | None = None
     work_packages: tuple[WorkPackage, ...] = ()
     checkpoints: tuple[Checkpoint, ...] = ()
     qa_profiles: tuple[QAProfile, ...] = ()
@@ -944,6 +963,12 @@ class Course(StrictModel):
         requirement_keys = {item.key for item in self.readiness}
         if len(requirement_keys) != len(self.readiness):
             raise ValueError("course readiness keys must be unique")
+        if bool(self.pending_readiness_key) != bool(self.pending_readiness_question):
+            raise ValueError("pending readiness key and question must be set or cleared together")
+        if self.pending_readiness_key and self.pending_readiness_key not in requirement_keys:
+            raise ValueError(
+                f"pending readiness key {self.pending_readiness_key!r} is not defined by the course"
+            )
         for package in self.work_packages:
             missing = sorted(set(package.dependencies) - package_keys)
             if missing:

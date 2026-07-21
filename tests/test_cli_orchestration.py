@@ -443,7 +443,7 @@ def test_disabled_preflight_does_not_recommend_a_canary(
     payload = json.loads(capsys.readouterr().out)
     assert payload["status"] == "disabled"
     assert payload["health_status"] == "ready_with_warnings"
-    assert "Number 1 is disabled" in payload["next_action"]
+    assert "Number One is disabled" in payload["next_action"]
     assert "canary" in payload["next_action"]
 
 
@@ -998,7 +998,7 @@ def test_reconcile_cli_persists_and_deduplicates_provider_failure(
 
     assert cli.main(command) == 2
     first_output = capsys.readouterr().out
-    assert "Number 1 HANDLING" in first_output
+    assert "Number One HANDLING" in first_output
     first_payload = json.loads(first_output[first_output.rfind('{\n  "status"'):])
     assert first_payload["status"] == "degraded"
     assert first_payload["event"]["event_type"] == "QUEUE_DEGRADED"
@@ -1186,7 +1186,7 @@ def test_reconcile_cli_reports_automatic_recovery_progress(
     output = capsys.readouterr().out
     assert "Technical retry" in output
     assert "Repair queued" in output
-    assert "Number 1 recovery queued" in output
+    assert "Number One recovery queued" in output
     assert "ACTION NEEDED" not in output
     payload_start = output.find('{\n  "board_id"')
     assert payload_start >= 0

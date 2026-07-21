@@ -12,9 +12,11 @@ import yaml
 import make_it_so.sidecar as sidecar_module
 from make_it_so import __version__
 from make_it_so.config import load_config
+from make_it_so.courses import CourseStore
 from make_it_so.github import GitHubProvider, RepositorySnapshot
 from make_it_so.models import (
     CourseKind,
+    CourseStatus,
     HarnessConfig,
     OpenClawWorkboardConfig,
     OperationMode,
@@ -100,6 +102,7 @@ def test_sidecar_projects_terminal_workboard_proof_into_completed_state(
 
     assert result["state"] == "merged"
     assert result["state_source"] == "workboard"
+    assert result["allow_autonomous_merge"] is False
     assert result["workboard_status"]["status"] == "completed"
     assert result["workboard_status"]["active_cards"] == 0
     assert result["workboard_status"]["current_stage"] == "post_merge"
@@ -122,6 +125,68 @@ def test_sidecar_projects_terminal_workboard_proof_into_completed_state(
     }
     assert result["workboard_status"]["total_loop_count"] == 1
     assert "Historical blockers" in result["workboard_status"]["message"]
+
+
+def test_sidecar_hides_historical_terminal_workboard_for_new_readiness_course(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = repo_config(tmp_path).model_copy(
+        update={"orchestrator": "openclaw", "orchestration_board": "test-board"}
+    )
+    workers = WorkerAssignments(
+        captain="captain",
+        coder="coder",
+        reviewer="reviewer",
+        tester="tester",
+        ux_reviewer="ux",
+        final_reviewer="final",
+        merger="merger",
+        verifier="verifier",
+    )
+    orchestrator = OpenClawWorkboardConfig(
+        workers=workers,
+        require_live_completion_validation=False,
+    )
+    config = app_config(tmp_path, repo_config(tmp_path)).model_copy(
+        update={"repos": (repo,), "orchestrators": {"openclaw": orchestrator}}
+    )
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+    CourseStore(repo.local_path).save(
+        sidecar_module.Course(
+            key="takeover",
+            repository=repo.full_name,
+            kind=CourseKind.TAKEOVER,
+            title="Fresh takeover",
+            goal="Understand and stabilize the repository before implementation begins.",
+            readiness=(
+                sidecar_module.ReadinessRequirement(
+                    key="goals",
+                    category="goals",
+                    question="What outcome should this course achieve?",
+                ),
+            ),
+            status=CourseStatus.READINESS_REVIEW,
+        )
+    )
+
+    class Adapter:
+        def list_cards(self, board_id: str) -> list[QueueCard]:
+            assert board_id == "test-board"
+            return [
+                _workboard_card("review", QueueStatus.DONE, 1),
+                _workboard_card("merge", QueueStatus.DONE, 2),
+                _workboard_card("post_merge", QueueStatus.DONE, 3),
+            ]
+
+    monkeypatch.setattr(sidecar_module, "build_work_queue_adapter", lambda _config: Adapter())
+    result = SidecarServer(config_path).request("portfolio.status")["repos"][0]
+
+    assert result["course_key"] == "takeover"
+    assert result["course_status"] == "readiness_review"
+    assert result["state"] == "baseline_review"
+    assert result["state_source"] == "state_store"
+    assert result["workboard_status"] is None
 
 
 def test_sidecar_separates_superseded_retry_cards_from_historical_blockers() -> None:
@@ -616,6 +681,8 @@ def test_sidecar_reports_health_portfolio_and_schedule_contract(tmp_path: Path) 
         "make-it-so-course-review",
     ]
     assert [job["kind"] for job in schedule["jobs"]] == ["reconcile", "review"]
+    assert [job["timeout_seconds"] for job in schedule["jobs"]] == [3900, 3900]
+    assert all("--background" in job["command"] for job in schedule["jobs"])
     assert schedule["repository_enablement"] == {"example/project": True}
 
     configured = server.request(
@@ -821,14 +888,261 @@ def test_sidecar_registration_discovers_clone_and_plan_without_ui_paths(tmp_path
     assert registered["discovery"]["planning_document"]["path"] == "docs/IMPLEMENTATION_ROADMAP.md"
     assert registered["discovery"]["planning_document"]["found"] is True
     assert registered["follow_up_required"] is True
-    assert "Number 1" in registered["follow_up_message"]
-    assert "NUMBER 1 | INITIAL PLANNING" in registered["number_one_prompt"]
-    assert "What outcome and user-facing goal" in registered["number_one_prompt"]
+    assert "Number One" in registered["follow_up_message"]
+    assert "NUMBER ONE | INITIAL PLANNING" in registered["number_one_prompt"]
+    assert "Ask exactly this one readiness question" in registered["number_one_prompt"]
+    assert "Ask these questions in a concise numbered list" not in registered["number_one_prompt"]
     assert registered["number_one_session_key"] == "make-it-so:number-one:example-second"
+    assert registered["course_created"] is True
+    assert registered["course_key"] == "takeover"
+    course = CourseStore(clone).load("takeover")
+    assert course.kind == CourseKind.TAKEOVER
+    assert course.status == CourseStatus.READINESS_REVIEW
+    assert {item.key for item in course.readiness} >= {"goals", "permissions", "exit-criteria"}
+    assert course.pending_readiness_key == "goals"
+    assert course.pending_readiness_question
+    assert "provisional, paused takeover course" in registered["number_one_prompt"]
     persisted = load_config(config_path).repo("example/second")
     assert persisted.local_path == clone
     assert persisted.planning_doc == "docs/IMPLEMENTATION_ROADMAP.md"
     assert persisted.notification.route == "project-room"
+
+
+def test_sidecar_registration_options_list_verified_github_clones(tmp_path: Path) -> None:
+    configured = repo_config(tmp_path / "configured")
+    config = app_config(tmp_path, configured)
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+    clone = tmp_path / "local-project"
+    subprocess.run(["git", "init", "-b", "main", str(clone)], check=True, capture_output=True, text=True)
+    subprocess.run(
+        ["git", "-C", str(clone), "remote", "add", "origin", "git@github.com:example/local-project.git"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    (tmp_path / "not-a-repository").mkdir()
+
+    result = SidecarServer(config_path).request("registration.options")
+
+    assert result["warnings"] == []
+    assert result["local_clones"] == [
+        {
+            "full_name": "example/local-project",
+            "local_path": str(clone),
+            "branch": "main",
+            "dirty": False,
+            "registered": False,
+        }
+    ]
+
+
+def test_sidecar_inspects_an_explicit_verified_local_clone(tmp_path: Path) -> None:
+    configured = repo_config(tmp_path / "configured")
+    config = app_config(tmp_path, configured)
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+    clone = tmp_path / "selected-project"
+    subprocess.run(["git", "init", "-b", "main", str(clone)], check=True, capture_output=True, text=True)
+    subprocess.run(
+        ["git", "-C", str(clone), "remote", "add", "origin", "https://github.com/example/selected-project.git"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    (clone / "docs").mkdir()
+    (clone / "docs" / "IMPLEMENTATION_PLAN.md").write_text("# Plan\n", encoding="utf-8")
+    server = SidecarServer(config_path)
+
+    inspected = server.request(
+        "repo.inspect",
+        {"full_name": "example/selected-project", "local_path": str(clone)},
+    )
+
+    assert inspected["discovery"]["local_clone"]["source"] == "explicit"
+    assert inspected["discovery"]["local_clone"]["remote_matches"] is True
+    assert inspected["discovery"]["planning_document"]["path"] == "docs/IMPLEMENTATION_PLAN.md"
+
+    with pytest.raises(SidecarError, match="does not match"):
+        server.request("repo.inspect", {"full_name": "example/other", "local_path": str(clone)})
+
+
+def test_sidecar_persists_exact_pending_question_and_appends_follow_up_answers(tmp_path: Path) -> None:
+    config = app_config(tmp_path, repo_config(tmp_path))
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+    server = SidecarServer(config_path)
+    course = ready_course().model_copy(
+        update={
+            "status": CourseStatus.READINESS_REVIEW,
+            "readiness_review": None,
+            "pending_readiness_key": "success",
+            "pending_readiness_question": "What observable success is required?",
+        }
+    )
+    CourseStore(config.repos[0].local_path).save(course)
+    params = {"full_name": "example/project", "course_key": "feature-search"}
+
+    first = server.request(
+        "course.requirement",
+        {
+            **params,
+            "requirement_key": "success",
+            "status": "answered",
+            "answer": "Search returns ranked results.",
+            "evidence": ["discord-owner-answer"],
+            "append_answer": True,
+        },
+    )
+    assert first["course"]["pending_readiness_key"] is None
+
+    server.request(
+        "course.pending_question",
+        {
+            **params,
+            "requirement_key": "success",
+            "question": "What response-time target should the search meet?",
+        },
+    )
+    second = server.request(
+        "course.requirement",
+        {
+            **params,
+            "requirement_key": "success",
+            "status": "answered",
+            "answer": "The p95 response time must remain under 500 ms.",
+            "evidence": ["discord-owner-answer"],
+            "append_answer": True,
+        },
+    )
+
+    requirement = next(item for item in second["course"]["readiness"] if item["key"] == "success")
+    assert "Search returns ranked results." in requirement["answer"]
+    assert "Follow-up answer:" in requirement["answer"]
+    assert "under 500 ms" in requirement["answer"]
+    reloaded = CourseStore(config.repos[0].local_path).load("feature-search")
+    assert reloaded.pending_readiness_key is None
+
+
+def test_sidecar_registration_defaults_to_configured_openclaw_workboard(
+    tmp_path: Path,
+) -> None:
+    workers = WorkerAssignments(
+        captain="captain",
+        coder="coder",
+        reviewer="reviewer",
+        tester="tester",
+        ux_reviewer="ux",
+        final_reviewer="final",
+        merger="merger",
+        verifier="verifier",
+    )
+    root_config = app_config(tmp_path, repo_config(tmp_path))
+    config = root_config.model_copy(
+        update={"orchestrators": {"openclaw-workers": OpenClawWorkboardConfig(workers=workers)}}
+    )
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+    server = SidecarServer(config_path)
+
+    registered = server.request(
+        "repo.register",
+        {"full_name": "example/openclaw-registration", "notification_route": "notifications"},
+    )
+
+    assert registered["status"] == "registered"
+    persisted = load_config(config_path).repo("example/openclaw-registration")
+    assert persisted.orchestrator == "openclaw-workers"
+    assert persisted.orchestration_board is None
+
+
+def test_sidecar_derives_default_workboard_for_dashboard_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = repo_config(tmp_path).model_copy(update={"orchestrator": "openclaw"})
+    workers = WorkerAssignments(
+        captain="captain",
+        coder="coder",
+        reviewer="reviewer",
+        tester="tester",
+        ux_reviewer="ux",
+        final_reviewer="final",
+        merger="merger",
+        verifier="verifier",
+    )
+    config = app_config(tmp_path, repo_config(tmp_path)).model_copy(
+        update={
+            "repos": (repo,),
+            "orchestrators": {
+                "openclaw": OpenClawWorkboardConfig(
+                    workers=workers,
+                    require_live_completion_validation=False,
+                )
+            }
+        }
+    )
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+    server = SidecarServer(config_path)
+    observed: list[str] = []
+
+    class EmptyAdapter:
+        def list_cards(self, board_id: str) -> list[Any]:
+            observed.append(board_id)
+            return []
+
+    monkeypatch.setattr("make_it_so.sidecar.build_work_queue_adapter", lambda _config: EmptyAdapter())
+    status = server._workboard_status(repo, sync_usage=False)  # pyright: ignore[reportPrivateUsage]
+    assert status is not None
+    assert status["board"] == "make-it-so-example-project"
+    assert observed == ["make-it-so-example-project"]
+
+
+def test_sidecar_inspection_is_read_only_and_registration_persists_onboarding_choices(tmp_path: Path) -> None:
+    config = app_config(tmp_path, repo_config(tmp_path))
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+    clone = tmp_path.parent / "onboarding-second"
+    (clone / ".git").mkdir(parents=True)
+    (clone / "README.md").write_text("# Example\n", encoding="utf-8")
+    server = SidecarServer(config_path)
+
+    inspected = server.request("repo.inspect", {"full_name": "example/onboarding-second"})
+
+    assert inspected["status"] == "inspected"
+    assert inspected["mutation_started"] is False
+    assert inspected["discovery"]["local_clone"]["cloned"] is True
+    assert len(load_config(config_path).repos) == 1
+
+    registered = server.request(
+        "repo.register",
+        {
+            "full_name": "example/onboarding-second",
+            "notification_route": "project-room",
+            "phase": "feature",
+            "goal": "Make search easier for customers.",
+            "clone_allowed": True,
+            "operation_mode": "autonomous",
+            "completion_policy": "auto_merge",
+            "allow_autonomous_merge": True,
+            "checkpoint_policy": "updates_only",
+            "milestone_approval": "none",
+            "detected_surface": "web_ui",
+            "surfaces": ["web_ui"],
+            "uat_required": True,
+            "screenshots_required": True,
+            "deployment_required": False,
+            "intelligence_level": "balanced",
+        },
+    )
+
+    persisted = load_config(config_path).repo("example/onboarding-second")
+    assert registered["repo"]["onboarding"]["phase"] == "feature"
+    assert persisted.onboarding.goal == "Make search easier for customers."
+    assert persisted.onboarding.checkpoint_policy == "updates_only"
+    assert persisted.onboarding.intelligence_level == "balanced"
+    assert "Make search easier for customers." in registered["number_one_prompt"]
+    assert "course type selected in the dashboard: feature" in registered["number_one_prompt"]
 
 
 def test_sidecar_registration_persists_runtime_discord_delivery_settings(tmp_path: Path) -> None:
@@ -841,17 +1155,82 @@ def test_sidecar_registration_persists_runtime_discord_delivery_settings(tmp_pat
         "repo.register",
         {
             "full_name": "example/second",
-            "notification_route": "channel:1483192074344988954",
+            "notification_route": "channel:111111111111111111",
             "notification_kind": "openclaw_discord",
             "notification_executable": "openclaw",
         },
     )
 
-    assert registered["notification_route"] == "channel:1483192074344988954"
+    assert registered["notification_route"] == "channel:111111111111111111"
     persisted = load_config(config_path).repo("example/second")
     assert persisted.notification.kind == "openclaw_discord"
     assert persisted.notification.executable == "openclaw"
-    assert persisted.notification.route == "channel:1483192074344988954"
+    assert persisted.notification.route == "channel:111111111111111111"
+
+
+def test_sidecar_registration_reinitializes_existing_repo_without_active_course(tmp_path: Path) -> None:
+    config = app_config(tmp_path, repo_config(tmp_path))
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+    server = SidecarServer(config_path)
+    full_name = f"example/{tmp_path.name}"
+
+    first = server.request(
+        "repo.register",
+        {
+            "full_name": full_name,
+            "notification_route": "notifications",
+            "phase": "takeover",
+            "goal": "Understand the current repository before implementation begins.",
+        },
+    )
+    course_path = tmp_path.parent / tmp_path.name / ".make-it-so" / "courses" / f"{first['course_key']}.yaml"
+    course_path.unlink()
+
+    second = server.request(
+        "repo.register",
+        {
+            "full_name": full_name,
+            "notification_route": "project-room",
+            "phase": "takeover",
+            "goal": "Restart the course from a clean readiness review.",
+            "operation_mode": "autonomous",
+            "completion_policy": "auto_merge",
+            "allow_autonomous_merge": True,
+        },
+    )
+
+    assert second["status"] == "registered"
+    assert second["course_created"] is True
+    assert load_config(config_path).repo(full_name).notification.route == "project-room"
+
+
+def test_sidecar_exposes_durable_discord_number_one_bindings(tmp_path: Path) -> None:
+    config = app_config(tmp_path, repo_config(tmp_path))
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+    server = SidecarServer(config_path)
+
+    registered = server.request(
+        "repo.register",
+        {
+            "full_name": "example/second",
+            "notification_route": "channel:123",
+            "notification_kind": "openclaw_discord",
+            "notification_executable": "openclaw",
+        },
+    )
+
+    bindings = server.request("discord.planning_bindings")["bindings"]
+
+    assert registered["number_one_session_key"] == "make-it-so:number-one:example-second"
+    assert bindings == [
+        {
+            "repository": "example/second",
+            "route": "channel:123",
+            "session_key": "make-it-so:number-one:example-second",
+        }
+    ]
 
 
 def test_sidecar_registration_normalizes_github_url(tmp_path: Path) -> None:
@@ -1132,7 +1511,7 @@ def test_sidecar_run_once_executes_the_bounded_review_entrypoint(
     calls: list[list[str]] = []
 
     def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
-        del kwargs
+        assert kwargs["timeout"] == 3900
         calls.append(command)
         return subprocess.CompletedProcess(command, 0, "review complete", "")
 
@@ -1145,6 +1524,59 @@ def test_sidecar_run_once_executes_the_bounded_review_entrypoint(
     assert result["execution"][0]["output"] == "review complete"
 
 
+def test_sidecar_background_entrypoint_detaches_long_running_reconcile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = app_config(tmp_path, repo_config(tmp_path))
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+    server = SidecarServer(config_path)
+    calls: list[tuple[list[str], dict[str, Any]]] = []
+
+    class Child:
+        pid = 4242
+
+    def fake_popen(command: list[str], **kwargs: Any) -> Child:
+        calls.append((command, kwargs))
+        return Child()
+
+    monkeypatch.setattr(sidecar_module.subprocess, "Popen", fake_popen)
+    result = server._spawn_background_once("reconcile")  # pyright: ignore[reportPrivateUsage]
+
+    assert result["status"] == "started"
+    assert result["pid"] == 4242
+    assert calls[0][0][-4:] == ["--once", "reconcile", "--config", str(config_path)]
+    assert calls[0][1]["start_new_session"] is True
+    assert Path(str(result["log"])).parent.name == "run-logs"
+
+
+def test_sidecar_run_start_uses_background_review_entrypoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = app_config(tmp_path, repo_config(tmp_path))
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+    server = SidecarServer(config_path)
+
+    class Child:
+        pid = 5252
+
+    calls: list[list[str]] = []
+
+    def fake_popen(command: list[str], **kwargs: Any) -> Child:
+        del kwargs
+        calls.append(command)
+        return Child()
+
+    monkeypatch.setattr(sidecar_module.subprocess, "Popen", fake_popen)
+    result = server.request("run.start", {"kind": "review", "force_replan": True})
+
+    assert result["status"] == "started"
+    assert result["kind"] == "review"
+    assert result["pid"] == 5252
+    assert calls[0][-5:] == ["--once", "review", "--config", str(config_path), "--force-replan"]
+
+
 def test_sidecar_reconcile_does_not_skip_board_free_repositories(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1155,7 +1587,7 @@ def test_sidecar_reconcile_does_not_skip_board_free_repositories(
     calls: list[list[str]] = []
 
     def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
-        del kwargs
+        assert kwargs["timeout"] == 3900
         calls.append(command)
         return subprocess.CompletedProcess(command, 0, "reconcile complete", "")
 
@@ -1394,8 +1826,12 @@ def test_sidecar_rejects_invalid_repository_and_model_requests(tmp_path: Path) -
         with pytest.raises(SidecarError, match=message):
             server.request(method, params)
 
-    with pytest.raises(SidecarError, match="already registered"):
-        server.request("repo.register", {"full_name": "example/project", "local_path": str(tmp_path)})
+    reinitialized = server.request(
+        "repo.register", {"full_name": "example/project", "local_path": str(tmp_path)}
+    )
+    assert reinitialized["status"] == "registered"
+    assert reinitialized["course_created"] is True
+    assert len(load_config(tmp_path / "config.yaml").repos) == 1
 
     invalid_route = server.request(
         "models.validate",

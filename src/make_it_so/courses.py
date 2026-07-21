@@ -32,6 +32,136 @@ class CourseError(RuntimeError):
     """A course cannot be loaded, approved, or advanced safely."""
 
 
+_LEGACY_READINESS_QUESTIONS: dict[str, str] = {
+    "baseline_complete": "Has Number One completed and accepted a current deep baseline?",
+    "wp01_complete": "Does the current repository satisfy WP-01 acceptance criteria?",
+    "wp02_pr_open": "Is the recorded WP-02 PR still current and reviewable?",
+}
+_LEGACY_WORK_PACKAGE_STATUS: dict[str, str] = {
+    "in_progress": "executing",
+    "in_review": "reviewing",
+    "done": "complete",
+}
+
+
+def _migrate_legacy_course_payload(raw: Any) -> tuple[Any, bool]:
+    """Normalize pre-readiness-v2 course files before strict validation.
+
+    Older course files were written by the first registration flow and could
+    contain boolean readiness flags, abbreviated work packages, and an
+    ``approved`` readiness review. Those values are useful history, but they
+    are not proof for the current approval gate. Preserve them as unresolved
+    requirements and force a fresh independent readiness review.
+    """
+    if not isinstance(raw, dict):
+        return raw, False
+    payload = dict(raw)
+    changed = False
+
+    readiness = payload.get("readiness")
+    if isinstance(readiness, list):
+        migrated_readiness: list[Any] = []
+        for index, item in enumerate(readiness, start=1):
+            if isinstance(item, dict) and {"key", "category", "question"}.issubset(item):
+                migrated_readiness.append(item)
+                continue
+            if isinstance(item, dict):
+                for legacy_key, legacy_value in item.items():
+                    key = str(legacy_key).strip() or f"legacy-readiness-{index}"
+                    question = _LEGACY_READINESS_QUESTIONS.get(
+                        key,
+                        f"Should the legacy course value {key!r} be retained for this course?",
+                    )
+                    migrated_readiness.append(
+                        {
+                            "version": 1,
+                            "key": key,
+                            "category": "legacy course metadata",
+                            "question": question,
+                            "required": True,
+                            "status": "unknown",
+                            "answer": f"Legacy recorded value: {legacy_value!s}",
+                            "evidence": (f"legacy-course-field:{key}",),
+                            "owner_decision_required": True,
+                        }
+                    )
+                changed = True
+            else:
+                migrated_readiness.append(
+                    {
+                        "version": 1,
+                        "key": f"legacy-readiness-{index}",
+                        "category": "legacy course metadata",
+                        "question": "What should this legacy readiness entry mean for the current course?",
+                        "required": True,
+                        "status": "unknown",
+                        "answer": str(item),
+                        "owner_decision_required": True,
+                    }
+                )
+                changed = True
+        if migrated_readiness != readiness:
+            payload["readiness"] = migrated_readiness
+            changed = True
+
+    review = payload.get("readiness_review")
+    review_fields = {
+        "verdict",
+        "summary",
+        "input_sha",
+        "evidence_sha",
+        "provider",
+        "model",
+        "reasoning",
+        "prompt_version",
+        "reviewer",
+        "session_id",
+        "reviewed_at",
+        "checks",
+    }
+    invalid_review = review is not None and (
+        not isinstance(review, dict) or not review_fields.issubset(review)
+    )
+    if invalid_review:
+        payload["readiness_review"] = None
+        changed = True
+
+    work_packages = payload.get("work_packages")
+    if isinstance(work_packages, list):
+        migrated_packages: list[Any] = []
+        for index, item in enumerate(work_packages, start=1):
+            if not isinstance(item, dict):
+                continue
+            package = dict(item)
+            key = str(package.get("key") or f"work-{index}")
+            title = str(package.get("title") or key)
+            if package.get("key") != key:
+                package["key"] = key
+                changed = True
+            if not package.get("title"):
+                package["title"] = title
+                changed = True
+            if not package.get("objective"):
+                package["objective"] = title
+                changed = True
+            status = str(package.get("status") or "planned")
+            if status in _LEGACY_WORK_PACKAGE_STATUS:
+                package["status"] = _LEGACY_WORK_PACKAGE_STATUS[status]
+                changed = True
+            migrated_packages.append(package)
+        if migrated_packages != work_packages:
+            payload["work_packages"] = migrated_packages
+            changed = True
+
+    if invalid_review and str(payload.get("status") or "") in {"engaged", "completed"}:
+        payload["status"] = "readiness_review"
+        payload.pop("approved_by", None)
+        payload.pop("approved_at", None)
+        changed = True
+
+    return payload, changed
+
+
 class ReadinessReport(StrictModel):
     version: int = 1
     course_key: str
@@ -308,7 +438,11 @@ class CourseStore:
             raise CourseError(f"course file does not exist: {path}")
         try:
             raw: Any = yaml.safe_load(path.read_text(encoding="utf-8"))
-            return Course.model_validate(raw)
+            normalized, migrated = _migrate_legacy_course_payload(raw)
+            course = Course.model_validate(normalized)
+            if migrated:
+                self.save(course)
+            return course
         except Exception as exc:
             raise CourseError(f"invalid course file {path}: {exc}") from exc
 

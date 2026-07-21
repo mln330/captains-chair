@@ -72,6 +72,12 @@ USER_BLOCKER_PREFIXES: dict[str, BlockerKind] = {
 
 def classify_blocker(reason: str) -> BlockerKind:
     normalized = reason.strip().upper()
+    # A sandboxed coder must not own GitHub credentials. Older workers could
+    # nevertheless report the controller-owned publish step as EXTERNAL_ACCESS;
+    # recognize that precise wording as repairable so a host-publisher retry is
+    # created after deployment instead of waiting for an owner response.
+    if normalized.startswith("EXTERNAL_ACCESS:") and "CANNOT ACCESS `GITHUB.COM` FROM THIS RUNNER" in normalized:
+        return BlockerKind.TECHNICAL
     for prefix, kind in USER_BLOCKER_PREFIXES.items():
         if normalized.startswith(prefix):
             return kind
@@ -93,6 +99,7 @@ class QueueCard(StrictModel):
     priority: str = "normal"
     labels: tuple[str, ...] = ()
     agent_id: str | None = None
+    linked_session_id: str | None = None
     source_url: str | None = None
     workspace: WorkspaceRef | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -499,7 +506,7 @@ class WorkflowOrchestrator:
 
         # Recovery cards are control-plane work, not project work. Once their
         # target has recovered, leaving them READY would dispatch another
-        # Number 1 session and recreate the same context at additional cost.
+        # Number One session and recreate the same context at additional cost.
         for card in cards:
             if (
                 card.status in {QueueStatus.READY, QueueStatus.TODO}
@@ -1316,12 +1323,12 @@ class WorkflowOrchestrator:
             board_id,
             QueueCardSpec(
                 key=f"make_it_so:control-plane-recovery:{card.id}:{attempt}",
-                title=f"Number 1 recovery: {card.title}",
+                title=f"Number One recovery: {card.title}",
                 notes=(
                     f"Repository: {repo.full_name}\n"
                     f"Failed card: {card.id}\n"
                     f"Failure evidence: {_block_reason(card)}\n\n"
-                    "This is a fresh Number 1 recovery context. Re-read the current repository, PR, issue, and Workboard state. "
+                    "This is a fresh Number One recovery context. Re-read the current repository, PR, issue, and Workboard state. "
                     "Determine the smallest autonomous replanning action that advances the original goal. Preserve the failed "
                     "card as evidence, create or retarget fresh work only when justified, and complete this card with a concise "
                     "decision, created-card links, and current-head proof. Use USER_SECRET:, GOAL_DIVERGENCE:, EXTERNAL_ACCESS:, "
@@ -1429,7 +1436,7 @@ class WorkflowOrchestrator:
             agent_id=self.config.workers.captain,
             status=QueueStatus.READY,
             reset_failures=True,
-            reason="Retry budget exhausted; route to Number 1 recovery for autonomous replanning.",
+            reason="Retry budget exhausted; route to Number One recovery for autonomous replanning.",
         )
         _append_unique(control_plane_recoveries, card.id)
 
@@ -1782,7 +1789,7 @@ def _stage_notes(
             "record it in structured test evidence."
         ),
         WorkStage.FINAL_REVIEW: (
-            "Perform the Number 1 final review against the original issue, repository plan, acceptance criteria, independent review, "
+            "Perform the Number One final review against the original issue, repository plan, acceptance criteria, independent review, "
             "UX evidence, tests, CI, unresolved threads, and current PR head. Complete only when the configured completion policy is satisfied, "
             "and include the matching READY_FOR_OWNER:<head-sha>, CONTROL_PLANE_COMPLETE:<head-sha>, or AUTO_MERGE_ALLOWED:<head-sha> proof marker."
         ),

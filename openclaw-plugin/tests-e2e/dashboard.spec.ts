@@ -69,7 +69,13 @@ async function mockApi(page: Page) {
   await page.route("**/make-it-so/api/models/config", (route) => route.fulfill({ json: { global_profiles: {}, runtime_profiles: {}, runtimes: ["openclaw"] } }));
   await page.route("**/make-it-so/api/schedule/status", (route) => route.fulfill({ json: { status: "inspected", jobs: [{ name: "make-it-so-reconcile", every: "5m", enabled: true, health: "healthy" }, { name: "make-it-so-course-review", every: "2h", enabled: false, health: "paused" }] } }));
   await page.route("**/make-it-so/api/models/validate", (route) => route.fulfill({ json: { can_save: true, status: "unverified", warnings: [] } }));
-  await page.route("**/make-it-so/api/repos/register", (route) => route.fulfill({ json: { status: "registered", follow_up_required: true, follow_up_message: "Repository registered. Number 1 will follow up in chat before work begins." } }));
+  await page.route("**/make-it-so/api/registration/options", (route) => route.fulfill({ json: {
+    local_clones: [{ full_name: "example/local", local_path: "/workspace/local", branch: "main", dirty: false }],
+    discord_routes: [{ route: "channel:200", channel_id: "200", name: "project-room", label: "#project-room" }],
+    default_discord_route: "channel:200",
+  } }));
+  await page.route("**/make-it-so/api/repos/inspect", (route) => route.fulfill({ json: { status: "inspected", mutation_started: false, discovery: { local_clone: { path: "/workspace/second", exists: false, cloned: false }, planning_document: { path: "docs/IMPLEMENTATION_PLAN.md", found: false, candidates: [] }, git: { branch: null, dirty: null } } } }));
+  await page.route("**/make-it-so/api/repos/register", (route) => route.fulfill({ json: { status: "registered", follow_up_required: true, follow_up_message: "Repository registered. Number One will follow up in chat before work begins." } }));
   await page.route("**/make-it-so/api/course/models", (route) => route.fulfill({ json: { status: "updated" } }));
   await page.route("**/make-it-so/api/course/planning-session", (route) => route.fulfill({
     json: {
@@ -82,21 +88,30 @@ async function mockApi(page: Page) {
   await page.route("**/make-it-so/api/course/milestone-evidence", (route) => route.fulfill({ json: { milestones: repo.workboard_status.milestones } }));
 }
 
-test("repository registration stays with the mission overview and asks only for repo and route", async ({ page }) => {
+test("repository registration uses inspection, guided policy choices, and a planning handoff", async ({ page }) => {
   await mockApi(page);
   await page.goto("/");
 
   const overview = page.getByRole("region", { name: "Current courses" });
-  const registration = overview.getByRole("region", { name: "Add a repository" });
-  await expect(registration.getByRole("heading", { name: "Add a repository" })).toBeVisible();
+  const registration = overview.getByRole("region", { name: "Set a course" });
+  await expect(registration.getByRole("heading", { name: "Set a course" })).toBeVisible();
   await registration.getByRole("button", { name: "Register repository" }).click();
   await registration.getByLabel("GitHub repository").fill("https://github.com/example/second");
-  await registration.getByLabel("Discord route").fill("project-room");
+  await registration.getByLabel("Discord channel").selectOption("channel:200");
+  const inspectPromise = page.waitForRequest((request) => request.url().endsWith("/repos/inspect") && request.method() === "POST");
+  await registration.getByRole("button", { name: "Inspect repository" }).click();
+  await inspectPromise;
+  await expect(registration.getByText("Inspection complete")).toBeVisible();
+  await registration.getByRole("button", { name: "Continue", exact: true }).click();
+  await registration.getByRole("button", { name: "Continue", exact: true }).click();
   const requestPromise = page.waitForRequest((request) => request.url().endsWith("/repos/register") && request.method() === "POST");
-  await registration.getByRole("button", { name: "Register and inspect" }).click();
+  await registration.getByRole("button", { name: "Register and start planning" }).click();
   const body = (await requestPromise).postDataJSON();
-  expect(body).toEqual({ full_name: "example/second", notification_route: "project-room" });
-  await expect(registration.getByRole("status")).toContainText("Number 1 will follow up in chat");
+  expect(body.full_name).toBe("example/second");
+  expect(body.notification_route).toBe("channel:200");
+  expect(body.operation_mode).toBe("supervised");
+  expect(body.screenshots_required).toBe(true);
+  await expect(registration.getByRole("status")).toContainText("Number One will follow up in chat");
 });
 
 test("dashboard renders the course map and planning brief", async ({ page }, testInfo) => {

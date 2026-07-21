@@ -16,7 +16,7 @@ def final_card(*, status: str = "passed", head: str = "abcdef123456") -> QueueCa
             "proof": [
                 {
                     "status": status,
-                    "label": "Number 1 final review",
+                    "label": "Number One final review",
                     "note": f"All final gates passed. AUTO_MERGE_ALLOWED:{head}",
                 }
             ]

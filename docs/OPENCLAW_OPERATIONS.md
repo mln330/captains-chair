@@ -91,7 +91,7 @@ make_it_so --config "$MAKE_IT_SO_CONFIG" orchestrate canary --repo OWNER/REPO --
    autonomous PR pass. Use the dashboard or `openclaw make-it-so schedule`
    commands to inspect, edit, pause, resume, remove, or reconcile them. Pausing
    a live OpenClaw cron survives plugin restarts and ordinary reconciliation.
-   Keep worker reconciliation frequent enough to claim ready cards; the Number 1
+   Keep worker reconciliation frequent enough to claim ready cards; the Number One
    cycle is for planning and state review.
 
 ## Existing Queue Migration
@@ -108,7 +108,7 @@ repeat. Before resuming:
 - keep preserved migration PRs explicitly protected by repository policy;
 - dispatch only after current worker-model health and usage admission pass.
 
-Technical failures should become bounded retries or Number 1 recovery. Only
+Technical failures should become bounded retries or Number One recovery. Only
 `USER_SECRET:`, `GOAL_DIVERGENCE:`, `EXTERNAL_ACCESS:`, and
 `HIGH_RISK_DECISION:` are owner-attention categories. A user-blocked card must
 not suppress unrelated ready work.
@@ -125,3 +125,19 @@ classification, proof validation, or usage accounting.
 Before enabling a future adapter, run its contract tests and the full shared
 workflow scenario, including technical recovery, owner-blocker isolation,
 simultaneous blockers, restart recovery, and current-head merge proof.
+
+## Sidebar Icon Compatibility
+
+Make It So advertises the `rocket` icon through OpenClaw's Control UI descriptor.
+OpenClaw releases whose built-in dashboard icon registry predates that icon fall
+back to a puzzle piece. Install the matching Lucide-style icon after installing or
+upgrading OpenClaw, then restart the gateway:
+
+```bash
+cd /path/to/make-it-so/openclaw-plugin
+npm run install:sidebar-icon -- /path/to/openclaw
+systemctl --user restart openclaw-gateway.service
+```
+
+The installer creates one backup beside the dashboard asset, refuses unknown
+bundle layouts, and is safe to run repeatedly.

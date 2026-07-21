@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -33,7 +34,7 @@ class RepositorySnapshot:
 
 
 class GitHubProvider(Protocol):
-    """Portable GitHub boundary used by the Number 1 engine and baseline collector."""
+    """Portable GitHub boundary used by the Number One engine and baseline collector."""
 
     def snapshot(self, repo: RepoConfig) -> RepositorySnapshot: ...
 
@@ -83,14 +84,21 @@ class GitHubProvider(Protocol):
 
 
 class GhGitHubProvider:
+    _TRANSIENT_RETRIES = 3
+
     def __init__(self, runner: CommandRunner = run_command, cwd: Path | None = None) -> None:
         self.runner = runner
         self.cwd = cwd
 
     def _json(self, args: list[str], *, timeout: int = 90) -> object:
-        result = self.runner(["gh", *args], cwd=self.cwd, timeout=timeout)
-        if result.returncode:
-            raise GitHubProviderError((result.stderr or result.stdout).strip()[:3000])
+        for attempt in range(self._TRANSIENT_RETRIES):
+            result = self.runner(["gh", *args], cwd=self.cwd, timeout=timeout)
+            if not result.returncode:
+                break
+            detail = (result.stderr or result.stdout).strip()
+            if attempt + 1 >= self._TRANSIENT_RETRIES or not _is_transient_github_failure(detail):
+                raise GitHubProviderError(detail[:3000])
+            time.sleep(0.5 * (2**attempt))
         try:
             return cast(object, json.loads(result.stdout))
         except json.JSONDecodeError as exc:
@@ -646,6 +654,28 @@ def _require_success(result: Any, operation: str) -> None:
     if result.returncode:
         detail = (result.stderr or result.stdout).strip()
         raise GitHubProviderError(f"{operation} failed: {detail[:3000]}")
+
+
+def _is_transient_github_failure(detail: str) -> bool:
+    normalized = detail.lower()
+    return any(
+        marker in normalized
+        for marker in (
+            "http 502",
+            "http 503",
+            "http 504",
+            "status 502",
+            "status 503",
+            "status 504",
+            "bad gateway",
+            "service unavailable",
+            "gateway timeout",
+            "rate limit",
+            "connection reset",
+            "timed out",
+            "timeout",
+        )
+    )
 
 
 def _object_list(value: object, label: str) -> list[dict[str, Any]]:

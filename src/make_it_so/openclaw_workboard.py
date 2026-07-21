@@ -7,10 +7,15 @@ from contextlib import suppress
 from pathlib import Path
 from threading import Event, Thread
 from typing import Any, Literal, cast
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from make_it_so.command import CommandRunner, run_command
-from make_it_so.direct_workers import CommandWorkerExecutor, WorkerExecutionError
+from make_it_so.direct_workers import (
+    CommandWorkerExecutor,
+    WorkerExecutionError,
+    WorkerExecutionResult,
+)
 from make_it_so.json_tools import decode_first_json
 from make_it_so.model_policy import models_match
 from make_it_so.models import OpenClawWorkboardConfig
@@ -29,6 +34,52 @@ class OpenClawWorkboardError(RuntimeError):
 
 
 WORKER_EXECUTION_COMMENT_PREFIX = "MAKE_IT_SO_WORKER_EXECUTION:"
+MANAGED_METADATA_MARKER = "MAKE_IT_SO_METADATA_JSON:"
+TEST_EVIDENCE_MARKER = "MAKE_IT_SO_TEST_EVIDENCE_JSON:"
+
+
+def _notes_with_managed_metadata(notes: str | None, metadata: dict[str, Any]) -> str | None:
+    """Persist Make It So fields through Workboard's stable notes surface."""
+    values = {
+        key: value
+        for key, value in metadata.items()
+        if key
+        in {
+            "courseKey",
+            "workPackageKey",
+            "qaEvidenceVersion",
+            "qaProfile",
+            "qaSurfaces",
+            "qaChecks",
+            "qaRequired",
+            "plannedChangedPaths",
+            "actualChangedPaths",
+            "discoveredHeadSha",
+            "testEvidenceRequired",
+            "testEvidencePolicy",
+            "testEvidenceScreenshotRequired",
+        }
+    }
+    if not values:
+        return notes
+    encoded = json.dumps(values, sort_keys=True, separators=(",", ":"), default=str)
+    base = (notes or "").rstrip()
+    if MANAGED_METADATA_MARKER in base:
+        return base
+    return f"{base}\n\n{MANAGED_METADATA_MARKER}{encoded}" if base else f"{MANAGED_METADATA_MARKER}{encoded}"
+
+
+def _metadata_from_notes(notes: str | None) -> dict[str, Any]:
+    if not notes:
+        return {}
+    match = re.search(rf"(?m)^{re.escape(MANAGED_METADATA_MARKER)}(\{{.*\}})\s*$", notes)
+    if not match:
+        return {}
+    try:
+        value = json.loads(match.group(1))
+    except json.JSONDecodeError:
+        return {}
+    return cast(dict[str, Any], value) if isinstance(value, dict) else {}
 
 
 REQUIRED_WORKER_TOOLS = (
@@ -40,6 +91,8 @@ REQUIRED_WORKER_TOOLS = (
     "workboard_read",
     "workboard_worker_log",
 )
+
+WORKER_HEARTBEAT_GRACE_SECONDS = 120
 
 
 class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
@@ -80,7 +133,7 @@ class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
     def create_card(self, board_id: str, spec: QueueCardSpec) -> QueueCard:
         params: dict[str, Any] = {
             "title": _bounded_title(spec.title),
-            "notes": spec.notes,
+            "notes": _notes_with_managed_metadata(spec.notes, spec.metadata),
             "status": spec.status.value,
             "priority": spec.priority,
             "labels": [_bounded_label(label) for label in spec.labels],
@@ -437,6 +490,7 @@ class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
                     timeout_seconds=_runtime_limit(claimed, self.config.max_runtime_seconds),
                 )
                 if result.status == "completed":
+                    result = self._publish_worker_changes(claimed, result)
                     execution = (
                         result.telemetry.model_dump(mode="json")
                         if result.telemetry is not None
@@ -491,6 +545,135 @@ class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
             "runtime": runtime,
             "model": model,
         }
+
+    def _publish_worker_changes(
+        self, card: QueueCard, result: WorkerExecutionResult
+    ) -> WorkerExecutionResult:
+        """Publish implementation changes from the trusted host boundary.
+
+        Codex is intentionally kept in a workspace-write sandbox without network
+        access. Git commit, push, and PR creation therefore happen here, after
+        the worker has returned structured evidence, so the model never needs
+        host credentials or unrestricted network access.
+        """
+        if not any(label in {"stage:implementation", "stage:repair"} for label in card.labels):
+            return result
+        workspace = card.workspace
+        if workspace is None or workspace.path is None:
+            raise WorkerExecutionError("TECHNICAL: implementation worker has no publishable worktree")
+        branch = (workspace.push_branch or workspace.branch or "").strip()
+        if not branch:
+            raise WorkerExecutionError("TECHNICAL: implementation worker has no push branch")
+        full_name = _github_repo_name(card.source_url)
+        if not full_name:
+            raise WorkerExecutionError("TECHNICAL: implementation worker has no GitHub repository URL")
+
+        status = self.runner(
+            ["git", "-C", str(workspace.path), "status", "--porcelain"],
+            cwd=workspace.path,
+            timeout=60,
+        )
+        _require_publish_success(status, "inspect worker changes")
+        if (status.stdout or "").strip():
+            _require_publish_success(
+                self.runner(
+                    ["git", "-C", str(workspace.path), "add", "--all"],
+                    cwd=workspace.path,
+                    timeout=120,
+                ),
+                "stage worker changes",
+            )
+            _require_publish_success(
+                self.runner(
+                    [
+                        "git",
+                        "-C",
+                        str(workspace.path),
+                        "commit",
+                        "-m",
+                        _publish_commit_message(card),
+                    ],
+                    cwd=workspace.path,
+                    timeout=180,
+                ),
+                "commit worker changes",
+            )
+
+        _require_publish_success(
+            self.runner(
+                [
+                    "git",
+                    "-C",
+                    str(workspace.path),
+                    "push",
+                    "--set-upstream",
+                    "origin",
+                    f"HEAD:refs/heads/{branch}",
+                ],
+                cwd=workspace.path,
+                timeout=300,
+            ),
+            "push worker branch",
+        )
+        pr = _find_worker_pr(self.runner, workspace.path, full_name, branch)
+        if pr is None:
+            base = _worker_base_branch(self.runner, workspace.path)
+            body = _worker_pr_body(card, result)
+            created = self.runner(
+                [
+                    "gh",
+                    "pr",
+                    "create",
+                    "--repo",
+                    full_name,
+                    "--base",
+                    base,
+                    "--head",
+                    branch,
+                    "--title",
+                    card.title[:200],
+                    "--body",
+                    body,
+                ],
+                cwd=workspace.path,
+                timeout=180,
+            )
+            _require_publish_success(created, "create worker pull request")
+            pr = _find_worker_pr(self.runner, workspace.path, full_name, branch)
+        if pr is None:
+            raise WorkerExecutionError("TECHNICAL: worker branch was pushed but no pull request was returned")
+        if bool(pr.get("isDraft")):
+            number = str(pr.get("number") or "")
+            _require_publish_success(
+                self.runner(
+                    ["gh", "pr", "ready", number, "--repo", full_name],
+                    cwd=workspace.path,
+                    timeout=120,
+                ),
+                "mark worker pull request ready",
+            )
+            pr = _find_worker_pr(self.runner, workspace.path, full_name, branch) or pr
+        url = str(pr.get("url") or "").strip()
+        head_sha = _git_head_sha(self.runner, workspace.path)
+        if not url or not head_sha:
+            raise WorkerExecutionError("TECHNICAL: worker pull request proof is missing URL or head SHA")
+        proof = [dict(item) for item in result.proof]
+        primary = proof[0] if proof else {"status": "passed", "note": result.summary}
+        primary["url"] = url
+        primary["note"] = (
+            f"{str(primary.get('note') or result.summary).strip()} "
+            f"Published by the host controller at {url} (head {head_sha})."
+        ).strip()
+        proof[0] = primary
+        published = result.model_copy(
+            update={
+                "summary": f"{result.summary.rstrip('.')} PR opened: {url} at {head_sha}.",
+                "proof": tuple(proof),
+            }
+        )
+        if result.telemetry is not None:
+            published.attach_telemetry(result.telemetry)
+        return published
 
     def _promote_dependency_ready_cards(self, cards: list[QueueCard]) -> list[str]:
         by_id = {card.id: card for card in cards}
@@ -588,6 +771,14 @@ class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
                         card.id,
                         status=QueueStatus.REVIEW,
                         reason="TECHNICAL_worker_claim_expired_without_heartbeat",
+                    )
+                    recovered.append(card.id)
+                    continue
+                if _claim_heartbeat_stale(card):
+                    self.reclaim_card(
+                        card.id,
+                        status=QueueStatus.REVIEW,
+                        reason="TECHNICAL_worker_heartbeat_stale_after_runtime_restart",
                     )
                     recovered.append(card.id)
                     continue
@@ -787,6 +978,12 @@ class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
         if raw_metadata is not None and not isinstance(raw_metadata, dict):
             raise OpenClawWorkboardError("Workboard card metadata must be an object")
         metadata = cast(dict[str, Any], raw_metadata or {})
+        notes = str(raw["notes"]) if raw.get("notes") is not None else None
+        metadata = {**_metadata_from_notes(notes), **metadata}
+        if "discoveredHeadSha" not in metadata and notes:
+            head_match = re.search(r"(?m)^Current head:\s*([0-9a-fA-F]{7,64})\s*$", notes)
+            if head_match:
+                metadata["discoveredHeadSha"] = head_match.group(1)
         workspace_value = raw.get("workspace")
         if workspace_value is not None and not isinstance(workspace_value, dict):
             raise OpenClawWorkboardError("Workboard card workspace must be an object")
@@ -819,11 +1016,12 @@ class OpenClawWorkboardAdapter(WorkQueueAdapter, WorkerLifecycleAdapter):
         return QueueCard(
             id=str(raw.get("id") or ""),
             title=str(raw.get("title") or ""),
-            notes=str(raw["notes"]) if raw.get("notes") is not None else None,
+            notes=notes,
             status=QueueStatus(str(raw.get("status") or "todo")),
             priority=str(raw.get("priority") or "normal"),
             labels=tuple(str(item) for item in labels if isinstance(item, str)),
             agent_id=str(raw["agentId"]) if raw.get("agentId") else None,
+            linked_session_id=_linked_session_id(raw),
             source_url=str(raw["sourceUrl"]) if raw.get("sourceUrl") else None,
             workspace=workspace,
             metadata=metadata,
@@ -865,6 +1063,8 @@ def _bounded_label(value: str) -> str:
 
 
 def _session_key(card: QueueCard) -> str | None:
+    if card.linked_session_id:
+        return card.linked_session_id
     attempts = card.metadata.get("attempts")
     if isinstance(attempts, list):
         for item in reversed(cast(list[object], attempts)):
@@ -883,6 +1083,19 @@ def _session_key(card: QueueCard) -> str | None:
     return None
 
 
+def _linked_session_id(raw: dict[str, Any]) -> str | None:
+    """Read the loose Workboard session link used by direct UI launches.
+
+    Workboard stores this outside the Make It So attempt metadata. Preserving it
+    lets recovery distinguish an ended manual launch from a live managed claim.
+    """
+    for key in ("sessionId", "sessionKey", "linkedSessionId", "linkedSessionKey"):
+        value = raw.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
 def _claim_expired(card: QueueCard) -> bool:
     claim_value = card.metadata.get("claim")
     if not isinstance(claim_value, dict):
@@ -893,6 +1106,19 @@ def _claim_expired(card: QueueCard) -> bool:
         isinstance(expires_at, (int, float))
         and not isinstance(expires_at, bool)
         and expires_at <= int(time.time() * 1000)
+    )
+
+
+def _claim_heartbeat_stale(card: QueueCard) -> bool:
+    claim_value = card.metadata.get("claim")
+    if not isinstance(claim_value, dict):
+        return False
+    claim = cast(dict[str, Any], claim_value)
+    heartbeat_at = claim.get("lastHeartbeatAt") or claim.get("claimedAt")
+    return (
+        isinstance(heartbeat_at, (int, float))
+        and not isinstance(heartbeat_at, bool)
+        and heartbeat_at <= int(time.time() * 1000) - WORKER_HEARTBEAT_GRACE_SECONDS * 1000
     )
 
 
@@ -929,13 +1155,104 @@ def _runtime_limit(card: QueueCard, default: int) -> int:
     return default
 
 
+def _github_repo_name(source_url: str | None) -> str | None:
+    if not source_url:
+        return None
+    parsed = urlsplit(source_url.strip())
+    path = parsed.path.strip("/")
+    if parsed.netloc.lower() not in {"github.com", "www.github.com"} or not path:
+        return None
+    parts = [item for item in path.removesuffix(".git").split("/") if item]
+    return "/".join(parts[:2]) if len(parts) >= 2 else None
+
+
+def _require_publish_success(result: Any, operation: str) -> None:
+    if getattr(result, "returncode", 1):
+        detail = str(getattr(result, "stderr", "") or getattr(result, "stdout", "") or "").strip()
+        raise WorkerExecutionError(f"EXTERNAL_ACCESS: {operation} failed: {detail[:1800]}")
+
+
+def _worker_base_branch(runner: CommandRunner, workspace: Path) -> str:
+    result = runner(
+        ["git", "-C", str(workspace), "symbolic-ref", "refs/remotes/origin/HEAD"],
+        cwd=workspace,
+        timeout=30,
+    )
+    if result.returncode == 0:
+        value = (result.stdout or "").strip().rsplit("/", 1)[-1]
+        if value:
+            return value
+    return "main"
+
+
+def _git_head_sha(runner: CommandRunner, workspace: Path) -> str:
+    result = runner(
+        ["git", "-C", str(workspace), "rev-parse", "HEAD"],
+        cwd=workspace,
+        timeout=30,
+    )
+    _require_publish_success(result, "read worker branch head")
+    return (result.stdout or "").strip()
+
+
+def _find_worker_pr(
+    runner: CommandRunner,
+    workspace: Path,
+    full_name: str,
+    branch: str,
+) -> dict[str, Any] | None:
+    result = runner(
+        [
+            "gh",
+            "pr",
+            "list",
+            "--repo",
+            full_name,
+            "--state",
+            "open",
+            "--head",
+            branch,
+            "--json",
+            "number,url,headRefOid,isDraft",
+        ],
+        cwd=workspace,
+        timeout=120,
+    )
+    _require_publish_success(result, "inspect worker pull requests")
+    try:
+        payload = json.loads(result.stdout or "[]")
+    except json.JSONDecodeError as exc:
+        raise WorkerExecutionError("TECHNICAL: GitHub pull-request response was not valid JSON") from exc
+    if not isinstance(payload, list) or not payload:
+        return None
+    first = payload[0]
+    return cast(dict[str, Any], first) if isinstance(first, dict) else None
+
+
+def _publish_commit_message(card: QueueCard) -> str:
+    title = re.sub(r"\s+", " ", card.title).strip().rstrip(".")
+    return f"feat: {title[:160]}"
+
+
+def _worker_pr_body(card: QueueCard, result: WorkerExecutionResult) -> str:
+    proof = json.dumps(list(result.proof), indent=2, default=str)
+    return (
+        "## Make It So implementation\n\n"
+        f"{result.summary.strip()}\n\n"
+        "## Worker evidence\n\n"
+        f"```json\n{proof[:7000]}\n```\n\n"
+        f"Managed Workboard card: `{card.id}`\n"
+        "PR publishing was performed by the host controller after the isolated worker returned."
+    )
+
+
 def _managed_completion_proof(
     proof: tuple[dict[str, Any], ...], summary: str = "", execution: dict[str, Any] | None = None
 ) -> tuple[dict[str, Any], ...]:
     """Collapse model-supplied evidence to the single proof record OpenClaw accepts."""
     if not proof:
         return ()
-    primary = next(
+    primary = dict(next(
         (
             item
             for item in proof
@@ -943,7 +1260,7 @@ def _managed_completion_proof(
             or any(str(item.get(field) or "").strip() for field in ("note", "label", "proof_note"))
         ),
         proof[0],
-    )
+    ))
     note = str(primary.get("note") or primary.get("label") or primary.get("proof_note") or "")
     if not note:
         note = " | ".join(
@@ -958,6 +1275,10 @@ def _managed_completion_proof(
     )
     if marker and marker.group(0) not in note:
         note = f"{note} {marker.group(0)}".strip()
+    test_evidence = primary.get("test_evidence") or primary.get("testEvidence")
+    if isinstance(test_evidence, dict):
+        encoded_evidence = json.dumps(test_evidence, sort_keys=True, separators=(",", ":"), default=str)
+        note = f"{note}\n{TEST_EVIDENCE_MARKER}{encoded_evidence}".strip()
     return (
         {
             **primary,

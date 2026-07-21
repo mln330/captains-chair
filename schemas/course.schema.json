@@ -999,6 +999,30 @@
       ],
       "default": null
     },
+    "pending_readiness_key": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Pending Readiness Key"
+    },
+    "pending_readiness_question": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Pending Readiness Question"
+    },
     "work_packages": {
       "default": [],
       "items": {

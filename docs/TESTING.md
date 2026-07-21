@@ -4,12 +4,12 @@ MAKE_IT_SO tests are organized around evidence, not implementation shape.
 
 ## Unit Tests
 
-- every Number 1 mode and completion policy
+- every Number One mode and completion policy
 - every approval invariant and high-risk action
 - DAG topology and role separation
 - no autonomous merge cards under owner-only policies
 - explicit user-blocker classification
-- technical retry and Number 1 recovery routing
+- technical retry and Number One recovery routing
 - review-failure repair creation and gate rerun
 - unrelated dispatch while another card is blocked
 - OpenClaw RPC payloads, noisy output, malformed output, and permission failures

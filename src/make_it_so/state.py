@@ -568,6 +568,27 @@ class StateStore:
             context[str(row["card_id"])] = context_value
         return context
 
+    def number_one_session_context(self, repo: str) -> dict[str, dict[str, str]]:
+        """Return durable course context for Number One's named sessions."""
+        context: dict[str, dict[str, str]] = {}
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT session_id, course_key, plan_revision, model FROM number_one_sessions WHERE repo=?",
+                (repo,),
+            ).fetchall()
+        for row in rows:
+            session_id = str(row["session_id"] or "").strip()
+            course_key = str(row["course_key"] or "").strip()
+            if not session_id or not course_key:
+                continue
+            context[session_id] = {
+                "course_key": course_key,
+                "stage": "number_one",
+                "plan_revision": str(row["plan_revision"]),
+                "expected_model": str(row["model"] or "").strip(),
+            }
+        return context
+
     def approve(self, repo: str, action_id: str, approved_by: str) -> None:
         with self._connect() as conn:
             conn.execute(

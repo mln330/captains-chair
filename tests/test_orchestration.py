@@ -108,6 +108,12 @@ def test_blocker_classification_is_explicit_and_case_insensitive(
     assert classify_blocker(reason.lower()) == expected
 
 
+def test_sandbox_publish_failure_is_repairable_after_host_publisher_deployment() -> None:
+    assert classify_blocker(
+        "EXTERNAL_ACCESS: Cannot access `github.com` from this runner (DNS/network resolution failure)"
+    ) == BlockerKind.TECHNICAL
+
+
 def test_autonomous_workflow_is_role_separated_and_dependency_gated(tmp_path: Path) -> None:
     repo = repo_config(
         tmp_path,
@@ -958,7 +964,7 @@ def test_control_plane_action_without_completion_proof_is_retried_instead_of_cou
     queue = MemoryQueue()
     queue.cards["recovery"] = QueueCard(
         id="recovery-1",
-        title="Number 1 recovery",
+        title="Number One recovery",
         status=QueueStatus.DONE,
         labels=("make_it_so", "stage:control_plane_action", "control-plane-recovery-for:failed-1"),
         agent_id="make-it-so",

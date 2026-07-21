@@ -18,6 +18,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import Lock
 from typing import Any, Literal, cast
 from urllib.parse import urlsplit
 
@@ -44,6 +45,8 @@ from make_it_so.models import (
     CheckpointStatus,
     CompletionPolicy,
     Course,
+    CourseKind,
+    CourseStatus,
     MilestoneApprovalPolicy,
     MilestoneChangeProposal,
     MilestoneChangeRequest,
@@ -51,14 +54,18 @@ from make_it_so.models import (
     ModelPolicy,
     ModelProfile,
     NotificationConfig,
+    OnboardingPreferences,
     OpenClawWorkboardConfig,
     OperationMode,
     ProjectManifest,
+    ReadinessRequirement,
     RepoConfig,
     RepositoryProvisioningConfig,
     RequirementStatus,
+    RunState,
     ScheduleConfig,
     UsageConfig,
+    WorkPackageStatus,
 )
 from make_it_so.openclaw_usage import sync_openclaw_sessions
 from make_it_so.openclaw_workboard import WORKER_EXECUTION_COMMENT_PREFIX
@@ -70,6 +77,9 @@ from make_it_so.usage import build_usage_report
 
 class SidecarError(RuntimeError):
     """A request failed with an operator-actionable error."""
+
+
+SIDECAR_TIMEOUT_SAFETY_SECONDS = 300
 
 
 _WORKBOARD_ACTIVE_STATUSES = frozenset(
@@ -96,6 +106,89 @@ _PLANNING_DOC_CANDIDATES = (
     "PLAN.md",
     "docs/PLAN.md",
 )
+
+_TAKEOVER_READINESS_QUESTIONS = {
+    "goals": "What outcome should this takeover achieve, and what must be visibly true when it is complete?",
+    "non-goals": "What is explicitly out of scope for this course?",
+    "users": "Who is the primary user, and what workflow must work for them?",
+    "architecture-constraints": "What architecture, dependency, compatibility, or technology constraints must be preserved?",
+    "permissions": "What permissions may the crew use, and which actions must remain owner-approved?",
+    "secret-references": "Which secret references or credential names are required, without sharing secret values?",
+    "external-access": "What external systems or accounts must the crew access, and are those connections available?",
+    "environments": "Where should this be developed, tested, and run for the course?",
+    "test-data": "What safe test data or fixtures should be used to prove the workflow?",
+    "CI": "Which CI checks are required, and what counts as passing?",
+    "deployment": "Is deployment part of this course, or is local/test verification the exit surface?",
+    "rollback": "What is the rollback or recovery path if a change fails?",
+    "observability": "What logs, status, metrics, or other evidence must be available to diagnose the result?",
+    "security": "What security and privacy properties must be verified before completion?",
+    "UX-inputs": "What user-interface or command-line usability expectations should be tested?",
+    "token-policy": "What model and token-use limits should Number One enforce for this course?",
+    "exit-criteria": "What exact acceptance and exit criteria must Number One verify before declaring completion?",
+}
+
+
+def _provisional_takeover_course(
+    full_name: str,
+    onboarding: OnboardingPreferences,
+    planning: dict[str, Any],
+    existing: tuple[Course, ...],
+) -> Course:
+    """Create the durable course container before the first Discord question.
+
+    Registration must not be able to start implementation, but the planning
+    conversation still needs a course to own answers, readiness review, and
+    approval. Keeping every required category explicit also makes the
+    dashboard truthful while Number One is interviewing the owner.
+    """
+    existing_keys = {course.key for course in existing}
+    course_key = "takeover"
+    if course_key in existing_keys:
+        course_key = f"takeover-{uuid.uuid4().hex[:8]}"
+    repository_name = full_name.split("/", 1)[-1]
+    goal = onboarding.goal or "Complete and stabilize the repository's documented delivery plan."
+    planning_path = str(planning.get("path") or _DEFAULT_PLANNING_DOC)
+    readiness = tuple(
+        ReadinessRequirement(
+            key=key,
+            category=key.replace("-", " ") if key != "CI" else "CI",
+            question=question,
+            owner_decision_required=True,
+        )
+        for key, question in _TAKEOVER_READINESS_QUESTIONS.items()
+    )
+    return Course(
+        key=course_key,
+        repository=full_name,
+        kind=CourseKind.TAKEOVER,
+        title=f"{repository_name} takeover",
+        goal=goal,
+        scope=(f"Reconcile the current implementation with {planning_path} before implementation begins.",),
+        users=("Repository owner and maintainers",),
+        acceptance_criteria=("Number One and the owner agree on a course charter and executable work packages.",),
+        exit_criteria=("All agreed acceptance criteria pass with current test and user-acceptance evidence.",),
+        readiness=readiness,
+        pending_readiness_key="goals",
+        pending_readiness_question=_TAKEOVER_READINESS_QUESTIONS["goals"],
+        status=CourseStatus.READINESS_REVIEW,
+    )
+
+
+def _default_registration_orchestrator(config: AppConfig, requested: Any = None) -> str | None:
+    """Choose the native OpenClaw Workboard when registering through OpenClaw.
+
+    A repo may still explicitly select another adapter. When no adapter is
+    supplied, selecting the configured OpenClaw Workboard prevents a new
+    OpenClaw registration from silently falling back to the board-free direct
+    runtime, which has no claimable OpenClaw worker cards.
+    """
+    explicit = str(requested or "").strip()
+    if explicit:
+        return explicit
+    for name, value in config.orchestrators.items():
+        if isinstance(value, OpenClawWorkboardConfig):
+            return name
+    return None
 
 
 def _normalize_github_repository(value: str) -> str:
@@ -188,30 +281,56 @@ def _number_one_registration_prompt(
     full_name: str,
     local_discovery: dict[str, Any],
     planning: dict[str, Any],
+    onboarding: OnboardingPreferences | None = None,
 ) -> str:
-    """Build the first user-facing Number 1 turn for a newly registered repo."""
+    """Build the first user-facing Number One turn for a newly registered repo."""
     clone_path = str(local_discovery.get("path") or "the configured workspace")
     clone_state = "a local clone was found" if local_discovery.get("cloned") else "no local clone was found"
     plan_path = str(planning.get("path") or _DEFAULT_PLANNING_DOC)
     plan_state = "a durable planning document was found" if planning.get("found") else "no durable planning document was found"
+    choices: list[str] = []
+    if onboarding is not None:
+        if onboarding.phase is not None:
+            choices.append(f"course type selected in the dashboard: {onboarding.phase.value}")
+        if onboarding.goal:
+            choices.append(f"the builder's initial goal: {onboarding.goal}")
+        if onboarding.clone_allowed is not None:
+            choices.append(f"clone permission: {'allowed' if onboarding.clone_allowed else 'not granted'}")
+        if onboarding.detected_surface is not None:
+            choices.append(f"application surface: {onboarding.detected_surface.value}")
+        choices.extend(
+            [
+                f"UAT evidence required: {'yes' if onboarding.uat_required else 'no'}",
+                f"screenshots required: {'yes' if onboarding.screenshots_required else 'no'}",
+                f"checkpoint preference: {onboarding.checkpoint_policy.replace('_', ' ')}",
+                f"intelligence level: {onboarding.intelligence_level}",
+            ]
+        )
+    known_choices = "\n".join(f"- {item}" for item in choices) or "- No dashboard preferences were supplied yet."
+    missing = (
+        "The dashboard already captured the items listed below. Do not ask for them again."
+        if choices
+        else "The dashboard did not capture any preferences yet."
+    )
     return (
-        "You are Number 1, the first in command for Make It So. This is the initial planning conversation "
+        "You are Number One, the first in command for Make It So. This is the initial planning conversation "
         f"for the newly registered repository {full_name}. {clone_state} at {clone_path}; {plan_state} "
         f"(checked path: {plan_path}).\n\n"
-        "Reply directly in this Discord channel with the heading `NUMBER 1 | INITIAL PLANNING`. "
-        "Your only job in this turn is to ask the builder for the information needed to form a complete "
-        "course charter. Do not clone the repository, run a baseline, edit files, create branches, create "
+        "A provisional, paused takeover course has been created to hold this conversation. It is not ready "
+        "for implementation and must remain paused until the readiness review and explicit charter approval "
+        "are recorded.\n\n"
+        "Reply directly in this Discord channel with the heading `NUMBER ONE | INITIAL PLANNING`. "
+        "Your only job in this turn is to begin a short, conversational requirements interview that will "
+        "produce a course charter. Do not clone the repository, run a baseline, edit files, create branches, create "
         "issues or pull requests, dispatch workers, or claim that implementation has started.\n\n"
-        "Ask these questions in a concise numbered list, adapting them to the facts above:\n"
-        "1. What outcome and user-facing goal should this course achieve?\n"
-        "2. Is this a greenfield project, an in-progress takeover, or a new feature for a shipped product?\n"
-        "3. Which repository documents are authoritative, and may Make It So clone the repository into its managed workspace if needed?\n"
-        "4. What is in scope, explicitly out of scope, and the acceptance and exit criteria?\n"
-        "5. What test plan and user-acceptance evidence are required, including screenshots when a UI is involved?\n"
-        "6. Where will the application run or be deployed, and what environments, permissions, secrets, services, or test data are required?\n"
-        "7. What autonomy and approval checkpoints should apply after the plan is agreed?\n\n"
-        "Tell the builder to answer in this channel. Explain that Number 1 will inspect the repository and "
-        "return a proposed plan for explicit approval before any work begins."
+        f"{missing}\n{known_choices}\n\n"
+        "Ask exactly this one readiness question in this turn and do not substitute another topic: "
+        f"{_TAKEOVER_READINESS_QUESTIONS['goals']} "
+        "Acknowledge the builder's answer briefly on later turns, "
+        "never repeat a question already answered or verified by inspection, and offer a sensible default "
+        "when the builder says they are unsure. Use short paragraphs and Discord-friendly quick choices "
+        "such as `1`, `2`, or `3` for fixed options. After the unresolved questions are answered, present "
+        "a concise course charter for explicit approval before any work begins."
     )
 
 
@@ -395,6 +514,31 @@ def _expected_worker_models(configured: OpenClawWorkboardConfig) -> dict[str, st
     return {
         str(getattr(configured.workers, role)): str(getattr(configured.worker_models, role)) for role in roles
     }
+
+
+_COURSE_GATE_STATUSES = frozenset(
+    {
+        CourseStatus.DRAFT,
+        CourseStatus.READINESS_REVIEW,
+        CourseStatus.AWAITING_APPROVAL,
+        CourseStatus.PAUSED,
+    }
+)
+
+
+def _current_course(repo: RepoConfig) -> Course | None:
+    """Return the active course that must gate execution and dashboard history.
+
+    A repository can retain completed courses as durable history.  A newer
+    readiness-review course must still win over that history, otherwise a
+    stale terminal Workboard can make a fresh registration appear complete.
+    """
+    try:
+        courses = CourseStore(repo.local_path).list()
+    except (CourseError, OSError, ValueError):
+        return None
+    active = [course for course in courses if course.status != CourseStatus.COMPLETED]
+    return active[-1] if active else (courses[-1] if courses else None)
 
 
 def _milestone_rows(repo: RepoConfig, cards: list[QueueCard]) -> list[dict[str, Any]]:
@@ -897,16 +1041,40 @@ class SidecarServer:
         self.interaction = interaction or NativeInteractionAdapter()
         self.github = github or GhGitHubProvider()
 
-    def _workboard_status(self, repo: RepoConfig, *, sync_usage: bool = True) -> dict[str, Any] | None:
-        """Read Workboard progress and reconcile worker telemetry for the dashboard."""
-        if not repo.orchestrator or not repo.orchestration_board:
+    def _orchestration_board_id(self, repo: RepoConfig) -> tuple[OpenClawWorkboardConfig, str] | None:
+        """Resolve a repo's optional Workboard adapter and derived board id."""
+        if not repo.orchestrator:
             return None
         configured = self.config.orchestrators.get(repo.orchestrator)
         if not isinstance(configured, OpenClawWorkboardConfig):
             return None
+        board_id = repo.orchestration_board or (
+            f"{configured.board_prefix}-{repo.full_name.replace('/', '-').lower()}"
+        )
+        return configured, board_id
+
+    def _expected_openclaw_models(self, configured: OpenClawWorkboardConfig) -> dict[str, str]:
+        """Include the named Number One strategist route in usage attribution."""
+        expected = _expected_worker_models(configured)
         try:
+            number_one = self.config.model_policy("openclaw").for_role("number_one").primary.model
+        except (KeyError, ValueError):
+            number_one = None
+        if number_one:
+            expected["number_one"] = number_one
+            expected["strategist"] = number_one
+        return expected
+
+    def _workboard_status(self, repo: RepoConfig, *, sync_usage: bool = True) -> dict[str, Any] | None:
+        """Read Workboard progress and reconcile worker telemetry for the dashboard."""
+        resolved = self._orchestration_board_id(repo)
+        if resolved is None:
+            return None
+        configured, board_id = resolved
+        try:
+            worker_models = self._expected_openclaw_models(configured)
             adapter = build_work_queue_adapter(configured)
-            cards = adapter.list_cards(repo.orchestration_board)
+            cards = adapter.list_cards(board_id)
             self.state.sync_orchestration_cards(repo.full_name, _card_context_rows(cards))
             if sync_usage:
                 try:
@@ -918,8 +1086,9 @@ class SidecarServer:
                             self.state,
                             repo=repo.full_name,
                             executable=configured.executable,
-                            expected_models=_expected_worker_models(configured),
+                            expected_models=worker_models,
                             session_context=self.state.openclaw_session_context(repo.full_name),
+                            number_one_context=self.state.number_one_session_context(repo.full_name),
                             session_limit=configured.session_limit,
                         ),
                     }
@@ -929,10 +1098,10 @@ class SidecarServer:
                 usage_sync = {"status": "cached"}
             return _summarize_workboard(
                 cards,
-                repo.orchestration_board,
+                board_id,
                 usage_sync=usage_sync,
                 repo_full_name=repo.full_name,
-                worker_models=_expected_worker_models(configured),
+                worker_models=worker_models,
                 repo=repo,
             )
         except Exception as exc:
@@ -944,12 +1113,11 @@ class SidecarServer:
 
     def _cached_workboard_status(self, repo: RepoConfig) -> dict[str, Any] | None:
         """Project the durable Workboard mirror without a slow OpenClaw RPC."""
-        if not repo.orchestrator or not repo.orchestration_board:
+        resolved = self._orchestration_board_id(repo)
+        if resolved is None:
             return None
-        configured = self.config.orchestrators.get(repo.orchestrator)
-        worker_models = (
-            _expected_worker_models(configured) if isinstance(configured, OpenClawWorkboardConfig) else {}
-        )
+        configured, board_id = resolved
+        worker_models = self._expected_openclaw_models(configured)
         payloads = self.state.orchestration_card_payloads(repo.full_name)
         cards: list[QueueCard] = []
         for payload in payloads:
@@ -960,7 +1128,7 @@ class SidecarServer:
         if not cards:
             return {
                 "status": "unknown",
-                "board": repo.orchestration_board,
+                "board": board_id,
                 "cards": 0,
                 "counts": {},
                 "usage_sync": {"status": "cached"},
@@ -968,7 +1136,7 @@ class SidecarServer:
             }
         return _summarize_workboard(
             cards,
-            repo.orchestration_board,
+            board_id,
             usage_sync={"status": "cached"},
             repo_full_name=repo.full_name,
             worker_models=worker_models,
@@ -1041,12 +1209,18 @@ class SidecarServer:
                         "freshness": "github_workboard_live_usage_cached",
                     }
                 return {"repos": list(executor.map(self._repo_status, repos))}
+        if method == "registration.options":
+            return self._registration_options()
         if method == "repo.register":
             return self._register_repo(payload)
+        if method == "repo.inspect":
+            return self._inspect_repository(payload)
         if method == "repo.create":
             return self._create_greenfield_repo(payload)
         if method == "repo.update":
             return self._update_repo(payload)
+        if method == "discord.planning_bindings":
+            return self._discord_planning_bindings()
         if method == "models.validate":
             return self._validate_model_routes(payload)
         if method == "models.config":
@@ -1079,6 +1253,8 @@ class SidecarServer:
             return self._planning_session(payload)
         if method == "course.readiness_review":
             return self._review_course_readiness(payload)
+        if method == "course.pending_question":
+            return self._set_pending_readiness_question(payload)
         if method == "course.models":
             return self._update_course_models(payload)
         if method == "course.requirement":
@@ -1099,9 +1275,30 @@ class SidecarServer:
             return self._configure_schedules(payload)
         if method == "attention.ack":
             return self._acknowledge_attention(payload)
+        if method == "run.start":
+            return self._start_once(
+                str(payload.get("kind") or "review"),
+                force_replan=bool(payload.get("force_replan", False)),
+            )
         if method == "run.once":
-            return self._run_once(str(payload.get("kind") or "reconcile"))
+            return self._run_once(
+                str(payload.get("kind") or "reconcile"),
+                force_replan=bool(payload.get("force_replan", False)),
+            )
         raise SidecarError(f"unknown sidecar method: {method}")
+
+    def _discord_planning_bindings(self) -> dict[str, Any]:
+        """Return durable Discord-to-Number-One bindings for plugin recovery."""
+        bindings = [
+            {
+                "repository": repo.full_name,
+                "route": repo.notification.route,
+                "session_key": f"make-it-so:number-one:{repo.full_name.replace('/', '-')}",
+            }
+            for repo in self.config.repos
+            if repo.notification.route
+        ]
+        return {"bindings": bindings}
 
     def _repo_status(
         self,
@@ -1123,7 +1320,15 @@ class SidecarServer:
             usage = build_usage_report(summary, self.config.usage)
             github = github_future.result()
         state = self.state.current_state(repo.full_name).value
-        if workboard is not None and workboard.get("status") == "completed":
+        course = _current_course(repo)
+        course_gates_execution = course is not None and course.status in _COURSE_GATE_STATUSES
+        if course_gates_execution:
+            # A new course charter is the source of truth until it is engaged.
+            # Historical Workboard cards and merged PRs must not leak into the
+            # current course's progress or terminal status.
+            workboard = None
+            state = RunState.BASELINE_REVIEW.value
+        elif workboard is not None and workboard.get("status") == "completed":
             state = "merged"
         configured_orchestrator = self.config.orchestrators.get(repo.orchestrator or "")
         worker_models = (
@@ -1141,16 +1346,30 @@ class SidecarServer:
         ]
         local_path = repo.local_path
         dirty = False
+        control_plane_dirty = False
         if local_path.is_dir() and (local_path / ".git").exists():
             try:
                 result = subprocess.run(
-                    ["git", "-C", str(local_path), "status", "--porcelain"],
+                    ["git", "-C", str(local_path), "status", "--porcelain", "--untracked-files=all"],
                     check=False,
                     capture_output=True,
                     text=True,
                     timeout=10,
                 )
-                dirty = bool(result.stdout.strip())
+                changed_paths = []
+                for line in result.stdout.splitlines():
+                    path = line[3:].strip() if len(line) >= 4 else ""
+                    if not path:
+                        continue
+                    changed_paths.append(path)
+                control_plane_dirty = any(
+                    path == ".make-it-so" or path.startswith(".make-it-so/")
+                    for path in changed_paths
+                )
+                dirty = any(
+                    not (path == ".make-it-so" or path.startswith(".make-it-so/"))
+                    for path in changed_paths
+                )
             except (OSError, subprocess.TimeoutExpired):
                 dirty = True
         return {
@@ -1158,12 +1377,16 @@ class SidecarServer:
             "local_path": str(local_path),
             "exists": local_path.exists(),
             "dirty": dirty,
+            "control_plane_dirty": control_plane_dirty,
             "default_branch": repo.default_branch,
             "operation_mode": repo.operation_mode.value,
             "completion_policy": repo.completion_policy.value,
+            "allow_autonomous_merge": repo.allow_autonomous_merge,
             "milestone_approval": repo.milestone_approval.value,
             "state": state,
             "state_source": "workboard" if workboard is not None else "state_store",
+            "course_key": course.key if course is not None else None,
+            "course_status": course.status.value if course is not None else None,
             "workboard_status": workboard,
             "github_status": github,
             "orchestrator": repo.orchestrator or "direct",
@@ -1172,6 +1395,7 @@ class SidecarServer:
             "worker_runtimes": worker_runtimes,
             "schedule_enabled": repo.schedule_enabled,
             "notification_route": repo.notification.route,
+            "onboarding": repo.onboarding.model_dump(mode="json"),
             "surfaces": sorted(surface.value for surface in repo.surfaces),
             "qa_profiles": [profile.model_dump(mode="json") for profile in repo.qa_profiles],
             "model_profiles": {
@@ -1201,6 +1425,7 @@ class SidecarServer:
         # leaving explicit local paths available to other runtimes.
         roots.extend(
             [
+                Path.home() / ".openclaw" / "workspace" / "make-it-so-managed",
                 Path.home() / ".openclaw" / "workspace",
                 Path.home() / "workspace",
                 Path.home() / "repos",
@@ -1216,50 +1441,126 @@ class SidecarServer:
                 unique.append(resolved)
         return unique
 
+    @staticmethod
+    def _github_full_name_from_remote(remote: str) -> str | None:
+        value = remote.strip()
+        if not value:
+            return None
+        scp_match = re.fullmatch(r"git@github\.com:([^/\s]+/[^/\s]+?)(?:\.git)?", value, re.IGNORECASE)
+        if scp_match:
+            return scp_match.group(1)
+        try:
+            parsed = urlsplit(value)
+        except ValueError:
+            return None
+        if parsed.hostname is None or parsed.hostname.lower() != "github.com":
+            return None
+        parts = parsed.path.removesuffix(".git").strip("/").split("/")
+        if len(parts) != 2 or not all(parts):
+            return None
+        return f"{parts[0]}/{parts[1]}"
+
+    @staticmethod
+    def _git_text(path: Path, *args: str) -> str | None:
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(path), *args],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return result.stdout.strip() if result.returncode == 0 else None
+
+    def _local_clone_details(self, path: Path, expected_full_name: str | None = None) -> dict[str, Any]:
+        expanded = path.expanduser()
+        cloned = (expanded / ".git").exists()
+        origin = self._git_text(expanded, "remote", "get-url", "origin") if cloned else None
+        full_name = self._github_full_name_from_remote(origin or "")
+        remote_matches = (
+            full_name.lower() == expected_full_name.lower()
+            if full_name is not None and expected_full_name is not None
+            else None
+        )
+        branch = self._git_text(expanded, "branch", "--show-current") if cloned else None
+        status = self._git_text(expanded, "status", "--porcelain") if cloned else None
+        return {
+            "path": str(expanded),
+            "exists": expanded.exists(),
+            "cloned": cloned,
+            "remote_matches": remote_matches,
+            "full_name": full_name,
+            "branch": branch or None,
+            "dirty": bool(status) if status is not None else None,
+        }
+
+    def _discover_local_repositories(self) -> tuple[list[dict[str, Any]], list[str]]:
+        candidates: list[Path] = [repo.local_path.expanduser() for repo in self.config.repos]
+        warnings: list[str] = []
+        for root in self._registration_roots():
+            if not root.is_dir():
+                continue
+            try:
+                candidates.extend(path for path in root.iterdir() if path.is_dir() and (path / ".git").exists())
+            except OSError as exc:
+                warnings.append(f"Could not inspect {root}: {exc}")
+
+        unique: list[Path] = []
+        seen: set[str] = set()
+        for candidate in candidates:
+            try:
+                key = str(candidate.resolve()).lower()
+            except OSError:
+                key = str(candidate).lower()
+            if key not in seen and (candidate / ".git").exists():
+                seen.add(key)
+                unique.append(candidate)
+
+        with ThreadPoolExecutor(max_workers=min(8, max(1, len(unique)))) as executor:
+            inspected = list(executor.map(self._local_clone_details, unique))
+        registered = {repo.full_name.lower() for repo in self.config.repos}
+        clones = [
+            {
+                "full_name": detail["full_name"],
+                "local_path": detail["path"],
+                "branch": detail["branch"],
+                "dirty": detail["dirty"],
+                "registered": str(detail["full_name"]).lower() in registered,
+            }
+            for detail in inspected
+            if detail["full_name"]
+        ]
+        clones.sort(key=lambda item: (str(item["full_name"]).lower(), str(item["local_path"]).lower()))
+        return clones, warnings
+
+    def _registration_options(self) -> dict[str, Any]:
+        clones, warnings = self._discover_local_repositories()
+        return {"local_clones": clones, "warnings": warnings}
+
     def _discover_local_repository(self, full_name: str) -> tuple[Path, dict[str, Any]]:
         repository_name = full_name.split("/", 1)[1]
         candidates = [root / repository_name for root in self._registration_roots()]
-        selected = next((path for path in candidates if (path / ".git").exists()), None)
-        selected = selected or next((path for path in candidates if path.exists()), None)
-        selected = selected or candidates[0]
-        cloned = (selected / ".git").exists()
-        remote_matches: bool | None = None
-        if cloned:
-            try:
-                result = subprocess.run(
-                    ["git", "-C", str(selected), "remote", "get-url", "origin"],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                    check=False,
-                )
-                origin = result.stdout.strip().lower().removesuffix(".git")
-                remote_matches = result.returncode == 0 and full_name.lower() in origin
-            except (OSError, subprocess.SubprocessError):
-                remote_matches = None
-        return selected, {
-            "path": str(selected),
-            "exists": selected.exists(),
-            "cloned": cloned,
-            "remote_matches": remote_matches,
-        }
+        inspected = [(path, self._local_clone_details(path, full_name)) for path in candidates if (path / ".git").exists()]
+        selected_pair = next((item for item in inspected if item[1]["remote_matches"] is True), None)
+        # Repositories created before remote verification may not have an origin.
+        selected_pair = selected_pair or next((item for item in inspected if item[1]["remote_matches"] is None), None)
+        if selected_pair:
+            return selected_pair
+        selected = candidates[0]
+        return selected, self._local_clone_details(selected, full_name)
 
     def _register_repo(self, payload: dict[str, Any]) -> dict[str, Any]:
         full_name = _normalize_github_repository(str(payload.get("full_name") or ""))
         if not full_name:
             raise SidecarError("repo.register requires full_name")
-        if any(repo.full_name == full_name for repo in self.config.repos):
-            raise SidecarError(f"repository is already registered: {full_name}")
+        existing_repo = next((item for item in self.config.repos if item.full_name == full_name), None)
         local_path_value = str(payload.get("local_path") or "").strip()
         if local_path_value:
             local_path = Path(local_path_value).expanduser()
-            local_discovery = {
-                "path": str(local_path),
-                "exists": local_path.exists(),
-                "cloned": (local_path / ".git").exists(),
-                "remote_matches": None,
-                "source": "explicit",
-            }
+            local_discovery = self._local_clone_details(local_path, full_name)
+            local_discovery["source"] = "explicit"
         else:
             local_path, local_discovery = self._discover_local_repository(full_name)
             local_discovery["source"] = "repository_roots"
@@ -1282,19 +1583,36 @@ class SidecarServer:
         checks = tuple(str(item) for item in _list_value(payload.get("checks"))) or tuple(
             str(item) for item in check_values
         )
+        raw_onboarding = {
+            "phase": str(payload.get("phase") or "") or None,
+            "goal": str(payload.get("goal") or "").strip() or None,
+            "clone_allowed": payload.get("clone_allowed"),
+            "planning_doc_choice": str(payload.get("planning_doc_choice") or "").strip() or None,
+            "detected_surface": str(payload.get("detected_surface") or "") or None,
+            "uat_required": bool(payload.get("uat_required", True)),
+            "screenshots_required": bool(payload.get("screenshots_required", False)),
+            "deployment_required": bool(payload.get("deployment_required", False)),
+            "deployment_authority": str(payload.get("deployment_authority") or "always_ask"),
+            "checkpoint_policy": str(payload.get("checkpoint_policy") or "major_changes"),
+            "intelligence_level": str(payload.get("intelligence_level") or "balanced"),
+        }
+        try:
+            onboarding = OnboardingPreferences.model_validate(raw_onboarding)
+        except ValueError as exc:
+            raise SidecarError(f"invalid onboarding choice: {exc}") from exc
         follow_up_reasons: list[str] = []
         if not bool(local_discovery["cloned"]):
             follow_up_reasons.append(
-                f"No local clone was found at {local_discovery['path']}; Number 1 will confirm whether to clone it."
+                f"No local clone was found at {local_discovery['path']}; Number One will confirm whether to clone it."
             )
         if not bool(planning.get("found")):
             follow_up_reasons.append(
-                "No durable planning document was identified; Number 1 will ask you to confirm the plan source in chat."
+                "No durable planning document was identified; Number One will ask you to confirm the plan source in chat."
             )
         follow_up_message = (
             f"Repository {full_name} is registered. "
             + (" ".join(follow_up_reasons) if follow_up_reasons else "The local clone and planning document were found.")
-            + " Number 1 will follow up in chat before any work begins."
+            + " Number One will follow up in chat before any work begins."
         )
         number_one_session_key = f"make-it-so:number-one:{full_name.replace('/', '-')}"
         notification_kind = str(payload.get("notification_kind") or "stdout")
@@ -1321,20 +1639,92 @@ class SidecarServer:
                 route=str(payload.get("notification_route") or "notifications"),
                 executable=notification_executable,
             ),
+            onboarding=onboarding,
+            orchestrator=_default_registration_orchestrator(
+                self.config,
+                payload.get("orchestrator"),
+            ),
+            orchestration_board=(str(payload.get("orchestration_board") or "").strip() or None),
         )
-        self._write_config(self.config.model_copy(update={"repos": (*self.config.repos, repo)}))
+        configured_repos = tuple(
+            repo if item.full_name == full_name else item
+            for item in self.config.repos
+        )
+        if existing_repo is None:
+            configured_repos = (*self.config.repos, repo)
+        self._write_config(self.config.model_copy(update={"repos": configured_repos}))
+        course_store = CourseStore(local_path)
+        try:
+            courses = course_store.list()
+        except (CourseError, OSError, ValueError):
+            courses = ()
+        active_courses = tuple(
+            course
+            for course in courses
+            if course.status not in {CourseStatus.COMPLETED}
+        )
+        course = active_courses[0] if active_courses else _provisional_takeover_course(
+            full_name,
+            onboarding,
+            planning,
+            courses,
+        )
+        if not active_courses:
+            course_store.save(course)
+        try:
+            number_one_model = self.config.model_policy("openclaw").for_role("number_one").primary.model
+        except (KeyError, ValueError):
+            number_one_model = "codex/gpt-5.6-sol"
+        self.state.save_number_one_session(
+            full_name,
+            course.key,
+            number_one_session_key,
+            "openclaw",
+            number_one_model,
+            course.plan_revision,
+        )
         return {
             "repo": self._repo_status(repo),
             "status": "registered",
+            "course_key": course.key,
+            "course_created": not bool(active_courses),
             "discovery": {
                 "local_clone": local_discovery,
                 "planning_document": planning,
             },
             "follow_up_required": True,
             "follow_up_message": follow_up_message,
-            "number_one_prompt": _number_one_registration_prompt(full_name, local_discovery, planning),
+            "number_one_prompt": _number_one_registration_prompt(full_name, local_discovery, planning, onboarding),
             "number_one_session_key": number_one_session_key,
             "notification_route": repo.notification.route,
+        }
+
+    def _inspect_repository(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Inspect registration facts without writing config or starting an agent."""
+        full_name = _normalize_github_repository(str(payload.get("full_name") or ""))
+        local_path_value = str(payload.get("local_path") or "").strip()
+        if local_path_value:
+            local_path = Path(local_path_value).expanduser()
+            local_discovery = self._local_clone_details(local_path, full_name)
+            if not local_discovery["cloned"]:
+                raise SidecarError("selected local_path is not a Git repository")
+            if local_discovery["remote_matches"] is False:
+                raise SidecarError("selected local_path does not match the requested GitHub repository")
+            local_discovery["source"] = "explicit"
+        else:
+            local_path, local_discovery = self._discover_local_repository(full_name)
+            local_discovery["source"] = "repository_roots"
+        planning = _planning_document_discovery(local_path)
+        git_state = {"branch": local_discovery.get("branch"), "dirty": local_discovery.get("dirty")}
+        return {
+            "status": "inspected",
+            "full_name": full_name,
+            "discovery": {
+                "local_clone": local_discovery,
+                "planning_document": planning,
+                "git": git_state,
+            },
+            "mutation_started": False,
         }
 
     def _create_greenfield_repo(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -1644,7 +2034,7 @@ class SidecarServer:
                 repository=repo.full_name,
                 course_key=course.key,
                 base_revision=course.plan_revision,
-                summary=str(payload.get("summary") or "Number 1 proposed a milestone change").strip(),
+                summary=str(payload.get("summary") or "Number One proposed a milestone change").strip(),
                 reason=str(payload.get("reason") or "Course evidence requires a milestone correction").strip(),
                 requested_by=str(payload.get("requested_by") or "owner").strip(),
                 changes=changes,
@@ -1841,6 +2231,30 @@ class SidecarServer:
             **self._course_payload(repo.full_name, updated),
         }
 
+    def _set_pending_readiness_question(self, payload: dict[str, Any]) -> dict[str, Any]:
+        repo, store, course = self._course_context(payload)
+        requirement_key = str(payload.get("requirement_key") or "").strip()
+        question = str(payload.get("question") or "").strip()
+        if bool(requirement_key) != bool(question):
+            raise SidecarError("course.pending_question requires both requirement_key and question, or neither")
+        if requirement_key and requirement_key not in {item.key for item in course.readiness}:
+            raise SidecarError(f"course has no readiness requirement: {requirement_key}")
+        try:
+            updated = Course.model_validate(
+                {
+                    **course.model_dump(mode="python"),
+                    "pending_readiness_key": requirement_key or None,
+                    "pending_readiness_question": question or None,
+                }
+            )
+            store.save(updated)
+        except (CourseError, ValueError) as exc:
+            raise SidecarError(str(exc)) from exc
+        return {
+            "status": "pending" if requirement_key else "cleared",
+            **self._course_payload(repo.full_name, updated),
+        }
+
     def _resolve_requirement(self, payload: dict[str, Any]) -> dict[str, Any]:
         repo, store, course = self._course_context(payload)
         requirement_key = str(payload.get("requirement_key") or "").strip()
@@ -1851,11 +2265,21 @@ class SidecarServer:
             status = RequirementStatus(status_value)
             evidence_value = payload.get("evidence")
             evidence_items = cast(list[Any], evidence_value) if isinstance(evidence_value, list) else []
+            answer = str(payload.get("answer")) if payload.get("answer") is not None else None
+            existing = next((item for item in course.readiness if item.key == requirement_key), None)
+            if (
+                bool(payload.get("append_answer"))
+                and answer
+                and existing is not None
+                and existing.answer
+                and answer.strip() != existing.answer.strip()
+            ):
+                answer = f"{existing.answer.rstrip()}\n\nFollow-up answer:\n{answer.strip()}"
             updated = self.interaction.resolve_requirement(
                 course,
                 requirement_key,
                 status,
-                str(payload.get("answer")) if payload.get("answer") is not None else None,
+                answer,
                 tuple(str(item) for item in evidence_items),
                 verified_by=str(payload.get("verified_by") or "") or None,
                 verified_at=(
@@ -1865,6 +2289,14 @@ class SidecarServer:
                 ),
                 verification_model=str(payload.get("verification_model") or "") or None,
             )
+            if course.pending_readiness_key == requirement_key:
+                updated = Course.model_validate(
+                    {
+                        **updated.model_dump(mode="python"),
+                        "pending_readiness_key": None,
+                        "pending_readiness_question": None,
+                    }
+                )
             store.save(updated)
         except (CourseError, ValueError) as exc:
             raise SidecarError(str(exc)) from exc
@@ -1923,7 +2355,7 @@ class SidecarServer:
         plan_path.parent.mkdir(parents=True, exist_ok=True)
         package_lines = (
             "\n".join(f"- `{package.key}`: {package.objective}" for package in course.work_packages)
-            or "- The Number 1 will decompose the first implementation package after baseline review."
+            or "- The Number One will decompose the first implementation package after baseline review."
         )
         acceptance = (
             "\n".join(f"- {item}" for item in course.acceptance_criteria)
@@ -1952,6 +2384,15 @@ class SidecarServer:
         completed_value = payload.get("completed")
         completed_items = cast(list[Any], completed_value) if isinstance(completed_value, list) else []
         completed: set[str] = {str(item) for item in completed_items}
+        # The course store is the durable source of truth. Callers may omit
+        # completed package keys because the UI and Number One usually send only
+        # the course identity. Treat terminal package statuses as completed so
+        # dependent work becomes eligible after a prior package finishes.
+        completed.update(
+            item.key
+            for item in course.work_packages
+            if item.status == WorkPackageStatus.COMPLETE
+        )
         return {
             "repository": repo.full_name,
             "course_key": course.key,
@@ -2009,6 +2450,9 @@ class SidecarServer:
         self.config = validated
 
     def _schedule_description(self) -> dict[str, Any]:
+        # The scheduler must outlive the longest worker it can dispatch. The
+        # margin covers proof persistence and the final notification.
+        timeout_seconds = self._one_shot_timeout_seconds()
         return {
             "source_of_truth": "openclaw_gateway_cron",
             "jobs": [
@@ -2016,13 +2460,15 @@ class SidecarServer:
                     "name": "make-it-so-reconcile",
                     "every": self.config.schedules.reconcile_every,
                     "kind": "reconcile",
-                    "command": ["python", "-m", "make_it_so.sidecar", "--once", "reconcile"],
+                    "command": ["python", "-m", "make_it_so.sidecar", "--once", "reconcile", "--background"],
+                    "timeout_seconds": timeout_seconds,
                 },
                 {
                     "name": "make-it-so-course-review",
                     "every": self.config.schedules.review_every,
                     "kind": "review",
-                    "command": ["python", "-m", "make_it_so.sidecar", "--once", "review"],
+                    "command": ["python", "-m", "make_it_so.sidecar", "--once", "review", "--background"],
+                    "timeout_seconds": timeout_seconds,
                 },
             ],
             "install_requires_operator_action": True,
@@ -2055,7 +2501,12 @@ class SidecarServer:
             "count": count,
         }
 
-    def _run_once(self, kind: str) -> dict[str, Any]:
+    def _start_once(self, kind: str, *, force_replan: bool = False) -> dict[str, Any]:
+        if kind not in {"reconcile", "review"}:
+            raise SidecarError(f"unsupported one-shot kind: {kind}")
+        return self._spawn_background_once(kind, force_replan=force_replan)
+
+    def _run_once(self, kind: str, *, force_replan: bool = False) -> dict[str, Any]:
         if kind not in {"reconcile", "review"}:
             raise SidecarError(f"unsupported one-shot kind: {kind}")
         harness = next(
@@ -2093,6 +2544,8 @@ class SidecarServer:
                         "--continue-run",
                     ]
                 )
+                if force_replan:
+                    command.append("--force-replan")
             try:
                 completed = subprocess.run(
                     command,
@@ -2100,7 +2553,7 @@ class SidecarServer:
                     check=False,
                     capture_output=True,
                     text=True,
-                    timeout=1800,
+                    timeout=self._one_shot_timeout_seconds(),
                 )
                 rows.append(
                     {
@@ -2123,6 +2576,48 @@ class SidecarServer:
             "timestamp": datetime.now(UTC).isoformat(),
         }
 
+    def _one_shot_timeout_seconds(self) -> int:
+        """Allow the sidecar to supervise a full worker lease plus cleanup."""
+        worker_runtime = max(
+            (
+                int(getattr(orchestrator, "max_runtime_seconds", 3600))
+                for orchestrator in self.config.orchestrators.values()
+            ),
+            default=3600,
+        )
+        return worker_runtime + SIDECAR_TIMEOUT_SAFETY_SECONDS
+
+    def _spawn_background_once(self, kind: str, *, force_replan: bool = False) -> dict[str, Any]:
+        """Detach scheduled work from OpenClaw's short command supervisor."""
+        log_dir = self.config_path.parent / "run-logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / f"sidecar-{kind}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.log"
+        handle = log_path.open("a", encoding="utf-8")
+        try:
+            command = [
+                    sys.executable,
+                    "-m",
+                    "make_it_so.sidecar",
+                    "--once",
+                    kind,
+                    "--config",
+                    str(self.config_path),
+                ]
+            if force_replan:
+                command.append("--force-replan")
+            child = subprocess.Popen(
+                command,
+                cwd=self.config_path.parent,
+                stdin=subprocess.DEVNULL,
+                stdout=handle,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+                close_fds=True,
+            )
+        finally:
+            handle.close()
+        return {"status": "started", "kind": kind, "pid": child.pid, "log": str(log_path)}
+
 
 def _list_value(value: Any) -> list[Any]:
     return cast(list[Any], value) if isinstance(value, list) else []
@@ -2132,6 +2627,8 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="make-it-so-sidecar")
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--once", choices=("reconcile", "review"))
+    parser.add_argument("--background", action="store_true")
+    parser.add_argument("--force-replan", action="store_true")
     return parser
 
 
@@ -2139,12 +2636,18 @@ def main() -> int:
     args = _parser().parse_args()
     server = SidecarServer(args.config)
     if args.once:
-        result = server.request("run.once", {"kind": args.once})
+        if args.background:
+            print(json.dumps(server._spawn_background_once(args.once, force_replan=args.force_replan), default=str), flush=True)  # pyright: ignore[reportPrivateUsage]
+            return 0
+        params: dict[str, Any] = {"kind": args.once}
+        if args.force_replan:
+            params["force_replan"] = True
+        result = server.request("run.once", params)
         print(json.dumps(result, default=str), flush=True)
         return 0 if result.get("status") == "completed" else 2
-    for line in sys.stdin:
-        if not line.strip():
-            continue
+    output_lock = Lock()
+
+    def handle_line(line: str) -> str:
         request_id: Any = None
         try:
             raw = json.loads(line)
@@ -2163,7 +2666,29 @@ def main() -> int:
                 "id": request_id,
                 "error": {"code": "SIDECAR_ERROR", "message": str(exc)[:2000]},
             }
-        print(json.dumps(response, default=str), flush=True)
+        return json.dumps(response, default=str)
+
+    def emit(future: Any) -> None:
+        try:
+            response = future.result()
+        except Exception as exc:  # pragma: no cover - defensive executor boundary
+            response = json.dumps({
+                "jsonrpc": "2.0",
+                "id": None,
+                "error": {"code": "SIDECAR_ERROR", "message": str(exc)[:2000]},
+            })
+        with output_lock:
+            print(response, flush=True)
+
+    # Long model-backed requests must not prevent health, answer, or dashboard
+    # requests from being serviced by the same persistent sidecar. JSON-RPC
+    # ids allow responses to arrive out of order and the TypeScript supervisor
+    # already correlates them correctly.
+    with ThreadPoolExecutor(max_workers=8, thread_name_prefix="sidecar-rpc") as executor:
+        for line in sys.stdin:
+            if not line.strip():
+                continue
+            executor.submit(handle_line, line).add_done_callback(emit)
     return 0
 
 

@@ -36,7 +36,7 @@ def test_supervised_milestone_gate_blocks_only_dependent_work() -> None:
     course = add_milestone_checkpoint(
         course,
         "index",
-        reason="Number 1 requires owner milestone approval.",
+        reason="Number One requires owner milestone approval.",
         owner_decision_required=True,
     )
     ready = {item.key for item in eligible_work_packages(course)}
@@ -164,7 +164,7 @@ def test_sidecar_proposes_and_approves_stale_checked_milestone_change(tmp_path: 
             "full_name": repo.full_name,
             "course_key": course.key,
             "summary": "Clarify index work",
-            "reason": "Number 1 found an acceptance gap.",
+            "reason": "Number One found an acceptance gap.",
             "changes": [
                 {
                     "kind": "update",
