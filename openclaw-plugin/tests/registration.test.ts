@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import plugin, { configuredDiscordRouteOptions, createToolExecutor, deliverDiscordPlanningStatus, deliverNumberOneDiscordTurn, deliverRegistrationFollowUp, discoverDiscordRouteOptions, discordAnswerMentionsRequirement, discordPendingReadinessQuestion, discordPlanningEventKey, discordPlanningRouteMatches, inferDiscordReadinessKey, isDiscordPlanningCourseStatus, nextDiscordReadinessKey, parseDiscordChannelOptions, parseDiscordCourseApproval, parseDiscordGuildId, parseRouteParams, pendingDiscordReadinessKey, readRouteParams, resolveDiscordRoute, selectDiscordReadinessQuestion, READINESS_REVIEW_TIMEOUT_MS } from "../src/index.js";
+import plugin, { configuredDiscordRouteOptions, createToolExecutor, deliverDiscordPlanningStatus, deliverNumberOneDiscordTurn, deliverRegistrationFollowUp, discoverDiscordRouteOptions, discordAnswerMentionsRequirement, discordPendingReadinessQuestion, discordPlanningEventKey, discordPlanningRouteMatches, inferDiscordReadinessKey, isDiscordPlanningCourseStatus, nextDiscordReadinessKey, parseConfiguredDiscordGuildIds, parseDiscordChannelOptions, parseDiscordCourseApproval, parseDiscordGuildId, parseRouteParams, pendingDiscordReadinessKey, readRouteParams, resolveDiscordRoute, selectDiscordReadinessQuestion, READINESS_REVIEW_TIMEOUT_MS } from "../src/index.js";
 
 describe("Make It So OpenClaw registration", () => {
   it("gives readiness review RPCs more time than the Number One host turn", () => {
@@ -49,6 +49,10 @@ describe("Make It So OpenClaw registration", () => {
       label: "#notifications",
     });
     expect(parseDiscordGuildId(JSON.stringify({ payload: { channel: { guild_id: "guild-1" } } }))).toBe("guild-1");
+    expect(parseConfiguredDiscordGuildIds(JSON.stringify({
+      "333333333333333333": { requireMention: false },
+      invalid: {},
+    }))).toEqual(["333333333333333333"]);
     const routes = parseDiscordChannelOptions(JSON.stringify({
       payload: {
         channels: [
@@ -62,20 +66,40 @@ describe("Make It So OpenClaw registration", () => {
     expect(routes[0].alias).toBe("notifications");
   });
 
-  it("discovers Discord routes through the OpenClaw command runner", async () => {
+  it("discovers Discord routes from OpenClaw guild configuration without route aliases", async () => {
     const calls: string[][] = [];
     const result = await discoverDiscordRouteOptions(async (argv) => {
       calls.push(argv);
+      if (argv.includes("config")) {
+        return { code: 0, stdout: JSON.stringify({ "333333333333333333": { requireMention: false } }) };
+      }
+      return { code: 0, stdout: JSON.stringify({ payload: { channels: [
+        { id: "123", type: 0, name: "project-room", guild_id: "333333333333333333" },
+        { id: "456", type: 0, name: "notifications", guild_id: "333333333333333333" },
+      ] } }) };
+    }, "openclaw", {});
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toEqual(["openclaw", "config", "get", "channels.discord.guilds", "--json"]);
+    expect(calls[1]).toContain("333333333333333333");
+    expect(result.discord_routes.map((route) => route.label)).toEqual(["#notifications", "#project-room"]);
+    expect(result.default_discord_route).toBe("channel:456");
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("falls back to a configured route only when OpenClaw exposes no guild configuration", async () => {
+    const calls: string[][] = [];
+    const result = await discoverDiscordRouteOptions(async (argv) => {
+      calls.push(argv);
+      if (argv.includes("config")) return { code: 1, stderr: "missing" };
       if (argv.includes("info")) {
         return { code: 0, stdout: JSON.stringify({ payload: { channel: { guild_id: "guild-1" } } }) };
       }
       return { code: 0, stdout: JSON.stringify({ payload: { channels: [{ id: "123", type: 0, name: "project-room", guild_id: "guild-1" }] } }) };
-    }, "openclaw", { discordRouteAliases: { notifications: "channel:123" } });
+    }, "openclaw", { discordRouteAliases: { project: "channel:123" } });
 
-    expect(calls).toHaveLength(2);
-    expect(calls[0]).toContain("channel:123");
-    expect(calls[1]).toContain("guild-1");
-    expect(result.discord_routes).toEqual([expect.objectContaining({ route: "channel:123", label: "#project-room" })]);
+    expect(calls).toHaveLength(3);
+    expect(calls[1]).toContain("channel:123");
     expect(result.default_discord_route).toBe("channel:123");
   });
 

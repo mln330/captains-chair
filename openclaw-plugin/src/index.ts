@@ -507,6 +507,21 @@ export function parseDiscordGuildId(stdout: unknown): string {
   return guildId.trim();
 }
 
+export function parseConfiguredDiscordGuildIds(stdout: unknown): string[] {
+  const parsed = parseOpenClawCommandJson(stdout);
+  return Object.keys(parsed).filter((guildId) => /^\d+$/.test(guildId));
+}
+
+function sortDiscordRouteOptions(routes: DiscordRouteOption[]): DiscordRouteOption[] {
+  return routes.sort((left, right) => {
+    const leftIsNotifications = left.alias?.toLowerCase() === "notifications" || left.name.toLowerCase() === "notifications";
+    const rightIsNotifications = right.alias?.toLowerCase() === "notifications" || right.name.toLowerCase() === "notifications";
+    if (leftIsNotifications && !rightIsNotifications) return -1;
+    if (rightIsNotifications && !leftIsNotifications) return 1;
+    return left.name.localeCompare(right.name);
+  });
+}
+
 export function parseDiscordChannelOptions(
   stdout: unknown,
   config: Record<string, unknown> = {},
@@ -516,7 +531,7 @@ export function parseDiscordChannelOptions(
   const channels = payload && typeof payload === "object" ? (payload as Record<string, unknown>).channels : undefined;
   if (!Array.isArray(channels)) throw new Error("Discord channel list did not include channels");
   const aliases = new Map(configuredDiscordRouteOptions(config).map((option) => [option.route, option.alias]));
-  return channels.flatMap((channel) => {
+  return sortDiscordRouteOptions(channels.flatMap((channel) => {
     if (!channel || typeof channel !== "object") return [];
     const item = channel as Record<string, unknown>;
     if (item.type !== 0 || typeof item.id !== "string" || typeof item.name !== "string") return [];
@@ -530,11 +545,7 @@ export function parseDiscordChannelOptions(
       label: `#${item.name}`,
       ...(alias ? { alias } : {}),
     }];
-  }).sort((left, right) => {
-    if (left.alias === "notifications") return -1;
-    if (right.alias === "notifications") return 1;
-    return left.name.localeCompare(right.name);
-  });
+  }));
 }
 
 export async function discoverDiscordRouteOptions(
@@ -544,29 +555,51 @@ export async function discoverDiscordRouteOptions(
 ): Promise<{ discord_routes: DiscordRouteOption[]; default_discord_route?: string; warnings: string[] }> {
   const configured = configuredDiscordRouteOptions(config);
   const preferred = configured.find((option) => option.alias?.toLowerCase() === "notifications") ?? configured[0];
-  if (!runCommand || !preferred) {
+  if (!runCommand) {
     return {
       discord_routes: configured,
       default_discord_route: preferred?.route,
-      warnings: [!runCommand ? "OpenClaw channel discovery is unavailable." : "Configure a Discord route alias to discover its guild channels."],
+      warnings: ["OpenClaw channel discovery is unavailable."],
     };
   }
   try {
-    const info = await runOpenClawCommand(runCommand, executable, [
-      "message", "channel", "info", "--channel", "discord", "--target", preferred.route, "--json",
+    const guildConfig = await runOpenClawCommand(runCommand, executable, [
+      "config", "get", "channels.discord.guilds", "--json",
     ], 30_000);
-    if (typeof info.code === "number" && info.code !== 0) throw new Error(commandOutputText(info.stderr) || `exit ${info.code}`);
-    const guildId = parseDiscordGuildId(info.stdout);
-    const listed = await runOpenClawCommand(runCommand, executable, [
-      "message", "channel", "list", "--channel", "discord", "--guild-id", guildId, "--json",
-    ], 30_000);
-    if (typeof listed.code === "number" && listed.code !== 0) throw new Error(commandOutputText(listed.stderr) || `exit ${listed.code}`);
-    const routes = parseDiscordChannelOptions(listed.stdout, config);
-    return { discord_routes: routes, default_discord_route: preferred.route, warnings: [] };
+    let guildIds = typeof guildConfig.code === "number" && guildConfig.code !== 0
+      ? []
+      : parseConfiguredDiscordGuildIds(guildConfig.stdout);
+
+    // Older OpenClaw configurations may not declare guilds. A configured route
+    // can still provide a backward-compatible bootstrap without being required.
+    if (guildIds.length === 0 && preferred) {
+      const info = await runOpenClawCommand(runCommand, executable, [
+        "message", "channel", "info", "--channel", "discord", "--target", preferred.route, "--json",
+      ], 30_000);
+      if (typeof info.code === "number" && info.code !== 0) throw new Error(commandOutputText(info.stderr) || `exit ${info.code}`);
+      guildIds = [parseDiscordGuildId(info.stdout)];
+    }
+    if (guildIds.length === 0) throw new Error("OpenClaw has no configured Discord guilds");
+
+    const listedGuilds = await Promise.all(guildIds.map(async (guildId) => {
+      const listed = await runOpenClawCommand(runCommand, executable, [
+        "message", "channel", "list", "--channel", "discord", "--guild-id", guildId, "--json",
+      ], 30_000);
+      if (typeof listed.code === "number" && listed.code !== 0) throw new Error(commandOutputText(listed.stderr) || `exit ${listed.code}`);
+      return parseDiscordChannelOptions(listed.stdout, config);
+    }));
+    const routes = sortDiscordRouteOptions([...new Map(
+      listedGuilds.flat().map((route) => [route.route, route]),
+    ).values()]);
+    if (routes.length === 0) throw new Error("OpenClaw returned no Discord text channels");
+    const defaultRoute = routes.find((route) => route.name.toLowerCase() === "notifications")
+      ?? routes.find((route) => route.route === preferred?.route)
+      ?? routes[0];
+    return { discord_routes: routes, default_discord_route: defaultRoute.route, warnings: [] };
   } catch (error) {
     return {
       discord_routes: configured,
-      default_discord_route: preferred.route,
+      default_discord_route: preferred?.route,
       warnings: [`Discord channel discovery failed; showing configured routes only: ${String(error)}`],
     };
   }

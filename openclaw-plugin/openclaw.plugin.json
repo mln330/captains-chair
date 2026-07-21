@@ -59,7 +59,7 @@
           "type": "string"
         },
         "default": {},
-        "description": "Map friendly Discord route names such as notifications to explicit OpenClaw Discord targets"
+        "description": "Optional friendly aliases for routes OpenClaw discovers automatically"
       },
       "installSchedules": {
         "type": "boolean",
