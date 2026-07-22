@@ -168,6 +168,7 @@ const CONFIG_SCHEMA = {
     sidecarCommand: { type: "array", items: { type: "string" }, default: ["-m", "make_it_so.sidecar"] },
     sidecarExecutable: { type: "string", default: "" },
     openclawExecutable: { type: "string", default: "" },
+    codexExecutable: { type: "string", default: "codex" },
     numberOneAgent: { type: "string", default: DEFAULT_NUMBER_ONE_AGENT },
     numberOneModel: { type: "string", default: DEFAULT_NUMBER_ONE_MODEL },
     numberOneThinking: { type: "string", default: DEFAULT_NUMBER_ONE_THINKING },
@@ -884,9 +885,12 @@ export default definePluginEntry({
     const request = async (method: string, params: Record<string, unknown> = {}): Promise<RpcResult> => {
       const timeoutMs = method === "course.readiness_review" ? READINESS_REVIEW_TIMEOUT_MS : undefined;
       if (method === "bootstrap.status" || method === "bootstrap.apply") {
+        const requestedOpenClaw = configString(params, "openclaw_executable", "").trim();
+        const requestedCodex = configString(params, "codex_executable", "").trim();
         return sidecar.request(method, {
           ...params,
-          openclaw_executable: executable,
+          openclaw_executable: requestedOpenClaw || executable,
+          codex_executable: requestedCodex || configString(config, "codexExecutable", "codex"),
           lifecycle_command: sidecarLaunch.bundled
             ? [sidecarLaunch.executable, "--config", configPath]
             : ["make-it-so", "--config", configPath],

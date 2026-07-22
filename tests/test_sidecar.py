@@ -584,6 +584,43 @@ def test_bootstrap_model_conflict_does_not_persist_configuration(
     assert server.request("health")["setup_required"] is True
 
 
+def test_bootstrap_rejects_unavailable_direct_codex_before_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / "config.yaml"
+
+    class Installer:
+        def __init__(self, _config: OpenClawWorkboardConfig) -> None:
+            pass
+
+        def plan(self, _workspace_root: Path) -> tuple[SimpleNamespace, ...]:
+            return ()
+
+        def install(self, _workspace_root: Path) -> tuple[SimpleNamespace, ...]:
+            raise AssertionError("Codex availability must be checked before install")
+
+    monkeypatch.setattr(sidecar_module, "OpenClawRuntimeInstaller", Installer)
+    server = SidecarServer(config_path)
+
+    with pytest.raises(SidecarError, match="Direct Codex workers require"):
+        server.request(
+            "bootstrap.apply",
+            {
+                "openclaw_executable": "openclaw",
+                "codex_executable": "definitely-not-installed-codex",
+                "workers": {
+                    "coder": {
+                        "agent_id": "github-coder",
+                        "model": "codex/gpt-5.3-codex-spark",
+                        "runtime": "codex",
+                    }
+                },
+            },
+        )
+
+    assert not config_path.exists()
+
+
 def test_sidecar_does_not_mark_workboard_with_active_cards_completed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

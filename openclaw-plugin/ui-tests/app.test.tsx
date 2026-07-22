@@ -172,6 +172,9 @@ describe("shared dashboard components", () => {
         configured: false,
         setup_required: true,
         runtime_available: true,
+        openclaw_executable: "openclaw",
+        codex_executable: "codex",
+        codex_available: true,
         config_path: "/home/test/.config/make-it-so/config.yaml",
         workspace_root: "/home/test/.openclaw/make-it-so/workers",
         agents: [{ id: "main", model: "ollama/test", workspace: "/home/test/.openclaw/workspace" }],
@@ -199,7 +202,10 @@ describe("shared dashboard components", () => {
 
     await waitFor(() => expect(fetchMock.mock.calls.some(([request]) => String(request).includes("bootstrap/apply"))).toBe(true));
     const applyCall = fetchMock.mock.calls.find(([request]) => String(request).includes("bootstrap/apply"));
-    expect(String((applyCall?.[1] as RequestInit | undefined)?.body)).toContain("ollama/kimi-code:cloud");
+    const applyBody = String((applyCall?.[1] as RequestInit | undefined)?.body);
+    expect(applyBody).toContain("ollama/kimi-code:cloud");
+    expect(applyBody).toContain('"openclaw_executable":"openclaw"');
+    expect(applyBody).toContain('"codex_executable":"codex"');
     await waitFor(() => expect(screen.getByRole("heading", { name: "Current courses" })).toBeTruthy());
   });
 

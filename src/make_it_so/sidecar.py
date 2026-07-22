@@ -11,6 +11,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -137,6 +138,17 @@ def _bootstrap_model_profile(
         "allow_fallback": allow_fallback,
         "max_attempts": 1,
     }
+
+
+def _executable_available(value: str) -> bool:
+    """Check a configured command without executing it during onboarding."""
+    candidate = value.strip()
+    if not candidate:
+        return False
+    path = Path(candidate).expanduser()
+    if path.is_absolute() or path.parent != Path("."):
+        return path.is_file()
+    return shutil.which(candidate) is not None
 
 
 def _bootstrap_config(config_path: Path, payload: dict[str, Any] | None = None) -> AppConfig:
@@ -1491,8 +1503,11 @@ class SidecarServer:
             "configured": self.configured,
             "setup_required": not self.configured,
             "config_path": str(self.config_path),
+            "openclaw_executable": configured.executable,
+            "codex_executable": configured.codex_executable or "codex",
             "workspace_root": str(workspace_root),
             "runtime_available": runtime_available,
+            "codex_available": _executable_available(configured.codex_executable or "codex"),
             "warning": warning,
             "agents": inventory,
             "workers": worker_payload,
@@ -1526,6 +1541,13 @@ class SidecarServer:
             raise SidecarError(
                 f"agent {first.agent_id} already uses a different model; "
                 "choose another agent ID or update it explicitly"
+            )
+        if "codex" in configured.worker_runtimes.model_dump().values() and not _executable_available(
+            configured.codex_executable or ""
+        ):
+            raise SidecarError(
+                f"Direct Codex workers require an executable that is available: "
+                f"{configured.codex_executable or 'codex'}"
             )
         actions = installer.install(workspace_root)
         self._write_config(candidate)

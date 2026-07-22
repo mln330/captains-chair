@@ -796,6 +796,7 @@ input:focus, select:focus, textarea:focus, button:focus-visible { outline-color:
 .setup-check.good { border-left-color: var(--deck-green); }
 .setup-check.warning { border-left-color: var(--deck-amber); }
 .setup-check span { color: var(--deck-muted); font-size: 13px; }
+.setup-runtime-fields small { color: var(--deck-muted); font-size: 11px; }
 .setup-facts { border: 1px solid var(--deck-line); border-radius: 5px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .setup-facts span { color: var(--deck-muted); display: grid; font-size: 12px; gap: 5px; min-width: 0; overflow-wrap: anywhere; padding: 16px; }
 .setup-facts span + span { border-left: 1px solid var(--deck-line); }

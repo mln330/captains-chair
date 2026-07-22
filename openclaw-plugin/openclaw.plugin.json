@@ -43,6 +43,11 @@
         "default": "",
         "description": "Optional OpenClaw executable path; when omitted, Make It So discovers the host installation."
       },
+      "codexExecutable": {
+        "type": "string",
+        "default": "codex",
+        "description": "Optional Direct Codex executable path used when any crew role selects the Codex runtime."
+      },
       "numberOneAgent": {
         "type": "string",
         "default": "github-captain",
