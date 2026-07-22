@@ -85,7 +85,7 @@ def test_disabled_mode_fails_closed_without_owner_attention(tmp_path: Path) -> N
 
     assert not result.allowed
     assert not result.requires_owner
-    assert result.reason == "repository Captain is disabled"
+    assert result.reason == "repository is disabled"
 
 
 def test_disabled_mode_preserves_completion_policy_for_later_resume(tmp_path: Path) -> None:

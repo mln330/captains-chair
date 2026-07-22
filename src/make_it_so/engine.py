@@ -23,10 +23,17 @@ from make_it_so.courses import (
 from make_it_so.documents import assert_durable_document
 from make_it_so.github import GitHubProvider, RepositorySnapshot
 from make_it_so.harness import HarnessAdapter, HarnessExecutionError
+from make_it_so.milestones import (
+    MilestoneError,
+    add_milestone_checkpoint,
+    apply_milestone_changes,
+    milestone_approval_required,
+)
 from make_it_so.models import (
     ActionKind,
     ActionScope,
     AppConfig,
+    ApplicationSurface,
     CommentTriage,
     CompletionPolicy,
     Course,
@@ -35,6 +42,9 @@ from make_it_so.models import (
     FinalReview,
     FinalVerdict,
     IndependentReview,
+    MilestoneChangeProposal,
+    MilestoneChangeStatus,
+    MilestoneReviewRecord,
     ModelPolicy,
     OperationMode,
     PlanDecision,
@@ -178,6 +188,181 @@ class ControlPlaneEngine:
         value = getattr(getattr(self.harness, "config", None), "kind", None)
         return str(value).strip() if value else "unknown"
 
+    def _number_one_session(self, repo: RepoConfig, course: Course) -> dict[str, Any]:
+        """Get or create the durable leadership session for one course."""
+        existing = self.state.number_one_session(repo.full_name, course.key)
+        if existing is not None:
+            return existing
+        session_id = f"number-one-{hashlib.sha256(f'{repo.full_name}:{course.key}'.encode()).hexdigest()[:32]}"
+        models = self._models_for(repo, "number_one", course=course)
+        self.state.save_number_one_session(
+            repo.full_name,
+            course.key,
+            session_id,
+            self._runtime_name(),
+            models.primary.model,
+            course.plan_revision,
+        )
+        return self.state.number_one_session(repo.full_name, course.key) or {
+            "repo": repo.full_name,
+            "course_key": course.key,
+            "session_id": session_id,
+            "runtime": self._runtime_name(),
+            "model": models.primary.model,
+            "plan_revision": course.plan_revision,
+        }
+
+    def _number_one_context(self, repo: RepoConfig, course: Course) -> dict[str, Any]:
+        session = self._number_one_session(repo, course)
+        return {
+            "role": "Number One",
+            "session_id": session["session_id"],
+            "course_key": course.key,
+            "plan_revision": course.plan_revision,
+            "recent_reviews": self.state.milestone_reviews(repo.full_name, course.key, limit=6),
+            "pending_milestone_changes": [
+                item
+                for item in self.state.milestone_changes(repo.full_name, course.key)
+                if item.get("status") in {"proposed", "approved"}
+            ],
+        }
+
+    def _touch_number_one_session(
+        self,
+        repo: RepoConfig,
+        course: Course,
+        *,
+        model: str,
+        summary: str | None = None,
+    ) -> None:
+        session = self._number_one_session(repo, course)
+        self.state.save_number_one_session(
+            repo.full_name,
+            course.key,
+            str(session["session_id"]),
+            self._runtime_name(),
+            model,
+            course.plan_revision,
+            summary=summary,
+            reviewed_at=datetime.now(UTC).isoformat(),
+        )
+
+    def _record_number_one_review(
+        self,
+        repo: RepoConfig,
+        course: Course,
+        decision: Any,
+        model: str,
+    ) -> None:
+        session = self._number_one_session(repo, course)
+        status = "blocked" if getattr(decision, "requires_owner_approval", False) else "on_track"
+        if getattr(decision, "action", None) in {ActionKind.REPORT_ONLY, ActionKind.NO_ACTION}:
+            status = "complete" if not eligible_work_packages(course) else "at_risk"
+        review = MilestoneReviewRecord(
+            review_id=str(uuid.uuid4()),
+            repository=repo.full_name,
+            course_key=course.key,
+            plan_revision=course.plan_revision,
+            status=status,
+            summary=str(getattr(decision, "summary", "Number One reviewed the course.")),
+            next_action=str(getattr(decision, "reason", "Continue with the next eligible milestone.")),
+            number_one_session_id=str(session["session_id"]),
+            model=model,
+            provider=self._runtime_name(),
+            reviewed_at=datetime.now(UTC),
+            proposed_change_ids=(),
+        )
+        self.state.record_milestone_review(review.model_dump(mode="json"))
+
+    def _handle_number_one_milestone_changes(
+        self,
+        repo: RepoConfig,
+        run_id: str,
+        course: Course | None,
+        decision: PlanDecision,
+        fingerprint: str,
+    ) -> CycleResult | None:
+        """Persist Number One's course corrections and apply only autonomous routine changes."""
+        if course is None or not decision.milestone_changes:
+            return None
+        now = datetime.now(UTC)
+        impact = "major" if any(item.impact == "major" for item in decision.milestone_changes) else "routine"
+        owner_required = (
+            impact == "major"
+            or repo.operation_mode != OperationMode.AUTONOMOUS
+            or milestone_approval_required(repo)
+        )
+        proposal = MilestoneChangeProposal(
+            proposal_id=_fingerprint(
+                {"repo": repo.full_name, "course": course.key, "revision": course.plan_revision, "changes": decision.milestone_changes}
+            )[:32],
+            repository=repo.full_name,
+            course_key=course.key,
+            base_revision=course.plan_revision,
+            summary=decision.summary,
+            reason=decision.reason,
+            requested_by="number_one",
+            changes=decision.milestone_changes,
+            requires_owner_approval=owner_required,
+            impact=impact,  # type: ignore[arg-type]
+            status=MilestoneChangeStatus.PROPOSED,
+            created_at=now,
+            updated_at=now,
+        )
+        self.state.save_milestone_change(proposal.model_dump(mode="json"))
+        if owner_required:
+            self.state.transition(repo.full_name, RunState.BLOCKED)
+            event = self._emit(
+                repo,
+                run_id,
+                RunState.BLOCKED,
+                "MILESTONE_CHANGE_APPROVAL_REQUIRED",
+                proposal.summary,
+                proposal.reason,
+                fingerprint,
+                {
+                    "next_action": "Review the proposed milestone change in Make It So and approve or reject it.",
+                    "course_key": course.key,
+                    "plan_revision": course.plan_revision,
+                    "proposal_id": proposal.proposal_id,
+                    "changes": [item.model_dump(mode="json") for item in proposal.changes],
+                    "number_one_session_id": self._number_one_session(repo, course)["session_id"],
+                },
+            )
+            return CycleResult(event, 2)
+        try:
+            updated = apply_milestone_changes(course, proposal.changes)
+        except MilestoneError as exc:
+            failed = proposal.model_copy(
+                update={"status": MilestoneChangeStatus.REJECTED, "updated_at": datetime.now(UTC)}
+            )
+            self.state.save_milestone_change(failed.model_dump(mode="json"))
+            return CycleResult(
+                self._emit(
+                    repo,
+                    run_id,
+                    RunState.BLOCKED,
+                    "MILESTONE_CHANGE_REJECTED",
+                    proposal.summary,
+                    str(exc),
+                    fingerprint,
+                    {"next_action": "Number One must propose a graph-safe milestone change.", "proposal_id": proposal.proposal_id},
+                ),
+                2,
+            )
+        CourseStore(repo.local_path).save(updated)
+        applied = proposal.model_copy(
+            update={
+                "status": MilestoneChangeStatus.APPLIED,
+                "approved_by": "number_one",
+                "approved_at": now,
+                "applied_at": datetime.now(UTC),
+                "updated_at": datetime.now(UTC),
+            }
+        )
+        self.state.save_milestone_change(applied.model_dump(mode="json"))
+        return None
+
     def _models_for(
         self,
         repo: RepoConfig,
@@ -217,9 +402,15 @@ class ControlPlaneEngine:
             layers.append(course.model_profiles)
         if package is not None:
             layers.append(package.model_profiles)
+        role_keys = {
+            "number_one": ("number_one", "strategist", "planner"),
+            "captain": ("number_one", "strategist", "planner"),
+        }.get(role, (role,))
         for layer in layers:
-            if role in layer:
-                selected = layer[role]
+            for role_key in role_keys:
+                if role_key in layer:
+                    selected = layer[role_key]
+                    break
         if stage:
             stage_keys = (f"stage:{stage}", stage)
             for layer in layers:
@@ -237,7 +428,8 @@ class ControlPlaneEngine:
         """Run and persist a fresh, read-only review bound to course inputs."""
         store = CourseStore(repo.local_path)
         course = store.load(course_key)
-        models = self._models_for(repo, "readiness_reviewer", course=course)
+        number_one = self._number_one_session(repo, course)
+        models = self._models_for(repo, "number_one", course=course)
         source_evidence: dict[str, object] = {
             "github": self.github.readiness_evidence(repo),
             "runtime_policy": {
@@ -274,8 +466,13 @@ class ControlPlaneEngine:
                 "per_stage_model_token_telemetry": True,
                 "evidence_state_dir_configured": bool(self.config.state_dir),
             },
+            "number_one_context": self._number_one_context(repo, course),
         }
-        prompt = build_readiness_prompt(course, source_evidence)
+        prompt = (
+            "Number One is the first in command for this course. Maintain the durable course context, "
+            "ask for missing information, and do not authorize implementation until readiness is complete.\n\n"
+            + build_readiness_prompt(course, source_evidence)
+        )
         result = self.run_model(
             repo,
             run_id,
@@ -287,6 +484,7 @@ class ControlPlaneEngine:
             writable=False,
             course_key=course.key,
             stage="readiness_review",
+            continuation_session_id=str(number_one["session_id"]),
         )
         decision = ReadinessReviewDecision.model_validate(result.output)
         updated = apply_readiness_review(
@@ -304,6 +502,12 @@ class ControlPlaneEngine:
         )
         updated = updated.model_copy(update={"status": status})
         store.save(updated)
+        self._touch_number_one_session(
+            repo,
+            updated,
+            model=result.resolved_model,
+            summary=updated.readiness_review.summary if updated.readiness_review else None,
+        )
         return updated
 
     def _set_course_package_status(
@@ -328,7 +532,15 @@ class ControlPlaneEngine:
                 f"course {course.key!r} has no work package {decision.work_package_key!r}"
             )
         if package.status != status:
-            store.save(set_work_package_status(course, package.key, status))
+            updated = set_work_package_status(course, package.key, status)
+            if status == WorkPackageStatus.COMPLETE and milestone_approval_required(repo):
+                updated = add_milestone_checkpoint(
+                    updated,
+                    package.key,
+                    reason="Number One completed the milestone review; owner approval is required before dependent work advances.",
+                    owner_decision_required=True,
+                )
+            store.save(updated)
 
     def _record_model_call(
         self,
@@ -341,6 +553,7 @@ class ControlPlaneEngine:
         course_key: str | None = None,
         work_package_key: str | None = None,
         stage: str | None = None,
+        continuation_session_id: str | None = None,
     ) -> None:
         """Persist model-cost telemetry without retaining prompt contents."""
         self.state.record_model_call(
@@ -351,6 +564,7 @@ class ControlPlaneEngine:
             [item.model_dump(mode="json") for item in result.attempts],
             prompt_fingerprint=_fingerprint(prompt),
             session_id=result.session_id,
+            continuation_session_id=continuation_session_id or result.continuation_session_id,
             runtime=self._runtime_name(),
             course_key=course_key,
             work_package_key=work_package_key,
@@ -371,6 +585,7 @@ class ControlPlaneEngine:
         course_key: str | None = None,
         work_package_key: str | None = None,
         stage: str | None = None,
+        continuation_session_id: str | None = None,
     ) -> Any:
         if repo.operation_mode == OperationMode.DISABLED:
             raise ModelCallSuppressedError(
@@ -378,7 +593,7 @@ class ControlPlaneEngine:
                 role,
                 {
                     "allowed": False,
-                    "reason": "repository Captain is disabled; model invocation was skipped",
+                    "reason": "repository is disabled; model invocation was skipped",
                     "daily_token_limit": self.config.usage.daily_token_limit,
                 },
             )
@@ -430,6 +645,7 @@ class ControlPlaneEngine:
                 output_model=output_model,
                 cwd=cwd,
                 writable=writable,
+                continuation_session_id=continuation_session_id,
             )
         except HarnessExecutionError as exc:
             if exc.attempts:
@@ -441,6 +657,7 @@ class ControlPlaneEngine:
                     [item.model_dump(mode="json") for item in exc.attempts],
                     prompt=prompt,
                     session_id=exc.session_id,
+                    continuation_session_id=continuation_session_id,
                     runtime=self._runtime_name(),
                     course_key=course_key,
                     work_package_key=work_package_key,
@@ -456,6 +673,7 @@ class ControlPlaneEngine:
             course_key=course_key,
             work_package_key=work_package_key,
             stage=stage,
+            continuation_session_id=result.continuation_session_id,
         )
         return result
 
@@ -796,11 +1014,11 @@ class ControlPlaneEngine:
                     run_id,
                     RunState.DEGRADED,
                     "PLANNING_CONTEXT_UNAVAILABLE",
-                    "The Captain could not obtain a trustworthy default-branch planning document.",
+                    "The Number One could not obtain a trustworthy default-branch planning document.",
                     str(exc)[:2000],
                     fingerprint,
                     {
-                        "next_action": "Restore the repository remote/default branch, then rerun the Captain cycle; no model call was made.",
+                        "next_action": "Restore the repository remote/default branch, then rerun the Number One cycle; no model call was made.",
                         "snapshot_fingerprint": snapshot_fingerprint,
                         "repo_policy_fingerprint": repo_policy_fingerprint,
                     },
@@ -893,7 +1111,7 @@ class ControlPlaneEngine:
                     RunState.DEGRADED,
                     "STALLED",
                     recent[0].summary,
-                    "The previous Captain attempt failed and the evidence is unchanged; planning and retry are suppressed until evidence changes or force-replan is requested.",
+                    "The previous Number One attempt failed and the evidence is unchanged; planning and retry are suppressed until evidence changes or force-replan is requested.",
                     plan_input_fingerprint,
                     {
                         **recent[0].evidence,
@@ -955,7 +1173,7 @@ class ControlPlaneEngine:
                     run_id,
                     RunState.DEGRADED,
                     "PLANNING_FAILED",
-                    "The Captain planner failed before selecting a work item.",
+                    "The Number One planner failed before selecting a work item.",
                     str(exc)[:2000],
                     plan_input_fingerprint,
                     {
@@ -966,6 +1184,17 @@ class ControlPlaneEngine:
                     },
                 )
                 return CycleResult(event, 3)
+            milestone_change_result = self._handle_number_one_milestone_changes(
+                repo,
+                run_id,
+                course,
+                decision,
+                plan_input_fingerprint,
+            )
+            if milestone_change_result is not None:
+                return milestone_change_result
+            if course is not None and decision.milestone_changes:
+                course = CourseStore(repo.local_path).load(course.key)
             action_id = _fingerprint(
                 {
                     "snapshot": snapshot_fingerprint,
@@ -1219,7 +1448,7 @@ class ControlPlaneEngine:
                     cycle_fingerprint,
                     {
                         "next_action": (
-                            "The Captain will retry this deterministic issue action automatically on the next cycle."
+                            "The Number One will retry this deterministic issue action automatically on the next cycle."
                             if decision.action in _DIRECT_RETRYABLE_ACTIONS
                             else "Inspect the failure and retry only after the underlying evidence changes."
                         ),
@@ -1263,6 +1492,22 @@ class ControlPlaneEngine:
                 raise ValueError("repair_pr target PR does not expose a head branch")
             worktree = self.worktrees.checkout_existing(
                 repo, f"pr-{decision.target_pr}-{action_id[:8]}", remote_branch
+            )
+            workspace = WorkspaceRef(
+                kind="worktree",
+                path=worktree.path,
+                branch=worktree.branch,
+                push_branch=worktree.push_branch,
+            )
+        elif decision.action == ActionKind.REVIEW_PR:
+            if decision.target_pr is None:
+                raise ValueError("review_pr requires target_pr")
+            pr = self.github.pull_request(repo, decision.target_pr)
+            remote_branch = str(pr.get("headRefName") or "")
+            if not remote_branch:
+                raise ValueError("review_pr target PR does not expose a head branch")
+            worktree = self.worktrees.checkout_existing(
+                repo, f"pr-{decision.target_pr}-{action_id[:8]}", remote_branch, lane="review"
             )
             workspace = WorkspaceRef(
                 kind="worktree",
@@ -1565,7 +1810,7 @@ class ControlPlaneEngine:
                 str(exc)[:2000],
                 event.fingerprint,
                 {
-                    "next_action": "The Captain will retry only after the failure evidence changes.",
+                    "next_action": "The Number One will retry only after the failure evidence changes.",
                     "action_id": action_id,
                 },
             )
@@ -1599,6 +1844,7 @@ class ControlPlaneEngine:
                     baseline_evidence = {**baseline, "artifact_read_error": True}
         evidence_text = json.dumps(
             {
+                "leadership_context": self._number_one_context(repo, course) if course else None,
                 "repo": repo.model_dump(mode="json"),
                 "github": snapshot.as_dict(),
                 "baseline": baseline_evidence,
@@ -1617,15 +1863,24 @@ class ControlPlaneEngine:
             run_id,
             "planner",
             prompt=prompt,
-            models=self._models_for(repo, "planner", course=course, stage="planning"),
+            models=self._models_for(repo, "number_one", course=course, stage="planning"),
             output_model=PlanDecision,
             cwd=repo.local_path,
             writable=False,
             course_key=course.key if course else None,
             stage="planning",
+            continuation_session_id=(
+                str(self._number_one_session(repo, course)["session_id"]) if course else None
+            ),
         )
-        return PlanDecision.model_validate(result.output), {
+        decision = PlanDecision.model_validate(result.output)
+        if course is not None:
+            self._touch_number_one_session(repo, course, model=result.resolved_model, summary=decision.summary)
+            self._record_number_one_review(repo, course, decision, result.resolved_model)
+        return decision, {
             "model": result.resolved_model,
+            "leadership_role": "number_one",
+            "number_one_session_id": result.continuation_session_id,
             "model_attempts": [item.model_dump(mode="json") for item in result.attempts],
             "planning_document_source": planning_document.source,
             "planning_document_fingerprint": planning_document.fingerprint,
@@ -1908,7 +2163,7 @@ class ControlPlaneEngine:
                 RunState.PR_OPEN,
                 "PR_CHECKS_WAITING",
                 f"PR #{number} is waiting on required checks.",
-                "The Captain will not spend reviewer tokens until required checks are green.",
+                "The Number One will not spend reviewer tokens until required checks are green.",
                 gate_fingerprint,
                 {
                     "next_action": "Wait for GitHub checks to finish or repair failed checks if they stay red.",
@@ -1936,11 +2191,11 @@ class ControlPlaneEngine:
             run_id,
             RunState.DEGRADED,
             "CONTROL_PLANE_DISABLED",
-            "Repository Captain is disabled",
-            f"The configured repository Captain mode is disabled; {operation} performed no model, GitHub, or Workboard work.",
+            "Repository Number One is disabled",
+            f"The configured repository mode is disabled; {operation} performed no model, GitHub, or Workboard work.",
             "captain-disabled",
             {
-                "next_action": "Set operation_mode to advisory, supervised, or autonomous before resuming Captain work.",
+                "next_action": "Set operation_mode to advisory, supervised, or autonomous before resuming Number One work.",
                 "operation_mode": repo.operation_mode.value,
             },
         )
@@ -1966,7 +2221,7 @@ class ControlPlaneEngine:
             )
         evidence = {
             "next_action": (
-                "Resolve the owner blocker, then rerun the active Captain cycle."
+                "Resolve the owner blocker, then rerun the active Number One cycle."
                 if owner_required
                 else "Retry the worker after the technical cause changes; unrelated work can continue."
             ),
@@ -2178,7 +2433,7 @@ class ControlPlaneEngine:
             fingerprint,
             {
                 "next_action": (
-                    "Approve or change repo policy before the Captain continues this active PR."
+                    "Approve or change repo policy before the Number One continues this active PR."
                     if requires_owner
                     else "Fix the policy block, then rerun the cycle."
                 ),
@@ -2466,8 +2721,6 @@ class ControlPlaneEngine:
     def _requires_ux_review(
         self, repo: RepoConfig, pr: dict[str, Any], decision: PlanDecision
     ) -> bool:
-        if not repo.ux_enabled:
-            return False
         files_value = pr.get("files")
         file_rows = cast(list[Any], files_value) if isinstance(files_value, list) else []
         files = [
@@ -2477,6 +2730,8 @@ class ControlPlaneEngine:
         ]
         decision_text = json.dumps(decision.model_dump(mode="json"), default=str).lower()
         return bool(
+            ApplicationSurface.WEB_UI in repo.surfaces
+            or
             any(
                 any(
                     path.startswith(pattern.rstrip("*")) or fnmatch(path, pattern)
@@ -2792,7 +3047,7 @@ class ControlPlaneEngine:
                     final.owner_blocker,
                     fingerprint,
                     {
-                        "next_action": "Resolve the owner blocker, then rerun the active Captain cycle.",
+                        "next_action": "Resolve the owner blocker, then rerun the active Number One cycle.",
                         "links": [pr.get("url")],
                         "pr": number,
                         "head_sha": head_sha,
@@ -2807,7 +3062,7 @@ class ControlPlaneEngine:
             self.github.comment_pull_request(
                 repo,
                 number,
-                _final_review_comment("Final Captain review requested changes", head_sha, final),
+                _final_review_comment("Final Number One review requested changes", head_sha, final),
             )
             self.state.update_active_work(repo.full_name, status="repair_requested", head_sha=head_sha)
             self.state.transition(repo.full_name, RunState.REPAIRING)
@@ -2818,7 +3073,7 @@ class ControlPlaneEngine:
                     RunState.REPAIRING,
                     "FINAL_REVIEW_BLOCKED",
                     final.summary,
-                    "The final Captain gate requested changes.",
+                    "The final Number One gate requested changes.",
                     fingerprint,
                     {
                         "next_action": "Repair the stated final-gate blockers.",
@@ -2877,7 +3132,7 @@ class ControlPlaneEngine:
             next_action = (
                 "Apply the configured owner completion decision."
                 if owner_completion
-                else "The Captain work item is complete; merge remains an owner action."
+                else "The Number One work item is complete; merge remains an owner action."
             )
             self.github.comment_pull_request(
                 repo,

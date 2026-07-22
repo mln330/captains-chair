@@ -4,6 +4,8 @@ import io
 import json
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -230,6 +232,48 @@ def test_sidecar_main_handles_blank_invalid_and_valid_stdio_requests(
     assert responses[0]["error"]["code"] == "SIDECAR_ERROR"
     assert responses[1]["id"] == 7
     assert responses[1]["result"]["status"] == "healthy"
+
+
+def test_sidecar_main_does_not_serialize_long_stdio_requests(
+    tmp_path: Path,
+    monkeypatch: Any,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    started = threading.Event()
+    release = threading.Event()
+
+    class Server:
+        def __init__(self, _path: Path) -> None:
+            pass
+
+        def request(self, method: str, _params: dict[str, Any]) -> dict[str, Any]:
+            if method == "slow":
+                started.set()
+                assert release.wait(2), "fast RPC was not serviced while slow RPC was running"
+            else:
+                assert started.wait(2), "slow RPC did not start"
+                release.set()
+            return {"method": method}
+
+    monkeypatch.setattr(sidecar, "SidecarServer", Server)
+    monkeypatch.setattr(sys, "argv", ["make-it-so-sidecar", "--config", str(tmp_path / "config.yaml")])
+    monkeypatch.setattr(
+        sys,
+        "stdin",
+        io.StringIO(
+            json.dumps({"id": "slow", "method": "slow", "params": {}})
+            + "\n"
+            + json.dumps({"id": "fast", "method": "fast", "params": {}})
+            + "\n"
+        ),
+    )
+
+    started_at = time.monotonic()
+    assert sidecar.main() == 0
+    assert time.monotonic() - started_at < 2
+    responses = {json.loads(line)["id"]: json.loads(line) for line in capsys.readouterr().out.splitlines()}
+    assert responses["slow"]["result"] == {"method": "slow"}
+    assert responses["fast"]["result"] == {"method": "fast"}
 
 
 @pytest.mark.parametrize(("status", "expected"), (("completed", 0), ("degraded", 2)))

@@ -1,0 +1,70 @@
+name: Plugin package
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  sidecar:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            key: linux-x64
+          - os: windows-latest
+            key: win32-x64
+          - os: macos-13
+            key: darwin-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install -e ".[packaging]"
+      - run: python scripts/build_sidecar.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.key }}
+          path: openclaw-plugin/bin/${{ matrix.key }}
+          if-no-files-found: error
+
+  package:
+    needs: sidecar
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: "*-x64"
+          path: openclaw-plugin/bin
+          merge-multiple: false
+      - run: chmod +x openclaw-plugin/bin/linux-x64/make-it-so-sidecar openclaw-plugin/bin/darwin-x64/make-it-so-sidecar
+      - run: npm ci
+        working-directory: openclaw-plugin
+      - run: npm ci
+        working-directory: openclaw-plugin/ui
+      - run: npm run check
+        working-directory: openclaw-plugin
+      - run: npm test
+        working-directory: openclaw-plugin
+      - run: npm run build
+        working-directory: openclaw-plugin
+      - run: npm run test:package
+        working-directory: openclaw-plugin
+        env:
+          MAKE_IT_SO_RELEASE_PACKAGE: "1"
+      - run: npm pack
+        working-directory: openclaw-plugin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openclaw-make-it-so-plugin
+          path: openclaw-plugin/*.tgz
+          if-no-files-found: error

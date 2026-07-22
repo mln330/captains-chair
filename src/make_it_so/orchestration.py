@@ -12,6 +12,7 @@ from typing import Any, Literal, Protocol, cast, runtime_checkable
 from pydantic import Field
 
 from make_it_so.config import load_project_manifest
+from make_it_so.courses import CourseError, CourseStore
 from make_it_so.models import (
     ActionKind,
     ApplicationSurface,
@@ -20,6 +21,7 @@ from make_it_so.models import (
     QAProfile,
     RepoConfig,
     StrictModel,
+    TestEvidencePolicy,
     WorkerAssignments,
     WorkerModelAssignments,
 )
@@ -70,6 +72,12 @@ USER_BLOCKER_PREFIXES: dict[str, BlockerKind] = {
 
 def classify_blocker(reason: str) -> BlockerKind:
     normalized = reason.strip().upper()
+    # A sandboxed coder must not own GitHub credentials. Older workers could
+    # nevertheless report the controller-owned publish step as EXTERNAL_ACCESS;
+    # recognize that precise wording as repairable so a host-publisher retry is
+    # created after deployment instead of waiting for an owner response.
+    if normalized.startswith("EXTERNAL_ACCESS:") and "CANNOT ACCESS `GITHUB.COM` FROM THIS RUNNER" in normalized:
+        return BlockerKind.TECHNICAL
     for prefix, kind in USER_BLOCKER_PREFIXES.items():
         if normalized.startswith(prefix):
             return kind
@@ -91,6 +99,7 @@ class QueueCard(StrictModel):
     priority: str = "normal"
     labels: tuple[str, ...] = ()
     agent_id: str | None = None
+    linked_session_id: str | None = None
     source_url: str | None = None
     workspace: WorkspaceRef | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -497,7 +506,7 @@ class WorkflowOrchestrator:
 
         # Recovery cards are control-plane work, not project work. Once their
         # target has recovered, leaving them READY would dispatch another
-        # Captain session and recreate the same context at additional cost.
+        # Number One session and recreate the same context at additional cost.
         for card in cards:
             if (
                 card.status in {QueueStatus.READY, QueueStatus.TODO}
@@ -519,6 +528,27 @@ class WorkflowOrchestrator:
                     card.id,
                     status=QueueStatus.BLOCKED,
                     reason="CANCELLED: repair target already recovered or was superseded",
+                )
+
+        # A merge closes the implementation workflow. Late retries can be
+        # materialized by a stale worker handoff after the merge card has
+        # completed; preserve them as evidence but never dispatch them after
+        # post-merge verification becomes the only valid next stage.
+        for card in cards:
+            workflow = _card_workflow_label(card)
+            stage = _card_stage(card)
+            if (
+                workflow is not None
+                and stage is not None
+                and stage not in {WorkStage.MERGE, WorkStage.POST_MERGE}
+                and card.status in {QueueStatus.READY, QueueStatus.TODO, QueueStatus.BLOCKED}
+                and _workflow_has_merged_completion(workflow, cards)
+                and not _is_cancelled_card(card)
+            ):
+                self.adapter.reclaim_card(
+                    card.id,
+                    status=QueueStatus.BLOCKED,
+                    reason="CANCELLED: workflow already merged; stale pre-merge retry preserved as evidence",
                 )
 
         for card in cards:
@@ -858,6 +888,20 @@ class WorkflowOrchestrator:
                     else WorkStage.TEST
                 )
                 metadata = _qa_metadata(profile, context.planned_paths)
+                empty_evidence_metadata: dict[str, Any] = {}
+                evidence_metadata: dict[str, Any] = next(
+                    (
+                        {
+                            key: value
+                            for key, value in card.metadata.items()
+                            if key.startswith("testEvidence")
+                        }
+                        for card in workflow_cards
+                        if card.metadata.get("testEvidenceRequired") is not None
+                    ),
+                    empty_evidence_metadata,
+                )
+                metadata.update(evidence_metadata)
                 metadata.update(
                     {
                         "actualChangedPaths": list(context.actual_paths),
@@ -958,7 +1002,10 @@ class WorkflowOrchestrator:
         stage = _card_stage(card)
         requires_live_validation = stage == WorkStage.FINAL_REVIEW or (
             stage in {WorkStage.TEST, WorkStage.UX_REVIEW}
-            and bool(card.metadata.get("qaProfile"))
+            and (
+                bool(card.metadata.get("qaProfile"))
+                or card.metadata.get("testEvidenceRequired") is True
+            )
         )
         if not requires_live_validation:
             return True
@@ -1074,6 +1121,15 @@ class WorkflowOrchestrator:
         )
         if target is None:
             return False
+        workflow = _card_workflow_label(repair_card)
+        if workflow is not None and any(
+            item.status == QueueStatus.DONE
+            and _card_stage(item) == WorkStage.MERGE
+            and _card_workflow_label(item) == workflow
+            and _has_merge_completion_proof(item)
+            for item in cards
+        ):
+            return True
         if target.status == QueueStatus.DONE:
             return _has_valid_proof(repo, target) or self._retry_with_passed_completion(
                 repo, cards, target.id
@@ -1267,12 +1323,12 @@ class WorkflowOrchestrator:
             board_id,
             QueueCardSpec(
                 key=f"make_it_so:control-plane-recovery:{card.id}:{attempt}",
-                title=f"Captain recovery: {card.title}",
+                title=f"Number One recovery: {card.title}",
                 notes=(
                     f"Repository: {repo.full_name}\n"
                     f"Failed card: {card.id}\n"
                     f"Failure evidence: {_block_reason(card)}\n\n"
-                    "This is a fresh Captain recovery context. Re-read the current repository, PR, issue, and Workboard state. "
+                    "This is a fresh Number One recovery context. Re-read the current repository, PR, issue, and Workboard state. "
                     "Determine the smallest autonomous replanning action that advances the original goal. Preserve the failed "
                     "card as evidence, create or retarget fresh work only when justified, and complete this card with a concise "
                     "decision, created-card links, and current-head proof. Use USER_SECRET:, GOAL_DIVERGENCE:, EXTERNAL_ACCESS:, "
@@ -1380,7 +1436,7 @@ class WorkflowOrchestrator:
             agent_id=self.config.workers.captain,
             status=QueueStatus.READY,
             reset_failures=True,
-            reason="Retry budget exhausted; route to Captain recovery for autonomous replanning.",
+            reason="Retry budget exhausted; route to Number One recovery for autonomous replanning.",
         )
         _append_unique(control_plane_recoveries, card.id)
 
@@ -1413,7 +1469,7 @@ def build_workflow(
         source_url=source_url,
         max_runtime_seconds=config.max_runtime_seconds,
         max_retries=config.max_retries,
-        metadata=_course_metadata(decision),
+        metadata={**_course_metadata(decision), **_test_evidence_metadata(repo, decision)},
     )
     stages = _stage_sequence(repo, decision)
     specs: list[QueueCardSpec] = []
@@ -1423,6 +1479,7 @@ def build_workflow(
         parents = tuple(root_key if parent is None else f"{action_id}:{parent}" for parent in dependencies)
         metadata: dict[str, Any] = {
             **_course_metadata(decision),
+            **_test_evidence_metadata(repo, decision),
             "workerRole": _role_for(stage, config),
             "expectedModel": _model_for(stage, config),
         }
@@ -1444,6 +1501,7 @@ def build_workflow(
                     stage,
                     workspace=stage_workspace,
                     qa_profile=qa_profile,
+                    test_evidence_policy=_test_evidence_policy(repo, decision),
                 ),
                 labels=(*common_labels, *qa_labels, f"stage:{stage.value}"),
                 # A deterministic merge adapter owns the mutation and leaves
@@ -1663,6 +1721,9 @@ def _retry_metadata(card: QueueCard) -> dict[str, Any]:
             "plannedChangedPaths",
             "actualChangedPaths",
             "discoveredHeadSha",
+            "testEvidenceRequired",
+            "testEvidencePolicy",
+            "testEvidenceScreenshotRequired",
         }
     }
 
@@ -1687,7 +1748,8 @@ def _dynamic_qa_notes(
         f"Capability surfaces: {surfaces}\n\n"
         f"Actual changed paths:\n{paths}\n\n"
         "Run this capability's checks in fresh context. Complete with one structured proof containing "
-        f"`QA_PASSED:{profile.key}:{context.head_sha}`, non-empty `model`, `provider`, and `evidence` fields."
+        f"`QA_PASSED:{profile.key}:{context.head_sha}`, non-empty `model`, `provider`, and `evidence` fields, "
+        "plus a `test_evidence` record with status, head_sha, commands, test counts, pass_rate, and artifact URLs."
         f"{ui_evidence} Block with TECHNICAL: and actionable findings when the capability does not pass."
     )
 
@@ -1700,6 +1762,7 @@ def _stage_notes(
     *,
     workspace: WorkspaceRef | None = None,
     qa_profile: QAProfile | None = None,
+    test_evidence_policy: TestEvidencePolicy | None = None,
 ) -> str:
     contracts = {
         WorkStage.CONTROL_PLANE_ACTION: "Perform only the exact GitHub issue action in this card and verify it by reading GitHub back.",
@@ -1717,14 +1780,16 @@ def _stage_notes(
         ),
         WorkStage.TEST: (
             "Independently run the configured targeted tests and inspect required GitHub checks for the current PR head. "
-            "Do not waive failures or pending checks."
+            "Do not waive failures or pending checks. Record structured test evidence with exact commands, counts, pass rate, "
+            "current head SHA, and artifact or screenshot URLs."
         ),
         WorkStage.UX_REVIEW: (
             "Use browser-based testing at mobile, tablet, and desktop sizes. Verify usability, contrast, keyboard/focus behavior, "
-            "responsive layout, error/loading/empty states, functionality, and visual cohesion. Attach screenshot proof when possible."
+            "responsive layout, error/loading/empty states, functionality, and visual cohesion. Attach screenshot proof and "
+            "record it in structured test evidence."
         ),
         WorkStage.FINAL_REVIEW: (
-            "Perform the Captain final review against the original issue, repository plan, acceptance criteria, independent review, "
+            "Perform the Number One final review against the original issue, repository plan, acceptance criteria, independent review, "
             "UX evidence, tests, CI, unresolved threads, and current PR head. Complete only when the configured completion policy is satisfied, "
             "and include the matching READY_FOR_OWNER:<head-sha>, CONTROL_PLANE_COMPLETE:<head-sha>, or AUTO_MERGE_ALLOWED:<head-sha> proof marker."
         ),
@@ -1755,8 +1820,30 @@ def _stage_notes(
             f"Capability surfaces: {surfaces}\n"
             f"Checks:\n{checks}\n"
             "Complete only against the current PR head with one structured proof containing "
-            f"`QA_PASSED:{qa_profile.key}:<head-sha>`, non-empty `model`, `provider`, and `evidence` fields."
+            f"`QA_PASSED:{qa_profile.key}:<head-sha>`, non-empty `model`, `provider`, and `evidence` fields, "
+            "plus `test_evidence` with status, head_sha, commands, test counts, pass_rate, and artifact URLs."
             f"{ui_evidence}\n"
+        )
+    evidence_note = ""
+    if (
+        test_evidence_policy is not None
+        and test_evidence_policy.required
+        and stage
+        in {
+            WorkStage.TEST,
+            WorkStage.UX_REVIEW,
+            WorkStage.FINAL_REVIEW,
+        }
+    ):
+        screenshot_note = (
+            " Include at least one screenshot artifact."
+            if test_evidence_policy.require_screenshot or test_evidence_policy.minimum_screenshots
+            else ""
+        )
+        evidence_note = (
+            "\nMilestone test-evidence contract: pass rate must be at least "
+            f"{test_evidence_policy.minimum_pass_rate:g}%, include a current-head SHA, "
+            f"and include the exact command used.{screenshot_note}"
         )
     completion_policy_note = ""
     if stage == WorkStage.FINAL_REVIEW:
@@ -1779,10 +1866,32 @@ def _stage_notes(
         f"Reason: {decision.reason}\n\n"
         + _workspace_notes(workspace)
         + completion_policy_note
-        + f"Stage contract: {contracts[stage]}{qa_note}\n"
+        + f"Stage contract: {contracts[stage]}{qa_note}{evidence_note}\n"
         f"Worker protocol: claim the card through the configured orchestrator, heartbeat during long work, "
         f"and complete it with a concise summary and proof or block it with a specific reason. {blocker_rules}"
     )
+
+
+def _test_evidence_policy(repo: RepoConfig, decision: PlanDecision) -> TestEvidencePolicy | None:
+    if not decision.course_key or not decision.work_package_key:
+        return None
+    try:
+        course = CourseStore(repo.local_path).load(decision.course_key)
+        package = next(item for item in course.work_packages if item.key == decision.work_package_key)
+    except (CourseError, OSError, StopIteration, ValueError):
+        return None
+    return package.test_evidence_policy
+
+
+def _test_evidence_metadata(repo: RepoConfig, decision: PlanDecision) -> dict[str, Any]:
+    policy = _test_evidence_policy(repo, decision)
+    if policy is None:
+        return {}
+    return {
+        "testEvidenceRequired": policy.required,
+        "testEvidencePolicy": policy.model_dump(mode="json"),
+        "testEvidenceScreenshotRequired": policy.require_screenshot or policy.minimum_screenshots > 0,
+    }
 
 
 def _card_stage(card: QueueCard) -> WorkStage | None:
@@ -1816,6 +1925,21 @@ def _block_reason(card: QueueCard) -> str:
                 attempt_row = cast(dict[str, object], item)
                 if attempt_row.get("error"):
                     return str(attempt_row["error"])
+    # OpenClaw's Workboard stores an agent's explicit block reason in the
+    # card activity feed when the worker protocol metadata is unavailable.
+    # Preserve that actionable finding for repair cards instead of degrading
+    # it to the generic "missing evidence" message.
+    for field in ("comments", "notifications"):
+        entries = card.metadata.get(field)
+        if not isinstance(entries, list):
+            continue
+        for item in reversed(cast(list[object], entries)):
+            if not isinstance(item, dict):
+                continue
+            row = cast(dict[str, object], item)
+            candidate = row.get("body") or row.get("message")
+            if candidate:
+                return str(candidate)
     return "TECHNICAL: worker blocked without structured failure evidence"
 
 
@@ -1966,6 +2090,33 @@ def _has_failure_evidence(card: QueueCard) -> bool:
         isinstance(item, dict)
         and cast(dict[str, object], item).get("status") in {"failed", "blocked", "stopped"}
         for item in cast(list[object], attempts)
+    )
+
+
+def _has_merge_completion_proof(card: QueueCard) -> bool:
+    """Recognize a deterministic merge completion without relying on live GitHub calls."""
+    proof = card.metadata.get("proof")
+    if not isinstance(proof, list):
+        return False
+    return any(
+        isinstance(item, dict)
+        and str(cast(dict[str, object], item).get("status") or "").lower() == "passed"
+        and "merged pr #" in str(
+            cast(dict[str, object], item).get("note")
+            or cast(dict[str, object], item).get("label")
+            or ""
+        ).lower()
+        for item in cast(list[object], proof)
+    )
+
+
+def _workflow_has_merged_completion(workflow: str, cards: list[QueueCard]) -> bool:
+    return any(
+        _card_workflow_label(card) == workflow
+        and _card_stage(card) == WorkStage.MERGE
+        and card.status == QueueStatus.DONE
+        and _has_merge_completion_proof(card)
+        for card in cards
     )
 
 

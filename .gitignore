@@ -48,6 +48,7 @@ coverage.xml
 coverage*.json
 openclaw-plugin/test-results/
 openclaw-plugin/playwright-report/
+openclaw-plugin/bin/
 *.cover
 *.py.cover
 .hypothesis/
@@ -209,6 +210,13 @@ tempCodeRunnerFile.py
 
 # Ruff stuff:
 .ruff_cache/
+
+# Disposable runtime and dashboard fixtures created by integration tests.
+.test-tmp*/
+.pytest-tmp*/
+.tmp-dashboard*/
+.tmp-sidecar*/
+.tmp-pr*/
 
 # PyPI configuration file
 .pypirc

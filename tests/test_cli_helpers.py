@@ -13,6 +13,7 @@ from make_it_so.courses import CourseStore
 from make_it_so.models import (
     ActionKind,
     EventRecord,
+    HarnessConfig,
     OpenClawWorkboardConfig,
     OperationMode,
     PlanDecision,
@@ -283,9 +284,10 @@ def test_openclaw_portfolio_usage_sync_reports_single_and_multi_repo_degradation
         executable: str,
         expected_models: dict[str, str],
         session_context: dict[str, dict[str, str]],
+        number_one_context: dict[str, dict[str, str]],
         session_limit: int,
     ) -> dict[str, Any]:
-        del state, executable, expected_models, session_context, session_limit
+        del state, executable, expected_models, session_context, number_one_context, session_limit
         calls.append(repo)
         return {"sessions_seen": 2, "sessions_imported": 1, "sessions_with_usage": 1, "session_limit_reached": True}
 
@@ -304,6 +306,29 @@ def test_openclaw_portfolio_usage_sync_reports_single_and_multi_repo_degradation
     assert multi["status"] == "degraded"
     assert multi["sessions_seen"] == 4
     assert calls == [repo.full_name, repo.full_name, second.full_name]
+
+
+def test_usage_sync_uses_openclaw_harness_executable_without_repo_orchestrator(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    base_repo = repo_config(tmp_path)
+    direct = base_repo.model_copy(update={"orchestrator": None})
+    config = app_config(tmp_path, direct).model_copy(
+        update={"harnesses": {"openclaw": HarnessConfig(kind="openclaw", executable="/opt/openclaw")}}
+    )
+    state = StateStore(config.state_dir / "state.db")
+    captured: list[str] = []
+
+    def sync(*_args: Any, **kwargs: Any) -> dict[str, Any]:
+        captured.append(str(kwargs["fallback_executable"]))
+        return {"status": "ok"}
+
+    monkeypatch.setattr(cli, "_sync_openclaw_sessions_for_portfolio", sync)
+    adapter = cli._usage_synchronizer(config, direct, "openclaw")  # pyright: ignore[reportPrivateUsage]
+    assert adapter is not None
+    adapter.synchronize(state, direct)
+    assert captured == ["/opt/openclaw"]
 
 
 def test_print_schedule_result_uses_install_and_render_boundaries(

@@ -37,6 +37,7 @@ _completion_summary = orchestration._completion_summary  # pyright: ignore[repor
 _failure_count = orchestration._failure_count  # pyright: ignore[reportPrivateUsage]
 _has_passed_proof = orchestration._has_passed_proof  # pyright: ignore[reportPrivateUsage]
 _has_valid_proof = orchestration._has_valid_proof  # pyright: ignore[reportPrivateUsage]
+_has_merge_completion_proof = orchestration._has_merge_completion_proof  # pyright: ignore[reportPrivateUsage]
 _passed_proof = orchestration._passed_proof  # pyright: ignore[reportPrivateUsage]
 _retry_depth = orchestration._retry_depth  # pyright: ignore[reportPrivateUsage]
 _retry_limit = orchestration._retry_limit  # pyright: ignore[reportPrivateUsage]
@@ -105,6 +106,12 @@ def test_blocker_classification_is_explicit_and_case_insensitive(
     reason: str, expected: BlockerKind
 ) -> None:
     assert classify_blocker(reason.lower()) == expected
+
+
+def test_sandbox_publish_failure_is_repairable_after_host_publisher_deployment() -> None:
+    assert classify_blocker(
+        "EXTERNAL_ACCESS: Cannot access `github.com` from this runner (DNS/network resolution failure)"
+    ) == BlockerKind.TECHNICAL
 
 
 def test_autonomous_workflow_is_role_separated_and_dependency_gated(tmp_path: Path) -> None:
@@ -340,6 +347,12 @@ def test_orchestration_card_helpers_fail_closed_and_preserve_latest_evidence(tmp
     attempts = protocol.model_copy(
         update={"metadata": {"attempts": [{"error": "provider error"}]}}
     )
+    comments = protocol.model_copy(
+        update={"metadata": {"comments": [{"body": "TECHNICAL: actionable review finding"}]}}
+    )
+    notifications = protocol.model_copy(
+        update={"metadata": {"notifications": [{"message": "TECHNICAL: notification finding"}]}}
+    )
     bare = protocol.model_copy(update={"metadata": {}})
 
     assert _card_stage(protocol) == WorkStage.REVIEW
@@ -348,6 +361,8 @@ def test_orchestration_card_helpers_fail_closed_and_preserve_latest_evidence(tmp
     assert _block_reason(protocol) == "protocol detail"
     assert _block_reason(logs) == "latest"
     assert _block_reason(attempts) == "provider error"
+    assert _block_reason(comments) == "TECHNICAL: actionable review finding"
+    assert _block_reason(notifications) == "TECHNICAL: notification finding"
     assert _block_reason(bare).startswith("TECHNICAL:")
     assert _failure_count(protocol) == 1
     assert _failure_count(protocol.model_copy(update={"metadata": {"failureCount": 0}})) == 0
@@ -365,6 +380,16 @@ def test_orchestration_card_helpers_fail_closed_and_preserve_latest_evidence(tmp
     assert _has_valid_proof(repo, passed)
     assert not _has_passed_proof(bare)
     assert not _has_valid_proof(repo, bare)
+    assert not _has_merge_completion_proof(bare)
+    assert not _has_merge_completion_proof(
+        protocol.model_copy(update={"metadata": {"proof": [{"status": "failed", "note": "Merged PR #1"}]}})
+    )
+    assert not _has_merge_completion_proof(
+        protocol.model_copy(update={"metadata": {"proof": [{"status": "passed", "note": "reviewed"}]}})
+    )
+    assert _has_merge_completion_proof(
+        protocol.model_copy(update={"metadata": {"proof": [{"status": "passed", "note": "Merged PR #1"}]}})
+    )
     assert _completion_summary(passed) == "Recovered completed review card from runtime review status."
 
 
@@ -939,7 +964,7 @@ def test_control_plane_action_without_completion_proof_is_retried_instead_of_cou
     queue = MemoryQueue()
     queue.cards["recovery"] = QueueCard(
         id="recovery-1",
-        title="Captain recovery",
+        title="Number One recovery",
         status=QueueStatus.DONE,
         labels=("make_it_so", "stage:control_plane_action", "control-plane-recovery-for:failed-1"),
         agent_id="make-it-so",
@@ -1368,6 +1393,47 @@ def test_repair_for_cancelled_target_is_not_dispatched(tmp_path: Path) -> None:
     WorkflowOrchestrator(queue, worker_config()).reconcile(repo)
 
     assert queue.reclaimed == ["repair-1"]
+
+
+def test_merged_workflow_cancels_stale_premerge_retry(tmp_path: Path) -> None:
+    repo = repo_config(
+        tmp_path,
+        mode=OperationMode.AUTONOMOUS,
+        completion=CompletionPolicy.AUTO_MERGE,
+    )
+    queue = MemoryQueue()
+    queue.cards["stale-final"] = QueueCard(
+        id="stale-final-1",
+        title="Retry final review",
+        status=QueueStatus.READY,
+        labels=("make_it_so", "workflow:flow-1", "stage:final_review"),
+        metadata={"proof": []},
+    )
+    queue.cards["merge"] = QueueCard(
+        id="merge-1",
+        title="Merge",
+        status=QueueStatus.DONE,
+        labels=("make_it_so", "workflow:flow-1", "stage:merge"),
+        metadata={
+            "proof": [
+                {
+                    "status": "passed",
+                    "note": "Merged PR #1 at reviewed head abcdef1; Model: deterministic/no-model",
+                }
+            ]
+        },
+    )
+    queue.cards["post-merge"] = QueueCard(
+        id="post-merge-1",
+        title="Post merge",
+        status=QueueStatus.TODO,
+        labels=("make_it_so", "workflow:flow-1", "stage:post_merge"),
+    )
+
+    WorkflowOrchestrator(queue, worker_config()).reconcile(repo, dispatch=False)
+
+    assert queue.reclaimed == ["stale-final-1"]
+    assert queue.cards["post-merge"].status == QueueStatus.TODO
 
 
 def test_nested_retry_proof_completes_original_without_another_retry(tmp_path: Path) -> None:

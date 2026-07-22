@@ -109,7 +109,7 @@ def _control_plane_mutation_block(
         "status": mode,
         "repo": repo.full_name,
         "operation": operation,
-        "reason": f"repository Captain is {mode}; {mutation}",
+        "reason": f"repository is {mode}; {mutation}",
         "next_action": next_action,
     }
 
@@ -141,7 +141,7 @@ def _parser() -> argparse.ArgumentParser:
     baseline.add_argument("--run-checks", action=argparse.BooleanOptionalAction, default=True)
     baseline.add_argument("--send", action="store_true")
 
-    cycle = sub.add_parser("cycle", help="run one bounded Captain cycle")
+    cycle = sub.add_parser("cycle", help="run one bounded Number One cycle")
     cycle.add_argument("--repo", required=True)
     cycle.add_argument("--harness", required=True)
     mode = cycle.add_mutually_exclusive_group()
@@ -269,7 +269,7 @@ def _parser() -> argparse.ArgumentParser:
     merge_gate.add_argument("--final-card", required=True)
     merge_gate.add_argument("--merge", action="store_true")
 
-    schedule = sub.add_parser("schedule", help="install or render a two-hour Captain schedule")
+    schedule = sub.add_parser("schedule", help="install or render a two-hour Number One schedule")
     schedule.add_argument("--repo", required=True)
     schedule.add_argument("--harness", required=True)
     schedule.add_argument("--kind", metavar="KIND", required=True, help="registered scheduler adapter kind")
@@ -328,7 +328,13 @@ def _usage_synchronizer(
     if harness_kind != "openclaw":
         return None
 
-    executable = _openclaw_executable_for_repo(config, repo)
+    harness_config = config.harnesses.get("openclaw")
+    harness_executable = (
+        str(getattr(harness_config, "executable", "openclaw"))
+        if harness_config is not None
+        else "openclaw"
+    )
+    executable = _openclaw_executable_for_repo(config, repo, harness_executable)
 
     def synchronize(state: StateStore, target_repo: RepoConfig) -> dict[str, Any]:
         del target_repo
@@ -438,6 +444,17 @@ def _expected_worker_models(config: AppConfig, repo_name: str) -> dict[str, str]
             agent_name = str(agent_id)
             expected[agent_name] = model_name
             expected[agent_name.removeprefix("github-")] = model_name
+    # Registration and scheduled course reviews use the named Number One
+    # session, which is a strategist profile rather than the worker captain.
+    # Keep its expected route in the same telemetry map so it is not reported
+    # as a Terra worker mismatch when it correctly uses the Sol strategist.
+    try:
+        number_one = config.model_policy("openclaw").for_role("number_one").primary.model
+    except (KeyError, ValueError):
+        number_one = None
+    if number_one:
+        expected["number_one"] = number_one
+        expected["strategist"] = number_one
     return expected
 
 
@@ -478,6 +495,7 @@ def _sync_openclaw_sessions_for_portfolio(
             executable=_openclaw_executable_for_repo(config, managed, fallback_executable),
             expected_models=_expected_worker_models(config, managed.full_name),
             session_context=state.openclaw_session_context(managed.full_name),
+            number_one_context=state.number_one_session_context(managed.full_name),
             session_limit=_openclaw_session_limit(config, managed.full_name),
         )
         for managed in config.repos
@@ -688,7 +706,7 @@ def _orchestration_preflight(
 
     if repo.operation_mode == OperationMode.DISABLED:
         next_action = (
-            "Captain is disabled; no worker canary or dispatch was started. Keep it paused until usage is explicitly resumed."
+            "Number One is disabled; no worker canary or dispatch was started. Keep it paused until usage is explicitly resumed."
         )
     elif failures:
         next_action = "Resolve the listed preflight failures; no worker was dispatched."
@@ -962,7 +980,7 @@ def _run_cli_lease_action(
                     "repo": repo,
                     "operation": operation,
                     "reason": str(exc),
-                    "next_action": "Another Captain process owns this repository lease; retry on the next scheduled pass.",
+                    "next_action": "Another Number One process owns this repository lease; retry on the next scheduled pass.",
                 },
                 indent=2,
             )
@@ -1291,6 +1309,7 @@ def main(argv: list[str] | None = None) -> int:
                 executable=executable or "openclaw",
                 session_filter=args.session_filter,
                 expected_models=_expected_worker_models(config, repo.full_name),
+                number_one_context=state.number_one_session_context(repo.full_name),
                 session_limit=args.session_limit
                 if args.session_limit is not None
                 else _openclaw_session_limit(config, repo.full_name),
@@ -1354,7 +1373,7 @@ def main(argv: list[str] | None = None) -> int:
                 repo,
                 operation="recover-pr",
                 mutation="PR recovery and state mutation were skipped",
-                next_action="Set operation_mode to supervised or autonomous before recovering Captain work.",
+                next_action="Set operation_mode to supervised or autonomous before recovering Number One work.",
             )
             if mode_block is not None:
                 print(
@@ -1843,7 +1862,7 @@ def main(argv: list[str] | None = None) -> int:
                     {
                         "status": "disabled",
                         "repo": repo.full_name,
-                        "reason": "repository Captain is disabled; model health check was skipped",
+                        "reason": "repository is disabled; model health check was skipped",
                         "next_action": "Set operation_mode to advisory, supervised, or autonomous before checking a model route.",
                     },
                     indent=2,
@@ -1888,7 +1907,7 @@ def main(argv: list[str] | None = None) -> int:
                         {
                             "status": "disabled",
                             "repo": repo.full_name,
-                            "reason": "repository Captain is disabled; baseline collection and analysis were skipped",
+                            "reason": "repository is disabled; baseline collection and analysis were skipped",
                             "next_action": "Set operation_mode to advisory, supervised, or autonomous before running a baseline.",
                         },
                         indent=2,
@@ -1957,7 +1976,7 @@ def main(argv: list[str] | None = None) -> int:
                     result = engine.watch(repo, shadow=not args.live, execute=args.live)
                 except LeaseBusyError:
                     print(
-                        f"{repo.full_name.split('/', 1)[-1]} | Watch skipped\nStatus: another Captain run is active"
+                        f"{repo.full_name.split('/', 1)[-1]} | Watch skipped\nStatus: another Number One run is active"
                     )
                     return 0
                 if result is None:
@@ -1989,13 +2008,13 @@ def main(argv: list[str] | None = None) -> int:
             except LeaseBusyError as exc:
                 print(
                     f"{repo.full_name.split('/', 1)[-1]} | Cycle skipped\n"
-                    f"Status: another Captain run is active ({exc})\n"
+                    f"Status: another Number One run is active ({exc})\n"
                     "Next: the next scheduled pass will retry without starting duplicate work"
                 )
                 return 0
         if args.command == "shadow-canary":
             if repo.operation_mode == OperationMode.DISABLED:
-                print(f"{repo.full_name} | Captain disabled | No model calls or Workboard work")
+                print(f"{repo.full_name} | Number One disabled | No model calls or Workboard work")
                 return 0
             if not 1 <= args.count <= 10:
                 raise ValueError("count must be between 1 and 10")

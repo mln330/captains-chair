@@ -36,6 +36,7 @@ orchestrators:
   openclaw-workers:
     kind: openclaw_workboard
     executable: /home/example/.npm-global/bin/openclaw
+    codex_executable: /home/example/.local/share/make-it-so-codex/node_modules/.bin/codex
     make_it_so_command: [make-it-so, --config, /home/example/.config/make-it-so/config.yaml]
     board_prefix: make-it-so
     workers:
@@ -50,16 +51,25 @@ orchestrators:
     worker_models:
       # Recovery/control-plane work is Terra; Sol is reserved for strategy and final review.
       captain: codex/gpt-5.6-terra
-      # OpenClaw P0 worker route: this ChatGPT-account gateway rejects
-      # gpt-5.3-codex-spark when passed through `openclaw agent`.
-      # The direct Codex adapter below keeps Spark as the low-cost P1 coder.
-      coder: codex/gpt-5.6-terra
+      coder: codex/gpt-5.3-codex-spark
       tester: codex/gpt-5.6-luna
       reviewer: codex/gpt-5.6-terra
       ux_reviewer: codex/gpt-5.6-terra
       final_reviewer: codex/gpt-5.6-sol
       merger: codex/gpt-5.6-terra
       verifier: codex/gpt-5.6-terra
+    # Workboard remains the P0 orchestration and audit surface. Only bounded
+    # coding crosses the direct Codex process boundary to use the separate
+    # Spark allowance; every other role remains an OpenClaw worker.
+    worker_runtimes:
+      captain: openclaw
+      coder: codex
+      reviewer: openclaw
+      tester: openclaw
+      ux_reviewer: openclaw
+      final_reviewer: openclaw
+      merger: openclaw
+      verifier: openclaw
     auth_source_agent: codex-harness
     dispatch_timeout_seconds: 120
     # Bound metadata-only usage imports; increase only when the audit needs older sessions.
@@ -192,10 +202,9 @@ harness_model_overrides:
   # Direct OpenClaw adapter routes use an explicit Codex provider prefix so
   # they cannot silently resolve through the gateway's default Ollama route.
   # This is ChatGPT-account Codex execution, not an OpenAI API-key request.
-  # The gateway rejects Spark for direct agent calls, so bounded OpenClaw
-  # coding uses Terra while direct Codex retains Spark below. Each route names
-  # the OpenClaw agent whose configured default matches that model; OpenClaw
-  # validates model overrides against the selected agent.
+  # These mappings cover harness calls that execute inside an OpenClaw agent.
+  # Workboard coding cards use the orchestrator's per-role `worker_runtimes`
+  # mapping above and therefore execute Spark through direct Codex instead.
   openclaw:
     baseline:
       primary: {model: codex/gpt-5.6-terra, agent: github-captain, thinking: high}

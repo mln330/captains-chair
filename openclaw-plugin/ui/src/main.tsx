@@ -1,5 +1,27 @@
 import { StrictMode, useEffect, useMemo, useState, type FormEvent } from "react";
 import { createRoot } from "react-dom/client";
+import {
+  Activity,
+  BadgeCheck,
+  CheckCircle2,
+  ChevronDown,
+  CircleDot,
+  CircleAlert,
+  Code2,
+  Cpu,
+  ExternalLink,
+  FlaskConical,
+  GitMerge,
+  GitPullRequest,
+  ListChecks,
+  RefreshCw,
+  Rocket,
+  RotateCcw,
+  ShieldCheck,
+  Target,
+  Wrench,
+  XCircle,
+} from "lucide-react";
 import "./styles.css";
 
 type ModelRoute = { primary?: { model?: string; thinking?: string }; allow_fallback?: boolean };
@@ -19,14 +41,47 @@ type UsageDetail = {
   dimensions?: Array<{ date?: string; course_key?: string | null; work_package_key?: string | null; stage?: string; model?: string; tokens?: number; calls?: number; input_tokens?: number; cached_input_tokens?: number; cache_write_tokens?: number; reasoning_tokens?: number; output_tokens?: number; total_tokens?: number }>;
 };
 type WorkflowTimelineItem = {
+  id?: string;
   stage?: string;
   status?: string;
   title?: string;
   summary?: string;
   agent?: string | null;
+  model?: string | null;
+  attempts?: number;
+  workflow?: string;
   pr_url?: string | null;
   updated_at?: string | null;
   loop?: boolean;
+  superseded_retry?: boolean;
+};
+type WorkflowRun = {
+  workflow?: string;
+  index?: number;
+  title?: string;
+  kind?: "build" | "review" | "completion" | string;
+  status?: string;
+  current?: boolean;
+  cards?: number;
+  loops?: number;
+  blocked?: number;
+  done?: number;
+  historical_blockers?: number;
+  superseded_retries?: number;
+  updated_at?: string | null;
+  timeline?: WorkflowTimelineItem[];
+};
+type StageHistory = {
+  stage?: string;
+  total?: number;
+  done?: number;
+  active?: number;
+  blocked?: number;
+  loops?: number;
+  retry_attempts?: number;
+  historical_blockers?: number;
+  superseded_retries?: number;
+  models?: string[];
 };
 type WorkboardStatus = {
   status?: string;
@@ -37,14 +92,60 @@ type WorkboardStatus = {
   active_cards?: number;
   current_stage?: string | null;
   stages?: Array<{ stage?: string; total?: number; done?: number; active?: number; blocked?: number; loops?: number }>;
+  stage_history?: StageHistory[];
   timeline?: WorkflowTimelineItem[];
+  workflow_runs?: WorkflowRun[];
   loop_count?: number;
+  total_loop_count?: number;
+  review_cycles?: number;
+  reviews_passed?: number;
+  review_status?: "not_run" | "in_review" | "passed" | "blocked" | string;
+  test_status?: "not_run" | "running" | "passed" | "blocked" | string;
+  blockers?: number;
+  current_blockers?: number;
+  historical_blockers?: number;
+  historical_review_blockers?: number;
+  superseded_retries?: number;
+  terminal?: boolean;
+  completion_status?: string;
   pr_count?: number;
   pr_numbers?: number[];
   pr_urls?: string[];
+  milestones?: MilestoneEvidence[];
   usage_sync?: { status?: string; sessions_seen?: number; sessions_imported?: number; sessions_with_usage?: number; error?: string };
   message?: string;
   error?: string;
+};
+type EvidenceArtifact = { kind?: string; title?: string; url?: string; path?: string; mime_type?: string; viewport?: string; description?: string };
+type MilestonePolicy = { required?: boolean; minimum_pass_rate?: number; require_command?: boolean; require_screenshot?: boolean; minimum_screenshots?: number };
+type MilestoneEvidenceDetail = {
+  status?: string;
+  reason?: string;
+  source_card_id?: string | null;
+  head_sha?: string | null;
+  current_head_sha?: string | null;
+  pass_rate?: number | null;
+  tests_total?: number | null;
+  tests_passed?: number | null;
+  tests_failed?: number | null;
+  tests_skipped?: number | null;
+  commands?: string[];
+  screenshots?: EvidenceArtifact[];
+  artifacts?: EvidenceArtifact[];
+  model?: string | null;
+  provider?: string | null;
+  captured_at?: string | null;
+  summary?: string | null;
+};
+type MilestoneEvidence = {
+  course_key: string;
+  work_package_key: string;
+  title: string;
+  objective: string;
+  status: string;
+  policy?: MilestonePolicy;
+  evidence?: MilestoneEvidenceDetail;
+  pr_url?: string | null;
 };
 type GitHubStatus = {
   status?: string;
@@ -67,6 +168,8 @@ type Repo = {
   state: string;
   orchestrator?: string;
   orchestration_board?: string | null;
+  worker_models?: Record<string, string>;
+  worker_runtimes?: Record<string, string>;
   notification_route?: string | null;
   model_profiles?: Record<string, ModelRoute>;
   qa_profiles?: QAProfile[];
@@ -97,7 +200,7 @@ type ReadinessRequirement = {
   answer?: string | null;
   owner_decision_required?: boolean;
 };
-type WorkPackage = { key: string; title: string; objective: string; status: string; dependencies?: string[]; model_profiles?: Record<string, ModelRoute> };
+type WorkPackage = { key: string; title: string; objective: string; status: string; dependencies?: string[]; acceptance_criteria?: string[]; checks?: string[]; qa_profiles?: string[]; test_evidence_policy?: MilestonePolicy; model_profiles?: Record<string, ModelRoute> };
 type Checkpoint = { key: string; title: string; reason: string; status: string; blocks_work_packages?: string[] };
 type Course = {
   key: string;
@@ -105,6 +208,11 @@ type Course = {
   kind: string;
   status: string;
   goal: string;
+  plan_revision?: number;
+  milestone_approval?: string;
+  scope?: string[];
+  acceptance_criteria?: string[];
+  exit_criteria?: string[];
   readiness: ReadinessRequirement[];
   work_packages: WorkPackage[];
   checkpoints: Checkpoint[];
@@ -114,6 +222,18 @@ type CourseSummary = {
   repository: string;
   course: Course;
   readiness: { ready: boolean; unresolved?: string[]; owner_decisions?: string[]; verified?: string[] };
+  number_one?: { session_id?: string; runtime?: string; model?: string; plan_revision?: number; last_review_at?: string; summary?: string | null } | null;
+  milestone_changes?: MilestoneChangeProposal[];
+  milestone_reviews?: Array<{ status?: string; summary?: string; next_action?: string; reviewed_at?: string; model?: string; number_one_session_id?: string }>;
+};
+type MilestoneChangeProposal = {
+  proposal_id: string;
+  summary: string;
+  reason: string;
+  status: string;
+  impact?: string;
+  base_revision?: number;
+  changes?: Array<{ kind?: string; summary?: string; work_package_key?: string | null; work_package?: { key?: string; title?: string } | null }>;
 };
 type ModelConfig = {
   global_profiles: Record<string, ModelRoute>;
@@ -133,14 +253,70 @@ type Portfolio = { repos: Repo[] };
 type Courses = { courses: CourseSummary[] };
 type ScheduleJob = { name: string; every: string; id?: string | null; enabled: boolean; health: string; drift?: string[]; duplicates?: number };
 type ScheduleStatus = { status: string; jobs: ScheduleJob[] };
+type BootstrapRole = "captain" | "coder" | "reviewer" | "tester" | "ux_reviewer" | "final_reviewer" | "merger" | "verifier";
+type BootstrapWorker = { agent_id: string; model: string; runtime: "openclaw" | "codex" };
+type BootstrapStatus = {
+  status?: string;
+  configured?: boolean;
+  setup_required?: boolean;
+  config_path?: string;
+  openclaw_executable?: string;
+  codex_executable?: string;
+  workspace_root?: string;
+  runtime_available?: boolean;
+  codex_available?: boolean;
+  warning?: string | null;
+  agents?: Array<{ id: string; model?: string; workspace?: string }>;
+  workers?: Record<BootstrapRole, BootstrapWorker>;
+  actions?: Array<{ role: BootstrapRole; agent_id: string; model: string; workspace: string; action: string }>;
+  schedules?: { reconcile_every?: string; review_every?: string };
+};
 type UpdatePayload = Record<string, unknown>;
+type RegistrationResult = {
+  status?: string;
+  follow_up_required?: boolean;
+  follow_up_message?: string;
+  notification_status?: string;
+  notification_error?: string;
+  notification_delivery?: string;
+  number_one_session_key?: string;
+  discovery?: {
+    local_clone?: { path?: string; exists?: boolean; cloned?: boolean; remote_matches?: boolean | null };
+    planning_document?: { path?: string; found?: boolean; source?: string; candidates?: string[]; reason?: string };
+    git?: { branch?: string | null; dirty?: boolean | null };
+  };
+};
+type RegistrationLocalClone = {
+  full_name: string;
+  local_path: string;
+  branch?: string | null;
+  dirty?: boolean | null;
+  registered?: boolean;
+};
+type RegistrationDiscordRoute = {
+  route: string;
+  channel_id: string;
+  guild_id?: string;
+  name: string;
+  label: string;
+  alias?: string;
+};
+type RegistrationOptions = {
+  local_clones: RegistrationLocalClone[];
+  discord_routes: RegistrationDiscordRoute[];
+  default_discord_route?: string;
+  discord_discovery_pending?: boolean;
+  warnings?: string[];
+};
 type ModelPreset = "economy" | "balanced" | "maximum_quality" | "local_first";
+type IntelligenceLevel = "economy" | "balanced" | "deep" | "maximum";
 
 const CONTROL_UI_TOKEN = document
   .querySelector<HTMLMetaElement>('meta[name="make-it-so-control-token"]')
   ?.content ?? "";
 
 const ROUTE_DEFAULTS = [
+  { role: "number_one", label: "Number One leadership", model: "codex/gpt-5.6-sol", effort: "high" },
   { role: "strategist", label: "Course strategist", model: "codex/gpt-5.6-sol", effort: "high" },
   { role: "course_verifier", label: "Course verifier", model: "codex/gpt-5.6-sol", effort: "high" },
   { role: "baseline", label: "Baseline analyst", model: "codex/gpt-5.6-terra", effort: "high" },
@@ -180,42 +356,280 @@ function callGateway<T>(path: string, params: Record<string, unknown> = {}): Pro
     },
     body: JSON.stringify(params),
   }).then(async (response) => {
-    if (!response.ok) throw new Error(`Gateway request failed: ${response.status}`);
-    return (await response.json()) as T;
+    const payload = await response.json().catch(() => null) as unknown;
+    if (!response.ok) {
+      const detail = payload && typeof payload === "object" && "error" in payload
+        ? String((payload as { error?: unknown }).error ?? "")
+        : "";
+      throw new Error(detail || `Gateway request failed: ${response.status}`);
+    }
+    return payload as T;
   });
 }
 
-function Flow({ state }: { state: string }) {
-  const stages = ["Course", "Ready", "Build", "Review", "Verify", "Complete"];
-  const active = state === "unbaselined" || state === "baseline_review"
-    ? 0 : state === "ready" || state === "planning" ? 1
-      : state.includes("review") || state === "pr_open" || state === "repairing" ? 3
-        : state === "completion_ready" || state === "post_merge_verification" ? 4
-          : state === "merged" ? 5 : 2;
-  return <div className="flow" role="region" aria-label="SDLC progress" tabIndex={0}>
-    {stages.map((stage, index) => <div className={`flow-stage ${index <= active ? "active" : ""}`} key={stage}>
-      <span className="flow-dot" aria-hidden="true" /><span>{stage}</span>
-      {index < stages.length - 1 && <span className="flow-line" aria-hidden="true" />}
-    </div>)}
-  </div>;
+function normalizeGithubRepository(value: string): string {
+  const trimmed = value.trim();
+  const sshMatch = trimmed.match(/^git@github\.com:([^/\s]+\/[^/\s]+?)(?:\.git)?\/?$/i);
+  if (sshMatch) return sshMatch[1];
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+      if (!/^(?:www\.)?github\.com$/i.test(parsed.hostname) || parsed.search || parsed.hash) {
+        throw new Error("Use a GitHub repository URL or owner/repository.");
+      }
+      const parts = parsed.pathname.replace(/\.git\/?$/i, "").split("/").filter(Boolean);
+      if (parts.length === 2) return `${parts[0]}/${parts[1]}`;
+    }
+  } catch (reason) {
+    // URL() rejects the documented owner/repository shorthand. Only that
+    // expected parse failure should fall through to the shorthand validator.
+    if (!(reason instanceof TypeError) || !/invalid url/i.test(reason.message)) throw reason;
+  }
+  if (/^[^/\s]+\/[^/\s]+$/.test(trimmed)) return trimmed;
+  throw new Error("Enter owner/repository or a GitHub repository URL.");
 }
 
 function stageLabel(stage?: string | null): string {
   return (stage || "unknown").split("_").join(" ");
 }
 
+function compactTokens(value: number): string {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 1_000) return `${Math.round(value / 1_000)}k`;
+  return value.toLocaleString();
+}
+
+function shortModel(value?: string | null): string {
+  return (value || "model unknown").replace(/^codex\//, "").replace(/^openai-codex\//, "");
+}
+
+const EXECUTION_LANES = [
+  { stage: "implementation", label: "Build", icon: Code2 },
+  { stage: "review", label: "Review", icon: ShieldCheck },
+  { stage: "repair", label: "Repair", icon: Wrench },
+  { stage: "test", label: "Test", icon: FlaskConical },
+  { stage: "final_review", label: "Final", icon: BadgeCheck },
+  { stage: "merge", label: "Merge", icon: GitMerge },
+  { stage: "post_merge", label: "Verify", icon: Rocket },
+] as const;
+
+function stageTelemetry(repo: Repo, stage: string) {
+  const rows = (repo.usage_detail?.dimensions ?? []).filter((row) => row.stage === stage);
+  return {
+    tokens: rows.reduce((total, row) => total + (row.tokens ?? 0), 0),
+    models: [...new Set(rows.map((row) => row.model).filter((model): model is string => Boolean(model)))],
+  };
+}
+
+function stageTone(stage?: StageHistory, terminal = false): string {
+  if (!stage) return "idle";
+  if (terminal && (stage.done ?? 0) > 0) return "done";
+  if ((stage.active ?? 0) > 0) return "active";
+  if ((stage.blocked ?? 0) > 0 && (stage.done ?? 0) === 0) return "blocked";
+  if ((stage.done ?? 0) > 0) return "done";
+  return "idle";
+}
+
+function stageCountLabel(stage?: StageHistory): string {
+  if (!stage) return "--";
+  const done = stage.done ?? 0;
+  const active = stage.active ?? 0;
+  const historicalBlockers = stage.historical_blockers ?? 0;
+  if (done > 0 && active === 0) return "Complete";
+  if (historicalBlockers > 0 && done === 0) return "Blocked";
+  return `${done}/${stage.total ?? 0}`;
+}
+
+function stageCountDetail(stage?: StageHistory): string | undefined {
+  if (!stage) return undefined;
+  const details = [`${stage.done ?? 0} successful`, `${stage.total ?? 0} recorded`];
+  if (stage.retry_attempts) details.push(`${stage.retry_attempts} retry attempt${stage.retry_attempts === 1 ? "" : "s"}`);
+  if (stage.superseded_retries) details.push(`${stage.superseded_retries} superseded`);
+  if (stage.historical_blockers) details.push(`${stage.historical_blockers} historical blocker${stage.historical_blockers === 1 ? "" : "s"}`);
+  return details.join("; ");
+}
+
+function statusLabel(value?: string | null): string {
+  return (value || "not available").split("_").join(" ");
+}
+
+function checkStatus(github?: GitHubStatus): string {
+  if (!github || github.status !== "available") return "not available";
+  if ((github.checks?.failed ?? 0) > 0) return "failing";
+  if ((github.checks?.pending ?? 0) > 0) return "running";
+  if ((github.checks?.passed ?? 0) > 0) return "passing";
+  return "not run";
+}
+
+function Metric({ label, value, tone = "neutral" }: { label: string; value: string | number; tone?: string }) {
+  return <div className={`metric metric-${tone}`}><strong>{value}</strong><span>{label}</span></div>;
+}
+
+function PortfolioSummary({ repos }: { repos: Repo[] }) {
+  const openPrs = repos.reduce((total, repo) => total + (repo.github_status?.open_prs ?? 0), 0);
+  const trackedPrs = repos.reduce((total, repo) => total + (repo.workboard_status?.pr_count ?? 0), 0);
+  const reviewCycles = repos.reduce((total, repo) => total + (repo.workboard_status?.review_cycles ?? 0), 0);
+  const failedChecks = repos.reduce((total, repo) => total + (repo.github_status?.checks?.failed ?? 0), 0);
+  const pendingChecks = repos.reduce((total, repo) => total + (repo.github_status?.checks?.pending ?? 0), 0);
+  const blockers = repos.reduce((total, repo) => total + (repo.workboard_status?.blockers ?? repo.workboard_status?.counts?.blocked ?? 0), 0);
+  const tokens = repos.reduce((total, repo) => total + (repo.tokens.accounted_tokens ?? repo.tokens.total_tokens ?? 0), 0);
+  const active = repos.filter((repo) => repo.operation_mode !== "disabled" && repo.state !== "merged").length;
+  return <section className="portfolio-summary" aria-label="Portfolio summary">
+    <div className="summary-heading"><div><p className="eyebrow">COMMAND DECK</p><h3>Fleet at a glance</h3></div><span className="summary-note">Live GitHub and Workboard facts</span></div>
+    <div className="portfolio-kpis" tabIndex={0} aria-label="Portfolio metrics">
+      <Metric label="registered" value={repos.length} />
+      <Metric label="active courses" value={active} tone={active ? "accent" : "neutral"} />
+      <Metric label="open PRs" value={openPrs} tone={openPrs ? "accent" : "neutral"} />
+      <Metric label="PRs in workflow" value={trackedPrs} />
+      <Metric label="review cycles" value={reviewCycles} />
+      <Metric label="checks" value={failedChecks ? `${failedChecks} failing` : pendingChecks ? `${pendingChecks} running` : "passing"} tone={failedChecks ? "danger" : pendingChecks ? "warn" : "good"} />
+      <Metric label="blockers" value={blockers} tone={blockers ? "danger" : "good"} />
+      <Metric label="tokens recorded" value={tokens.toLocaleString()} />
+    </div>
+  </section>;
+}
+
+type GoalState = "complete" | "in_progress" | "ready" | "blocked" | "paused" | "evidence_pending" | "not_started";
+
+function goalStateLabel(state: GoalState): string {
+  return {
+    complete: "Complete",
+    in_progress: "In progress",
+    ready: "Ready to engage",
+    blocked: "Blocked",
+    paused: "Paused",
+    evidence_pending: "Evidence pending",
+    not_started: "Not started",
+  }[state];
+}
+
+function requiredMilestonesHaveEvidence(repo: Repo): boolean {
+  const milestones = repo.workboard_status?.milestones ?? [];
+  return milestones.every((milestone) => milestone.policy?.required === false || milestone.evidence?.status === "passed");
+}
+
+function courseGoalState(item: CourseSummary, repo: Repo): GoalState {
+  const workboard = repo.workboard_status;
+  const terminal = Boolean(workboard?.terminal || workboard?.status === "completed" || repo.state === "merged");
+  const blockers = workboard?.current_blockers ?? workboard?.blockers ?? 0;
+  if (item.course.status === "blocked" || blockers > 0) return "blocked";
+  if (terminal && !requiredMilestonesHaveEvidence(repo)) return "evidence_pending";
+  if (item.course.status === "completed" || terminal) return "complete";
+  if (item.course.status === "paused") return "paused";
+  if (item.course.status === "engaged" || workboard?.status === "in_progress") return "in_progress";
+  if (item.readiness.ready || item.course.status === "awaiting_approval") return "ready";
+  return "not_started";
+}
+
+function ExecutiveSummary({ repo, courses }: { repo: Repo; courses: Courses | null }) {
+  const workboard = repo.workboard_status;
+  const terminal = Boolean(workboard?.terminal || workboard?.status === "completed" || repo.state === "merged");
+  const blockers = workboard?.current_blockers ?? workboard?.blockers ?? 0;
+  const checks = checkStatus(repo.github_status);
+  const courseItems = courses?.courses.filter((item) => item.repository === repo.full_name) ?? [];
+  const goals = courseItems.map((item) => ({ item, state: courseGoalState(item, repo) }));
+  const workPackages = courseItems.flatMap((item) => item.course.work_packages);
+  const completedPackages = workPackages.filter((item) => item.status === "complete").length;
+  const completeGoals = goals.filter((goal) => goal.state === "complete").length;
+  const milestones = workboard?.milestones ?? [];
+  const passedEvidence = milestones.filter((item) => item.evidence?.status === "passed").length;
+  const screenshotCount = milestones.reduce((total, item) => total + (item.evidence?.screenshots?.length ?? 0), 0);
+  const hasBlockedGoal = goals.some((goal) => goal.state === "blocked");
+  const hasPendingEvidence = goals.some((goal) => goal.state === "evidence_pending");
+  const overallState: GoalState | "loading" = courses === null
+    ? "loading"
+    : hasBlockedGoal
+    ? "blocked"
+    : hasPendingEvidence
+    ? "evidence_pending"
+    : goals.length > 0 && completeGoals === goals.length
+    ? "complete"
+    : goals.some((goal) => goal.state === "in_progress")
+    ? "in_progress"
+    : goals.some((goal) => goal.state === "ready")
+    ? "ready"
+    : "not_started";
+  const overallLabel = overallState === "loading" ? "Loading charter" : goalStateLabel(overallState);
+  const narrative = courses === null
+    ? "Loading the project charter and its declared goals."
+    : !goals.length
+    ? "No high-level goal is registered for this repository yet."
+    : overallState === "complete"
+    ? "The implementation course is merged and post-merge verified. Production deployment remains a separate outcome."
+    : overallState === "blocked"
+    ? "The course has work that needs attention before it can advance."
+    : overallState === "evidence_pending"
+    ? "Implementation is terminal, but required milestone evidence has not been recorded."
+    : overallState === "in_progress"
+    ? `${completedPackages} of ${workPackages.length || 0} delivery milestones are marked complete.`
+    : "The project has a declared direction and is waiting for the next course transition.";
+  return <section className="executive-summary" aria-labelledby="executive-summary-title">
+    <div className="executive-heading"><div><p className="eyebrow">EXECUTIVE BRIEF</p><h3 id="executive-summary-title">Project at a glance</h3><span>{repo.full_name}</span></div><span className={`executive-state ${overallState}`}>{overallLabel}</span></div>
+    <div className="executive-grid">
+      <div className="executive-narrative"><div className="executive-signal"><Target size={20} aria-hidden="true" /><div><strong>{overallState === "evidence_pending" ? "Evidence gate pending" : terminal ? "Implementation verified" : repo.state.split("_").join(" ")}</strong><span>{narrative}</span></div></div><div className="executive-metrics" tabIndex={0} aria-label="Project metrics"><Metric label="goals complete" value={courses === null ? "-" : `${completeGoals}/${goals.length}`} tone={overallState === "complete" ? "good" : "neutral"} /><Metric label="milestones" value={courses === null ? "-" : `${completedPackages}/${workPackages.length}`} /><Metric label="evidence passed" value={milestones.length ? `${passedEvidence}/${milestones.length}` : "-"} tone={milestones.length && passedEvidence === milestones.length ? "good" : "neutral"} /><Metric label="screenshots" value={screenshotCount} /><Metric label="PRs" value={workboard?.pr_count ?? repo.github_status?.open_prs ?? 0} /><Metric label="blockers" value={blockers} tone={blockers ? "danger" : "good"} /><Metric label="checks" value={checks} tone={checks === "failing" ? "danger" : checks === "passing" ? "good" : checks === "running" ? "warn" : "neutral"} /></div></div>
+      <div className="goal-board" aria-label={`High-level goals for ${repo.full_name}`}><div className="goal-board-heading"><div><ListChecks size={17} aria-hidden="true" /><strong>Project goals</strong></div><span>{courses === null ? "Loading" : `${goals.length} tracked`}</span></div>{courses === null ? <p className="muted">Loading declared goals...</p> : goals.length ? goals.map(({ item, state }) => <div className="goal-item" key={`${item.repository}:${item.course.key}`}><div className="goal-item-marker">{state === "complete" ? <CheckCircle2 size={16} aria-hidden="true" /> : state === "blocked" || state === "evidence_pending" ? <CircleAlert size={16} aria-hidden="true" /> : <Target size={16} aria-hidden="true" />}</div><div className="goal-item-copy"><strong>{item.course.title}</strong><span>{item.course.goal}</span><small>{item.course.work_packages.length ? `${item.course.work_packages.length} delivery milestone${item.course.work_packages.length === 1 ? "" : "s"}` : "No delivery milestones recorded"}</small></div><em className={`goal-status ${state}`}>{goalStateLabel(state)}</em></div>) : <p className="muted">Register a course charter to track a high-level goal.</p>}</div>
+    </div>
+  </section>;
+}
+
 function ExecutionPath({ repo }: { repo: Repo }) {
   const workboard = repo.workboard_status;
   if (!workboard || workboard.status === "unknown" || workboard.status === "unavailable") return null;
-  const timeline = (workboard.timeline ?? []).slice(-12);
-  const dimensions = (repo.usage_detail?.dimensions ?? []).slice(0, 5);
-  return <section className="execution-panel" aria-label={`Execution evidence for ${repo.full_name}`}>
-    <div className="execution-heading"><div><h4>Execution path</h4><span>{workboard.current_stage ? `Current: ${stageLabel(workboard.current_stage)}` : "No active stage"}</span></div><strong>{workboard.loop_count ?? 0} retry/repair loops</strong></div>
-    {timeline.length ? <div className="execution-path" role="list">{timeline.map((item, index) => <div className={`path-step ${item.status ?? "unknown"} ${item.loop ? "loop" : ""}`} role="listitem" key={`${item.stage}-${item.updated_at}-${index}`}>
-      <span className="path-dot" aria-hidden="true" /><div><strong>{stageLabel(item.stage)}</strong><span>{item.status ?? "unknown"}</span><small title={item.summary ?? item.title}>{item.summary ?? item.title ?? "Workboard transition"}</small>{item.pr_url && <a href={item.pr_url} target="_blank" rel="noreferrer">PR</a>}</div>
-    </div>)}</div> : <p className="muted">No stage transitions recorded yet.</p>}
-    {workboard.stages?.length ? <div className="stage-summary">{workboard.stages.map((stage) => <span key={stage.stage}><strong>{stageLabel(stage.stage)}</strong><small>{stage.done ?? 0}/{stage.total ?? 0} done{stage.blocked ? ` | ${stage.blocked} blocked` : ""}</small></span>)}</div> : null}
-    {dimensions.length ? <div className="token-breakdown"><h5>Usage by stage and model</h5>{dimensions.map((row, index) => <div key={`${row.date}-${row.stage}-${row.model}-${index}`}><span>{stageLabel(row.stage)} | {row.model ?? "model unknown"}</span><strong>{(row.tokens ?? 0).toLocaleString()}</strong></div>)}</div> : <p className="muted usage-note">No correlated provider usage recorded for this repository yet.</p>}
+  const runs = workboard.workflow_runs ?? [];
+  const stageHistory: StageHistory[] = workboard.stage_history ?? workboard.stages ?? [];
+  const terminal = workboard.terminal || workboard.status === "completed" || repo.state === "merged";
+  const evidenceReady = requiredMilestonesHaveEvidence(repo);
+  const totalLoops = workboard.total_loop_count ?? workboard.loop_count ?? 0;
+  const coderRoute = repo.worker_models?.coder;
+  const coderRuntime = repo.worker_runtimes?.coder ?? "openclaw";
+  return <section className="execution-console" aria-label={`Execution evidence for ${repo.full_name}`}>
+    <div className="console-heading">
+      <div><p className="eyebrow">MISSION TELEMETRY</p><h4>How the work moved</h4><span>Every recorded build, review, repair, test, and completion workflow.</span></div>
+      <div className={`completion-beacon ${terminal && evidenceReady ? "complete" : terminal ? "pending" : "active"}`}><Activity size={15} aria-hidden="true" /><span>{terminal && evidenceReady ? "Course verified" : terminal ? "Evidence pending" : workboard.current_stage ? `Active: ${stageLabel(workboard.current_stage)}` : "Awaiting next transition"}</span></div>
+    </div>
+    <div className="stage-map" role="list" aria-label="SDLC stage evidence" tabIndex={0}>
+      {EXECUTION_LANES.map(({ stage, label, icon: Icon }, index) => {
+        const history = stageHistory.find((item) => item.stage === stage);
+        const telemetry = stageTelemetry(repo, stage);
+        const models = telemetry.models.length ? telemetry.models : history?.models ?? [];
+        const tone = stageTone(history, terminal);
+        return <div className={`stage-node ${tone}`} role="listitem" key={stage}>
+          <div className="stage-node-top"><span className="stage-icon"><Icon size={16} aria-hidden="true" /></span><span className="stage-count" title={stageCountDetail(history)}>{stageCountLabel(history)}</span></div>
+          <strong>{label}</strong>
+          <span className="stage-model" title={models.join(", ")}>{models.length ? models.map(shortModel).join(", ") : "No recorded model"}</span>
+          <span className="stage-tokens">{telemetry.tokens ? `${compactTokens(telemetry.tokens)} tokens` : history ? `${history.retry_attempts ?? history.loops ?? 0} retry attempt${(history.retry_attempts ?? history.loops ?? 0) === 1 ? "" : "s"}` : "No run"}</span>
+          {index < EXECUTION_LANES.length - 1 && <span className="stage-connector" aria-hidden="true" />}
+        </div>;
+      })}
+    </div>
+    <div className="feedback-band">
+      <div className="feedback-icon"><RotateCcw size={18} aria-hidden="true" /></div>
+      <div><strong>{totalLoops} feedback loop{totalLoops === 1 ? "" : "s"}</strong><span>Review findings and failed gates route work back through repair, then forward through independent verification.</span></div>
+      <div className="feedback-counts"><span><b>{workboard.reviews_passed ?? 0}</b> reviews passed</span><span><b>{workboard.superseded_retries ?? 0}</b> superseded retr{(workboard.superseded_retries ?? 0) === 1 ? "y" : "ies"}</span>{(workboard.historical_blockers ?? 0) > 0 && <span><b>{workboard.historical_blockers ?? 0}</b> historical blockers</span>}<span><b>{workboard.current_blockers ?? workboard.blockers ?? 0}</b> current blockers</span></div>
+    </div>
+    {coderRoute && <div className="model-route-note"><Cpu size={17} aria-hidden="true" /><div><strong>Coding route: {shortModel(coderRoute)} via {coderRuntime === "codex" ? "direct Codex" : "OpenClaw"}</strong><span>{coderRuntime === "codex" ? "OpenClaw owns the Workboard lifecycle; the coding card executes through your ChatGPT-authenticated Codex CLI and records provider token telemetry." : "This coding card executes through the OpenClaw agent route configured for the repository."}</span></div></div>}
+    <details className="run-history flight-recorder">
+      <summary className="run-history-heading"><div><p className="eyebrow">FLIGHT RECORDER</p><h5>Workflow runs</h5></div><span>{runs.length} recorded run{runs.length === 1 ? "" : "s"} <ChevronDown size={15} aria-hidden="true" /></span></summary>
+      <div className="run-history-body">
+        {runs.length ? runs.map((run) => <article className={`workflow-run ${run.status ?? "unknown"}`} key={run.workflow ?? run.index}>
+          <div className="run-label"><span>RUN {String(run.index ?? 0).padStart(2, "0")}</span><strong>{run.kind ?? "workflow"}</strong><em>{statusLabel(run.status)}</em></div>
+          <div className="run-body">
+            <div className="run-title"><div><strong>{run.title ?? "Workboard workflow"}</strong><span>{run.status === "completed" ? "Complete" : `${run.done ?? 0}/${run.cards ?? 0} cards complete`}{run.superseded_retries ? ` | ${run.superseded_retries} superseded retr${run.superseded_retries === 1 ? "y" : "ies"}` : run.loops ? ` | ${run.loops} feedback loop${run.loops === 1 ? "" : "s"}` : ""}</span></div>{run.current && <span className="current-run">current</span>}</div>
+            <div className="run-steps" role="list">
+              {(run.timeline ?? []).slice(-12).map((item, index) => {
+                const supersededRetry = item.superseded_retry || (item.status === "blocked" && item.loop && run.status === "completed");
+                return <div className={`run-step ${supersededRetry ? "superseded" : item.status ?? "unknown"} ${item.loop ? "loop" : ""}`} role="listitem" key={item.id ?? `${run.workflow}-${item.stage}-${index}`}>
+                <span className="run-step-marker" aria-hidden="true">{item.status === "done" || supersededRetry ? <CheckCircle2 size={14} /> : item.status === "blocked" ? <XCircle size={14} /> : <CircleDot size={14} />}</span>
+                <div><strong>{stageLabel(item.stage)}{supersededRetry ? " - superseded retry" : ""}</strong><span>{item.model ? shortModel(item.model) : item.agent ?? "deterministic"}</span><small title={item.summary ?? item.title}>{supersededRetry ? "Retry preserved as audit history; successful path completed." : item.summary ?? item.title ?? "Workboard transition"}</small></div>
+                {item.pr_url && <a href={item.pr_url} target="_blank" rel="noreferrer" aria-label={`Open PR for ${item.title ?? item.stage}`}><GitPullRequest size={14} /><span>PR</span><ExternalLink size={11} /></a>}
+              </div>;
+              })}
+            </div>
+          </div>
+        </article>) : <p className="muted">No durable Workboard workflow history has been recorded yet.</p>}
+      </div>
+    </details>
+    {terminal && <div className="completion-strip"><BadgeCheck size={18} aria-hidden="true" /><div><strong>{evidenceReady ? "Implementation complete" : "Evidence pending"}</strong><span>{evidenceReady ? "Merged and post-merge verification passed. Superseded retry cards above are audit history, not failed work. Production deployment remains a separately verified outcome." : "The implementation is terminal, but one or more required milestones still lack passing test evidence. Production readiness is not established."}</span></div></div>}
   </section>;
 }
 
@@ -235,11 +649,8 @@ const STAGE_ROUTE_DEFAULTS: Record<string, EditableRoute> = {
   baseline: { model: "codex/gpt-5.6-terra", effort: "high" },
   planning: { model: "codex/gpt-5.6-terra", effort: "medium" },
   decomposition: { model: "codex/gpt-5.6-terra", effort: "medium" },
-  // The OpenClaw plugin runs through the gateway. Its ChatGPT-account Codex
-  // route rejects Spark, so bounded coding uses Terra here; direct Codex
-  // keeps Spark through the portable runtime mapping.
-  implementation: { model: "codex/gpt-5.6-terra", effort: "medium" },
-  repair: { model: "codex/gpt-5.6-terra", effort: "medium" },
+  implementation: { model: "codex/gpt-5.3-codex-spark", effort: "medium" },
+  repair: { model: "codex/gpt-5.3-codex-spark", effort: "medium" },
   review: { model: "codex/gpt-5.6-terra", effort: "high" },
   comment_adjudication: { model: "codex/gpt-5.6-terra", effort: "high" },
   test: { model: "codex/gpt-5.6-luna", effort: "medium" },
@@ -292,6 +703,24 @@ const MODEL_PRESET_LABELS: Record<ModelPreset, string> = {
   local_first: "Local first",
 };
 
+const INTELLIGENCE_LEVEL_LABELS: Record<IntelligenceLevel, string> = {
+  economy: "Economy - one step lighter",
+  balanced: "Balanced - recommended per role",
+  deep: "Deep - one step stronger",
+  maximum: "Maximum - highest supported",
+};
+
+function routesForIntelligence(level: IntelligenceLevel, routes: Record<string, EditableRoute>): Record<string, EditableRoute> {
+  const efforts = ["low", "medium", "high", "xhigh"];
+  const delta = level === "economy" ? -1 : level === "deep" ? 1 : 0;
+  return Object.fromEntries(ROUTE_DEFAULTS.map(({ role, effort }) => {
+    const current = routes[role];
+    if (level === "maximum") return [role, { ...current, effort: "xhigh" }];
+    const defaultIndex = efforts.indexOf(effort);
+    return [role, { ...current, effort: efforts[Math.max(0, Math.min(efforts.length - 1, defaultIndex + delta))] }];
+  }));
+}
+
 function presetRoutes(preset: ModelPreset): Record<string, EditableRoute> {
   const expensiveRoles = new Set([
     "strategist", "course_verifier", "baseline", "baseline_analyst", "planner",
@@ -319,21 +748,44 @@ function profileForEditing(profile: QAProfile): QAProfile {
   };
 }
 
+function repoActivity(repo: Repo): string {
+  const runs = repo.workboard_status?.workflow_runs ?? [];
+  return runs.at(-1)?.updated_at ?? repo.events?.[0]?.created_at ?? "";
+}
+
+function RepoSelector({ repos, selected, onSelect }: { repos: Repo[]; selected: string; onSelect: (name: string) => void }) {
+  return <nav className="repo-switcher" aria-label="Registered repositories" role="tablist">
+    <div className="repo-switcher-heading"><span>COURSE INDEX</span><strong>{repos.length}</strong></div>
+    {repos.map((repo) => {
+      const workboard = repo.workboard_status;
+      const checks = checkStatus(repo.github_status);
+      const loops = workboard?.total_loop_count ?? workboard?.loop_count ?? 0;
+      return <button className={`repo-tab ${selected === repo.full_name ? "selected" : ""}`} type="button" role="tab" aria-selected={selected === repo.full_name} onClick={() => onSelect(repo.full_name)} key={repo.full_name}>
+        <span className="repo-tab-title"><strong>{repo.full_name}</strong><em className={repo.state}>{statusLabel(repo.state)}</em></span>
+        <span className="repo-tab-facts"><span><GitPullRequest size={13} aria-hidden="true" />{repo.github_status?.open_prs ?? 0} open</span><span><RotateCcw size={13} aria-hidden="true" />{loops} loops</span><span className={`check-${checks.replace(" ", "-")}`}>{checks}</span></span>
+      </button>;
+    })}
+  </nav>;
+}
+
 function RepoPanel({ repo, onSave }: { repo: Repo; onSave: (name: string, payload: UpdatePayload) => Promise<void> }) {
   const [mode, setMode] = useState(repo.operation_mode);
   const [completion, setCompletion] = useState(repo.completion_policy);
   const [allowMerge, setAllowMerge] = useState(repo.allow_autonomous_merge ?? false);
   const [channel, setChannel] = useState(repo.notification_route ?? "");
+  const [orchestrator, setOrchestrator] = useState(repo.orchestrator === "direct" ? "" : (repo.orchestrator ?? ""));
+  const [orchestrationBoard, setOrchestrationBoard] = useState(repo.orchestration_board ?? "");
   const [scheduleEnabled, setScheduleEnabled] = useState(repo.schedule_enabled !== false);
   const [qaProfiles, setQaProfiles] = useState<QAProfile[]>(() => (repo.qa_profiles ?? []).map(profileForEditing));
   const [routes, setRoutes] = useState<Record<string, EditableRoute>>(() => initialRoutes(repo));
   const [preset, setPreset] = useState<ModelPreset>("balanced");
+  const [intelligence, setIntelligence] = useState<IntelligenceLevel>("balanced");
   const [surface, setSurface] = useState(repo.surfaces?.[0] ?? "custom");
   const [saving, setSaving] = useState(false);
   useEffect(() => {
     setMode(repo.operation_mode); setCompletion(repo.completion_policy); setAllowMerge(repo.allow_autonomous_merge ?? false);
-    setChannel(repo.notification_route ?? ""); setScheduleEnabled(repo.schedule_enabled !== false); setQaProfiles((repo.qa_profiles ?? []).map(profileForEditing));
-    setRoutes(initialRoutes(repo)); setPreset("balanced"); setSurface(repo.surfaces?.[0] ?? "custom");
+    setChannel(repo.notification_route ?? ""); setOrchestrator(repo.orchestrator === "direct" ? "" : (repo.orchestrator ?? "")); setOrchestrationBoard(repo.orchestration_board ?? ""); setScheduleEnabled(repo.schedule_enabled !== false); setQaProfiles((repo.qa_profiles ?? []).map(profileForEditing));
+    setRoutes(initialRoutes(repo)); setPreset("balanced"); setIntelligence("balanced"); setSurface(repo.surfaces?.[0] ?? "custom");
   }, [repo]);
   const save = async () => {
     setSaving(true);
@@ -344,6 +796,8 @@ function RepoPanel({ repo, onSave }: { repo: Repo; onSave: (name: string, payloa
       await onSave(repo.full_name, {
         operation_mode: mode, completion_policy: completion, allow_autonomous_merge: allowMerge,
         notification_route: channel, surfaces: surface ? [surface] : [],
+        orchestrator: orchestrator || null,
+        orchestration_board: orchestrationBoard.trim() || null,
         schedule_enabled: scheduleEnabled,
         qa_profiles: qaProfiles,
         model_profiles: modelProfiles,
@@ -356,14 +810,33 @@ function RepoPanel({ repo, onSave }: { repo: Repo; onSave: (name: string, payloa
   const usagePending = recordedTokens === 0 && usageSync?.status !== "ok" && (usageSync?.sessions_with_usage ?? 0) === 0;
   const usageLabel = usagePending ? "Usage not correlated" : `${recordedTokens.toLocaleString()} tokens recorded`;
   const github = repo.github_status;
-  const trackedPrs = repo.workboard_status?.pr_count ?? repo.workboard_status?.pr_urls?.length ?? 0;
-  return <article className="repo-panel">
-    <div className="repo-heading"><div><h3>{repo.full_name}</h3><p>{repo.local_path}</p></div><span className={`mode ${repo.operation_mode}`}>{repo.operation_mode}</span></div>
-    <Flow state={repo.state} />
+  const workboard = repo.workboard_status;
+  const trackedPrs = workboard?.pr_count ?? workboard?.pr_urls?.length ?? 0;
+  const reviewCycles = workboard?.review_cycles ?? 0;
+  const reviewStatus = statusLabel(workboard?.review_status);
+  const testStatus = statusLabel(workboard?.test_status);
+  const uxStage = workboard?.stage_history?.find((item) => item.stage === "ux_review");
+  const needsUiAcceptance = repo.surfaces?.includes("web_ui") || Boolean(uxStage);
+  const uiAcceptance = !needsUiAcceptance ? "n/a" : (uxStage?.blocked ?? 0) > 0 && (uxStage?.done ?? 0) === 0 ? "blocked" : (uxStage?.done ?? 0) > 0 ? "passed" : "required";
+  const checks = checkStatus(github);
+  const terminal = workboard?.terminal || workboard?.status === "completed" || repo.state === "merged";
+  const blockers = workboard?.current_blockers ?? workboard?.blockers ?? (terminal ? 0 : workboard?.counts?.blocked ?? 0);
+  const historicalBlockers = workboard?.historical_blockers ?? 0;
+  const supersededRetries = workboard?.superseded_retries ?? 0;
+  return <section className="repo-panel">
+    <div className="repo-heading"><div><div className="repo-title-line"><Rocket size={17} aria-hidden="true" /><h3>{repo.full_name}</h3></div><p>{repo.local_path}</p></div><span className={`mode ${repo.operation_mode}`}>{repo.operation_mode}</span></div>
     <div className="repo-meta"><span>{repo.state.split("_").join(" ")}</span><span className={usagePending ? "usage-pending" : ""}>{usageLabel}</span><span>{repo.dirty ? "Uncommitted changes" : "Clean checkout"}</span></div>
-    <div className="repo-stats" aria-label={`Repository facts for ${repo.full_name}`}>
-      <span><strong>{github?.open_prs ?? "-"}</strong> open PRs</span><span><strong>{trackedPrs}</strong> PRs in run</span><span><strong>{github?.open_issues ?? "-"}</strong> issues</span><span><strong>{github?.branches ?? "-"}</strong> branches</span><span><strong>{github?.checks?.failed ?? 0}</strong> failed checks</span><span><strong>{repo.workboard_status?.cards ?? 0}</strong> work cards</span>
+    <div className="repo-stats" aria-label={`Repository facts for ${repo.full_name}`} tabIndex={0}>
+      <Metric label="open PRs" value={github?.open_prs ?? "-"} />
+      <Metric label="PRs in workflow" value={trackedPrs} />
+      <Metric label="review cycles" value={reviewCycles} />
+      <Metric label="reviews" value={reviewStatus} tone={reviewStatus === "blocked" ? "danger" : reviewStatus === "passed" ? "good" : "neutral"} />
+      <Metric label="tests" value={testStatus} tone={testStatus === "blocked" ? "danger" : testStatus === "passed" ? "good" : "neutral"} />
+      {needsUiAcceptance && <Metric label="UI acceptance" value={uiAcceptance} tone={uiAcceptance === "blocked" ? "danger" : uiAcceptance === "passed" ? "good" : "warn"} />}
+      <Metric label="checks" value={checks} tone={checks === "failing" ? "danger" : checks === "passing" ? "good" : checks === "running" ? "warn" : "neutral"} />
+      <Metric label="blockers" value={blockers} tone={blockers ? "danger" : "good"} />
     </div>
+    {terminal && <p className="completion-note">Complete: merged and post-merge verified. {supersededRetries ? `${supersededRetries} superseded retry attempt${supersededRetries === 1 ? "" : "s"} retained as audit history. ` : ""}{historicalBlockers ? `${historicalBlockers} historical blocker${historicalBlockers === 1 ? "" : "s"} recorded during the run. ` : "No unresolved historical blockers recorded. "}Production deployment is not implied.</p>}
     <ExecutionPath repo={repo} />
     {github?.prs?.length ? <div className="pr-list"><h4>Open pull requests</h4>{github.prs.slice(0, 4).map((pr) => <a href={pr.url} target="_blank" rel="noreferrer" key={pr.number}><strong>#{pr.number}</strong><span>{pr.title ?? "Untitled PR"}</span><small>{pr.isDraft ? "draft" : pr.reviewDecision ?? pr.mergeStateStatus ?? "open"}</small></a>)}</div> : null}
     {repo.warnings[0] && <p className="warning">{repo.warnings[0]}</p>}
@@ -372,22 +845,25 @@ function RepoPanel({ repo, onSave }: { repo: Repo; onSave: (name: string, payloa
         <label>Autonomy<select value={mode} onChange={(event) => setMode(event.target.value)}><option value="disabled">Disabled</option><option value="advisory">Advisory</option><option value="supervised">Supervised</option><option value="autonomous">Autonomous</option></select></label>
         <label>Completion<select value={completion} onChange={(event) => setCompletion(event.target.value)}><option value="owner_approval">Owner approval</option><option value="control_plane_complete">Control plane complete</option><option value="auto_merge">Auto merge</option></select></label>
         <label>Discord route<input value={channel} onChange={(event) => setChannel(event.target.value)} placeholder="notifications or channel id" /></label>
+        <label>Worker orchestrator<input value={orchestrator} onChange={(event) => setOrchestrator(event.target.value)} placeholder="openclaw-workers" /></label>
+        <label>Workboard name<input value={orchestrationBoard} onChange={(event) => setOrchestrationBoard(event.target.value)} placeholder="Leave blank for the repo board" /></label>
         <label>Application surface<select value={surface} onChange={(event) => setSurface(event.target.value)}><option value="web_ui">Web UI</option><option value="cli">CLI</option><option value="api">API</option><option value="library">Library</option><option value="data_pipeline">Data pipeline</option><option value="infrastructure_release">Infrastructure/release</option><option value="custom">Custom</option></select></label>
         <label className="check-label"><input type="checkbox" checked={allowMerge} onChange={(event) => setAllowMerge(event.target.checked)} /> Allow autonomous merge</label>
         <label className="check-label"><input type="checkbox" checked={scheduleEnabled} onChange={(event) => setScheduleEnabled(event.target.checked)} /> Include in scheduled runs</label>
       </div>
-      <div className="settings-grid"><label>Route preset<select aria-label="Route preset" value={preset} onChange={(event) => setPreset(event.target.value as ModelPreset)}>{Object.entries(MODEL_PRESET_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><button className="secondary compact" type="button" onClick={() => setRoutes(presetRoutes(preset))}>Apply preset</button></div>
+      <div className="settings-grid"><label>Route preset<select aria-label="Route preset" value={preset} onChange={(event) => setPreset(event.target.value as ModelPreset)}>{Object.entries(MODEL_PRESET_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><button className="secondary compact" type="button" onClick={() => setRoutes(presetRoutes(preset))}>Apply preset</button><label>Intelligence level<select aria-label="Intelligence level" value={intelligence} onChange={(event) => setIntelligence(event.target.value as IntelligenceLevel)}>{Object.entries(INTELLIGENCE_LEVEL_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><button className="secondary compact" type="button" onClick={() => setRoutes(routesForIntelligence(intelligence, routes))}>Apply intelligence</button></div>
       <section className="detail-section" aria-labelledby={`qa-profiles-${repo.full_name}`}><div className="section-heading"><h4 id={`qa-profiles-${repo.full_name}`}>QA profiles</h4><button className="secondary compact" type="button" onClick={() => setQaProfiles([...qaProfiles, profileForEditing({ key: `qa-${qaProfiles.length + 1}`, title: "New QA profile", surfaces: [surface], checks: [], required_tools: [], reviewer_role: "qa_assistant", enabled: true })])}>Add QA profile</button></div>{qaProfiles.length ? <div className="package-list">{qaProfiles.map((profile, index) => <fieldset className="qa-profile" key={`${profile.key}-${index}`}><legend>{profile.title || profile.key}</legend><div className="settings-grid"><label>Profile key<input value={profile.key} onChange={(event) => setQaProfiles(qaProfiles.map((item, itemIndex) => itemIndex === index ? { ...item, key: event.target.value } : item))} /></label><label>Title<input value={profile.title} onChange={(event) => setQaProfiles(qaProfiles.map((item, itemIndex) => itemIndex === index ? { ...item, title: event.target.value } : item))} /></label><label>Surface<select value={profile.surfaces?.[0] ?? "custom"} onChange={(event) => setQaProfiles(qaProfiles.map((item, itemIndex) => itemIndex === index ? { ...item, surfaces: [event.target.value] } : item))}><option value="web_ui">Web UI</option><option value="cli">CLI</option><option value="api">API</option><option value="library">Library</option><option value="data_pipeline">Data pipeline</option><option value="custom">Custom</option></select></label><label>Reviewer role<input value={profile.reviewer_role ?? "qa_assistant"} onChange={(event) => setQaProfiles(qaProfiles.map((item, itemIndex) => itemIndex === index ? { ...item, reviewer_role: event.target.value } : item))} /></label><label className="wide">Checks<textarea value={(profile.checks ?? []).join("\n")} onChange={(event) => setQaProfiles(qaProfiles.map((item, itemIndex) => itemIndex === index ? { ...item, checks: splitLines(event.target.value) } : item))} placeholder="One deterministic check per line" /></label><label className="wide">Required tools<textarea value={(profile.required_tools ?? []).join("\n")} onChange={(event) => setQaProfiles(qaProfiles.map((item, itemIndex) => itemIndex === index ? { ...item, required_tools: splitLines(event.target.value) } : item))} placeholder="One tool per line" /></label><label className="check-label"><input type="checkbox" checked={profile.enabled !== false} onChange={(event) => setQaProfiles(qaProfiles.map((item, itemIndex) => itemIndex === index ? { ...item, enabled: event.target.checked } : item))} /> Enabled</label><button className="secondary compact" type="button" onClick={() => setQaProfiles(qaProfiles.filter((_item, itemIndex) => itemIndex !== index))}>Remove profile</button></div></fieldset>)}</div> : <p className="muted">No repository-specific QA profiles configured.</p>}</section>
-      <div className="route-grid">{ROUTE_DEFAULTS.map(({ role, label }) => <fieldset key={role}><legend>{label}</legend><label>Model<input value={routes[role].model} onChange={(event) => setRoutes({ ...routes, [role]: { ...routes[role], model: event.target.value } })} /></label><label>Reasoning<select value={routes[role].effort} onChange={(event) => setRoutes({ ...routes, [role]: { ...routes[role], effort: event.target.value } })}><option>low</option><option>medium</option><option>high</option><option>xhigh</option></select></label></fieldset>)}</div>
+      <div className="route-grid">{ROUTE_DEFAULTS.map(({ role, label }) => <fieldset key={role}><legend>{label}</legend><label>Model<input value={routes[role].model} onChange={(event) => setRoutes({ ...routes, [role]: { ...routes[role], model: event.target.value } })} /></label><label>Intelligence<select value={routes[role].effort} onChange={(event) => setRoutes({ ...routes, [role]: { ...routes[role], effort: event.target.value } })}><option>low</option><option>medium</option><option>high</option><option>xhigh</option></select></label></fieldset>)}</div>
       <button className="primary compact" onClick={save} disabled={saving}>{saving ? "Saving..." : "Save controls"}</button>
     </details>
-  </article>;
+  </section>;
 }
 
 function ModelPolicyPanel({ config, onSaved }: { config: ModelConfig; onSaved: () => void }) {
   const [scope, setScope] = useState<"global" | "runtime">("global");
   const [runtime, setRuntime] = useState(config.runtimes[0] ?? "");
   const [preset, setPreset] = useState<ModelPreset>("balanced");
+  const [intelligence, setIntelligence] = useState<IntelligenceLevel>("balanced");
   const [routes, setRoutes] = useState<Record<string, EditableRoute>>(() => initialRoutesFromProfiles(config.global_profiles));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -395,7 +871,7 @@ function ModelPolicyPanel({ config, onSaved }: { config: ModelConfig; onSaved: (
   useEffect(() => {
     if (scope === "runtime" && !runtime && config.runtimes[0]) setRuntime(config.runtimes[0]);
     setRoutes(initialRoutesFromProfiles(selectedProfiles));
-    setPreset("balanced");
+    setPreset("balanced"); setIntelligence("balanced");
     setError(null);
   }, [config, scope, runtime]);
   const save = async () => {
@@ -418,8 +894,8 @@ function ModelPolicyPanel({ config, onSaved }: { config: ModelConfig; onSaved: (
     <p className="muted">Runtime routes override global routes. Repository, course, package, and stage routes can refine them further.</p>
     <details className="settings"><summary>Configure global/runtime routes</summary>
       <div className="settings-grid"><label>Configuration layer<select value={scope} onChange={(event) => setScope(event.target.value as "global" | "runtime")}><option value="global">Global defaults</option><option value="runtime">Runtime override</option></select></label>{scope === "runtime" && <label>Runtime<select value={runtime} onChange={(event) => setRuntime(event.target.value)} disabled={!config.runtimes.length}>{config.runtimes.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>}</div>
-      <div className="settings-grid"><label>Route preset<select aria-label="Route preset" value={preset} onChange={(event) => setPreset(event.target.value as ModelPreset)}>{Object.entries(MODEL_PRESET_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><button className="secondary compact" type="button" onClick={() => setRoutes(presetRoutes(preset))}>Apply preset</button></div>
-      <div className="route-grid">{ROUTE_DEFAULTS.map(({ role, label }) => <fieldset key={role}><legend>{label}</legend><label>Model<input value={routes[role].model} onChange={(event) => setRoutes({ ...routes, [role]: { ...routes[role], model: event.target.value } })} /></label><label>Reasoning<select value={routes[role].effort} onChange={(event) => setRoutes({ ...routes, [role]: { ...routes[role], effort: event.target.value } })}><option>low</option><option>medium</option><option>high</option><option>xhigh</option></select></label></fieldset>)}</div>
+      <div className="settings-grid"><label>Route preset<select aria-label="Route preset" value={preset} onChange={(event) => setPreset(event.target.value as ModelPreset)}>{Object.entries(MODEL_PRESET_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><button className="secondary compact" type="button" onClick={() => setRoutes(presetRoutes(preset))}>Apply preset</button><label>Intelligence level<select aria-label="Intelligence level" value={intelligence} onChange={(event) => setIntelligence(event.target.value as IntelligenceLevel)}>{Object.entries(INTELLIGENCE_LEVEL_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><button className="secondary compact" type="button" onClick={() => setRoutes(routesForIntelligence(intelligence, routes))}>Apply intelligence</button></div>
+      <div className="route-grid">{ROUTE_DEFAULTS.map(({ role, label }) => <fieldset key={role}><legend>{label}</legend><label>Model<input value={routes[role].model} onChange={(event) => setRoutes({ ...routes, [role]: { ...routes[role], model: event.target.value } })} /></label><label>Intelligence<select value={routes[role].effort} onChange={(event) => setRoutes({ ...routes, [role]: { ...routes[role], effort: event.target.value } })}><option>low</option><option>medium</option><option>high</option><option>xhigh</option></select></label></fieldset>)}</div>
       <button className="primary compact" onClick={save} disabled={saving || (scope === "runtime" && !runtime)}>{saving ? "Saving..." : "Save global/runtime routes"}</button>{error && <p className="warning" role="alert">{error}</p>}
     </details>
   </section>;
@@ -464,13 +940,174 @@ function UsagePolicyPanel({ config, onSaved }: { config: ModelConfig; onSaved: (
   return <section className="model-policy-panel" aria-labelledby="usage-policy-title"><div className="section-heading"><div><p className="eyebrow">TOKEN CONTROL</p><h2 id="usage-policy-title">Token safeguards</h2></div></div><p className="muted">Limits use provider-reported tokens only. Unknown telemetry remains unknown and can block autonomous work.</p><div className="settings-grid"><label>Daily token limit<input inputMode="numeric" value={dailyLimit} onChange={(event) => setDailyLimit(event.target.value)} placeholder="No limit" /></label><label className="check-label"><input type="checkbox" checked={blockOnUnknown} onChange={(event) => setBlockOnUnknown(event.target.checked)} /> Block when telemetry is unknown</label></div><div className="package-list">{limits.map((item, index) => <fieldset className="qa-profile" key={`${item.model}-${index}`}><legend>Model limit</legend><div className="settings-grid"><label>Model<input value={item.model} onChange={(event) => setLimits(limits.map((row, rowIndex) => rowIndex === index ? { ...row, model: event.target.value } : row))} placeholder="codex/gpt-5.3-codex-spark" /></label><label>Daily tokens<input inputMode="numeric" value={item.limit} onChange={(event) => setLimits(limits.map((row, rowIndex) => rowIndex === index ? { ...row, limit: event.target.value } : row))} /></label><button className="secondary compact" type="button" onClick={() => setLimits(limits.filter((_row, rowIndex) => rowIndex !== index))}>Remove limit</button></div></fieldset>)}</div><div className="action-row"><button className="secondary compact" type="button" onClick={() => setLimits([...limits, { model: "", limit: "" }])}>Add model limit</button><button className="primary compact" type="button" onClick={save} disabled={saving}>{saving ? "Saving..." : "Save token safeguards"}</button></div>{error && <p className="warning" role="alert">{error}</p>}</section>;
 }
 
+type RegistrationStep = 1 | 2 | 3 | 4;
+
+function ChoiceButton({ selected, label, description, onClick }: { selected: boolean; label: string; description: string; onClick: () => void }) {
+  return <button className={`choice-card${selected ? " selected" : ""}`} type="button" aria-pressed={selected} onClick={onClick}><strong>{label}</strong><span>{description}</span></button>;
+}
+
 function RegisterPanel({ onRegistered }: { onRegistered: () => void }) {
-  const [open, setOpen] = useState(false); const [fullName, setFullName] = useState(""); const [localPath, setLocalPath] = useState("");
-  const [planningDoc, setPlanningDoc] = useState("docs/IMPLEMENTATION_PLAN.md"); const [channel, setChannel] = useState("notifications"); const [saving, setSaving] = useState(false); const [error, setError] = useState<string | null>(null);
-  const submit = async (event: FormEvent) => { event.preventDefault(); setSaving(true); setError(null); try { await callGateway("repos/register", { full_name: fullName, local_path: localPath, planning_doc: planningDoc, notification_route: channel }); setFullName(""); setLocalPath(""); setOpen(false); onRegistered(); } catch (reason) { setError(String(reason)); } finally { setSaving(false); } };
-  return <section className="register-panel" aria-labelledby="register-title"><div className="section-heading"><div><p className="eyebrow">REPOSITORY REGISTRY</p><h2 id="register-title">Set a new course</h2></div><button className="secondary" onClick={() => setOpen(!open)}>{open ? "Close" : "Register repository"}</button></div>
-    {open && <form className="register-form" onSubmit={submit}><label>GitHub repository<input required value={fullName} onChange={(event) => setFullName(event.target.value)} placeholder="owner/repository" /></label><label>Local path<input required value={localPath} onChange={(event) => setLocalPath(event.target.value)} placeholder="/workspace/repository" /></label><label>Planning document<input required value={planningDoc} onChange={(event) => setPlanningDoc(event.target.value)} /></label><label>Discord route<input value={channel} onChange={(event) => setChannel(event.target.value)} /></label><button className="primary" type="submit" disabled={saving}>{saving ? "Registering..." : "Register repository"}</button>{error && <p className="warning" role="alert">{error}</p>}</form>}
+  const [open, setOpen] = useState(false);
+  const [step, setStep] = useState<RegistrationStep>(1);
+  const [sourceMode, setSourceMode] = useState<"github" | "local">("github");
+  const [fullName, setFullName] = useState("");
+  const [selectedLocalRepository, setSelectedLocalRepository] = useState("");
+  const [selectedLocalPath, setSelectedLocalPath] = useState("");
+  const [channel, setChannel] = useState("");
+  const [options, setOptions] = useState<RegistrationOptions | null>(null);
+  const [optionsLoading, setOptionsLoading] = useState(false);
+  const [optionsError, setOptionsError] = useState<string | null>(null);
+  const [phase, setPhase] = useState("takeover");
+  const [goal, setGoal] = useState("");
+  const [cloneAllowed, setCloneAllowed] = useState(true);
+  const [operationMode, setOperationMode] = useState("supervised");
+  const [completionPolicy, setCompletionPolicy] = useState("owner_approval");
+  const [checkpointPolicy, setCheckpointPolicy] = useState("major_changes");
+  const [deploymentAuthority, setDeploymentAuthority] = useState("always_ask");
+  const [intelligenceLevel, setIntelligenceLevel] = useState("balanced");
+  const [surface, setSurface] = useState("web_ui");
+  const [uatRequired, setUatRequired] = useState(true);
+  const [screenshotsRequired, setScreenshotsRequired] = useState(true);
+  const [deploymentRequired, setDeploymentRequired] = useState(false);
+  const [inspection, setInspection] = useState<RegistrationResult["discovery"] | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [followUp, setFollowUp] = useState<string | null>(null);
+  const [notificationStatus, setNotificationStatus] = useState<string | null>(null);
+  const [notificationDelivery, setNotificationDelivery] = useState<string | null>(null);
+  const [notificationError, setNotificationError] = useState<string | null>(null);
+
+  useEffect(() => { if (surface === "web_ui") setScreenshotsRequired(true); }, [surface]);
+
+  const loadOptions = async () => {
+    if (optionsLoading) return;
+    setOptionsLoading(true); setOptionsError(null);
+    try {
+      const discovered = await callGateway<RegistrationOptions>("registration/options");
+      setOptions(discovered);
+      setChannel((current) => current || discovered.default_discord_route || discovered.discord_routes[0]?.route || "");
+    } catch (reason) {
+      setOptionsError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setOptionsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (open && options === null && !optionsLoading && optionsError === null) void loadOptions();
+  }, [open, options, optionsLoading, optionsError]);
+
+  useEffect(() => {
+    if (!open || !options?.discord_discovery_pending) return undefined;
+    const timer = window.setTimeout(() => void loadOptions(), 2_000);
+    return () => window.clearTimeout(timer);
+  }, [open, options?.discord_discovery_pending, optionsLoading]);
+
+  const chooseLocalClone = (localPath: string) => {
+    const clone = options?.local_clones.find((item) => item.local_path === localPath);
+    setSelectedLocalPath(localPath);
+    setFullName(clone?.full_name ?? "");
+    setInspection(null);
+  };
+
+  const chooseLocalRepository = (repository: string) => {
+    setSelectedLocalRepository(repository);
+    const candidates = (options?.local_clones ?? []).filter((item) => item.full_name === repository);
+    const selected = [...candidates].sort((left, right) => {
+      const leftMain = ["main", "master"].includes(left.branch ?? "") ? 0 : 1;
+      const rightMain = ["main", "master"].includes(right.branch ?? "") ? 0 : 1;
+      return leftMain - rightMain || Number(Boolean(left.dirty)) - Number(Boolean(right.dirty)) || left.local_path.length - right.local_path.length;
+    })[0];
+    chooseLocalClone(selected?.local_path ?? "");
+  };
+
+  const chooseSourceMode = (mode: "github" | "local") => {
+    setSourceMode(mode); setInspection(null); setError(null);
+    if (mode === "github") {
+      setSelectedLocalRepository(""); setSelectedLocalPath(""); setFullName("");
+    } else {
+      const first = options?.local_clones.find((item) => !item.registered);
+      chooseLocalRepository(first?.full_name ?? "");
+    }
+  };
+
+  const inspect = async () => {
+    if (saving) return;
+    setSaving(true); setError(null);
+    try {
+      const normalized = normalizeGithubRepository(fullName);
+      const result = await callGateway<RegistrationResult>("repos/inspect", {
+        full_name: normalized,
+        ...(sourceMode === "local" && selectedLocalPath ? { local_path: selectedLocalPath } : {}),
+      });
+      setFullName(normalized); setInspection(result.discovery ?? null); setStep(2);
+    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { setSaving(false); }
+  };
+
+  const register = async () => {
+    if (saving) return;
+    if (completionPolicy === "auto_merge" && operationMode !== "autonomous") {
+      setError("Auto-merge requires Autonomous operation. Choose Autonomous or keep owner approval.");
+      return;
+    }
+    setSaving(true); setError(null); setFollowUp(null); setNotificationStatus(null); setNotificationDelivery(null); setNotificationError(null);
+    try {
+      const result = await callGateway<RegistrationResult>("repos/register", {
+        full_name: normalizeGithubRepository(fullName),
+        ...(sourceMode === "local" && selectedLocalPath ? { local_path: selectedLocalPath } : {}),
+        notification_route: channel,
+        phase,
+        goal: goal.trim() || undefined,
+        clone_allowed: cloneAllowed,
+        operation_mode: operationMode,
+        completion_policy: completionPolicy,
+        allow_autonomous_merge: completionPolicy === "auto_merge",
+        milestone_approval: checkpointPolicy === "each_milestone" ? "each_milestone" : checkpointPolicy === "updates_only" ? "none" : "mode_default",
+        checkpoint_policy: checkpointPolicy,
+        deployment_authority: deploymentAuthority,
+        intelligence_level: intelligenceLevel,
+        detected_surface: surface,
+        surfaces: [surface],
+        uat_required: uatRequired,
+        screenshots_required: screenshotsRequired,
+        deployment_required: deploymentRequired,
+        planning_doc_choice: inspection?.planning_document?.path,
+      });
+      setOpen(false); setStep(1); setInspection(null); setFullName(""); setSelectedLocalRepository(""); setSelectedLocalPath(""); setSourceMode("github");
+      setFollowUp(result.follow_up_message ?? "Repository registered. Number One will begin the initial planning conversation before work starts.");
+      setNotificationStatus(result.notification_status ?? "unavailable"); setNotificationDelivery(result.notification_delivery ?? null); setNotificationError(result.notification_error ?? null);
+      onRegistered();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { setSaving(false); }
+  };
+
+  const advance = () => { if (step === 1) void inspect(); else if (step === 4) void register(); else setStep((step + 1) as RegistrationStep); };
+  const submit = (event: FormEvent) => { event.preventDefault(); advance(); };
+  const selectedChannel = options?.discord_routes.find((item) => item.route === channel);
+  const availableLocalClones = options?.local_clones ?? [];
+  const localRepositories = [...new Map(availableLocalClones.map((clone) => [clone.full_name, clone])).values()];
+  const selectedRepositoryClones = availableLocalClones.filter((clone) => clone.full_name === selectedLocalRepository);
+  const sourceReady = sourceMode === "local" ? Boolean(selectedLocalPath && fullName) : Boolean(fullName.trim());
+  const stepLabels = ["Repository", "Mission", "Controls", "Evidence"];
+  return <section className="register-panel" aria-labelledby="register-title"><div className="section-heading"><div><p className="eyebrow">REPOSITORY REGISTRY</p><h3 id="register-title">Set a course</h3></div><button className="secondary" onClick={() => { setOpen(!open); setError(null); }}>{open ? "Close" : "Register repository"}</button></div>
+    <p className="muted">Give Make It So the repository and Discord route. Inspection fills in the facts; Number One handles the nuanced questions conversationally.</p>
+    {open && <form className="onboarding-shell" onSubmit={submit}>
+      <div className="onboarding-steps" aria-label="Registration steps">{stepLabels.map((label, index) => <button key={label} type="button" className={step === index + 1 ? "active" : step > index + 1 ? "complete" : ""} onClick={() => { if (index === 0 || inspection) setStep((index + 1) as RegistrationStep); }}><span>{index + 1}</span>{label}</button>)}</div>
+      {step === 1 && <div className="onboarding-step"><div><h4>Start with the source</h4><p className="step-note">Choose a checkout already on this machine, or point Make It So at a GitHub repository. Inspection is read-only and does not contact Discord.</p></div><div className="source-switch" role="group" aria-label="Repository source"><button type="button" className={sourceMode === "local" ? "selected" : ""} aria-pressed={sourceMode === "local"} onClick={() => chooseSourceMode("local")}>Local clone</button><button type="button" className={sourceMode === "github" ? "selected" : ""} aria-pressed={sourceMode === "github"} onClick={() => chooseSourceMode("github")}>GitHub repository</button></div>{optionsLoading && options === null && <p className="step-note" role="status">Scanning local repositories...</p>}{optionsError && <p className="warning" role="alert">Could not load registration choices: {optionsError} <button type="button" className="text-button" onClick={() => void loadOptions()}>Retry</button></p>}{sourceMode === "local" ? <div className="onboarding-fields"><label>Local repository<select required value={selectedLocalRepository} onChange={(event) => chooseLocalRepository(event.target.value)} disabled={optionsLoading && options === null}><option value="">{localRepositories.length ? "Select a repository" : "No verified GitHub clones found"}</option>{localRepositories.map((clone) => <option key={clone.full_name} value={clone.full_name} disabled={clone.registered}>{clone.full_name}{clone.registered ? " - already registered" : ""}</option>)}</select></label>{selectedRepositoryClones.length > 1 && <label>Checkout<select required value={selectedLocalPath} onChange={(event) => chooseLocalClone(event.target.value)}>{selectedRepositoryClones.map((clone) => <option key={clone.local_path} value={clone.local_path}>{clone.branch ?? "detached"}{clone.dirty ? " - modified" : " - clean"} - {clone.local_path}</option>)}</select></label>}</div> : <label className="wide-field">GitHub repository<input required value={fullName} onChange={(event) => { setFullName(event.target.value); setInspection(null); }} placeholder="owner/repository or GitHub URL" /></label>}<label className="wide-field">Discord channel<select required value={channel} onChange={(event) => setChannel(event.target.value)} disabled={optionsLoading && options === null || !options?.discord_routes.length}><option value="">Select a Discord channel</option>{options?.discord_routes.map((route) => <option key={route.route} value={route.route}>{route.label}{route.alias && route.alias !== route.name ? ` (${route.alias})` : ""}</option>)}</select></label>{options?.discord_discovery_pending && <p className="step-note" role="status">Loading additional Discord channels in the background...</p>}{options?.warnings?.map((warning) => <p className="warning" key={warning}>{warning}</p>)}{inspection && <DiscoveryCard discovery={inspection} />}</div>}
+      {step === 2 && <div className="onboarding-step"><div><h4>What are we setting out to do?</h4><p className="step-note">A sentence is enough. Number One will refine the outcome, users, scope, and exit criteria in Discord.</p></div>{inspection && <DiscoveryCard discovery={inspection} />}<div className="choice-grid"><ChoiceButton selected={phase === "greenfield"} label="New project" description="Create the course and repository foundation after approval." onClick={() => setPhase("greenfield")} /><ChoiceButton selected={phase === "takeover"} label="Continue existing work" description="Understand the current state and drive the remaining work." onClick={() => setPhase("takeover")} /><ChoiceButton selected={phase === "feature"} label="Add a feature" description="Plan a substantial change for a shipped product." onClick={() => setPhase("feature")} /></div><label className="wide-field">Desired outcome <textarea value={goal} onChange={(event) => setGoal(event.target.value)} placeholder="What should this course make true for its users? (optional if you want Number One to lead with this question)" /></label></div>}
+      {step === 3 && <div className="onboarding-step"><div><h4>Set the operating rules</h4><p className="step-note">These are repeatable controls, so they belong here instead of in a long Discord questionnaire.</p></div><h5>Autonomy</h5><div className="choice-grid"><ChoiceButton selected={operationMode === "advisory"} label="Advisory" description="Inspect and recommend; never mutate." onClick={() => setOperationMode("advisory")} /><ChoiceButton selected={operationMode === "supervised"} label="Supervised" description="Act after approval at the configured checkpoints." onClick={() => setOperationMode("supervised")} /><ChoiceButton selected={operationMode === "autonomous"} label="Autonomous" description="Continue safely and report meaningful transitions." onClick={() => setOperationMode("autonomous")} /></div><h5>Completion</h5><div className="choice-grid"><ChoiceButton selected={completionPolicy === "owner_approval"} label="Owner approval" description="Number One can prepare completion; you merge." onClick={() => setCompletionPolicy("owner_approval")} /><ChoiceButton selected={completionPolicy === "control_plane_complete"} label="Make It So complete" description="Complete the course after all gates, without merging." onClick={() => setCompletionPolicy("control_plane_complete")} /><ChoiceButton selected={completionPolicy === "auto_merge"} label="Auto-merge" description="Only available with autonomous operation and merge gates." onClick={() => setCompletionPolicy("auto_merge")} /></div><div className="onboarding-fields"><label>Milestone check-ins<select value={checkpointPolicy} onChange={(event) => setCheckpointPolicy(event.target.value)}><option value="each_milestone">Every milestone</option><option value="major_changes">Major changes only</option><option value="updates_only">Updates only</option></select></label><label>Intelligence level<select value={intelligenceLevel} onChange={(event) => setIntelligenceLevel(event.target.value)}><option value="economy">Economy</option><option value="balanced">Balanced</option><option value="deep">Deep</option><option value="maximum">Maximum</option></select></label><label>Deployment authority<select value={deploymentAuthority} onChange={(event) => setDeploymentAuthority(event.target.value)}><option value="always_ask">Always ask</option><option value="non_production">Allow verified non-production</option></select></label></div></div>}
+      {step === 4 && <div className="onboarding-step"><div><h4>Choose the proof</h4><p className="step-note">Tests remain required for every milestone. These choices define the extra evidence Number One expects.</p></div><h5>Detected application surface</h5><div className="choice-grid"><ChoiceButton selected={surface === "web_ui"} label="Web UI" description="Include usability, visual, and screenshot evidence." onClick={() => setSurface("web_ui")} /><ChoiceButton selected={surface === "cli"} label="Command line" description="Focus on commands, output, errors, and workflows." onClick={() => setSurface("cli")} /><ChoiceButton selected={surface === "api"} label="API or service" description="Focus on contracts, integration, and operational proof." onClick={() => setSurface("api")} /><ChoiceButton selected={surface === "library"} label="Library" description="Focus on public behavior, compatibility, and examples." onClick={() => setSurface("library")} /></div><div className="choice-grid compact-choices"><ChoiceButton selected={uatRequired} label="UAT required" description="Require human-facing acceptance evidence." onClick={() => setUatRequired(!uatRequired)} /><ChoiceButton selected={screenshotsRequired} label="Screenshots required" description={surface === "web_ui" ? "Capture UI evidence at milestone completion." : "Capture screenshots when they add useful proof."} onClick={() => setScreenshotsRequired(!screenshotsRequired)} /><ChoiceButton selected={deploymentRequired} label="Deployment is an exit gate" description="Keep completion separate if this remains off." onClick={() => setDeploymentRequired(!deploymentRequired)} /></div><div className="review-box"><strong>Ready to register</strong><span>{fullName} will be registered on <b>{selectedChannel?.label ?? channel}</b>. Number One will receive the choices above, ask one unresolved question, and wait for course approval before work starts.</span></div></div>}
+      <div className="onboarding-actions">{step > 1 && <button className="secondary" type="button" onClick={() => setStep((step - 1) as RegistrationStep)}>Back</button>}<span className="action-spacer" />{step < 4 ? <button className="primary" type="button" onClick={advance} disabled={saving || optionsLoading || !channel || (step === 1 && !sourceReady)}>{saving ? "Inspecting..." : step === 1 ? "Inspect repository" : "Continue"}</button> : <button className="primary" type="button" onClick={advance} disabled={saving}>{saving ? "Registering and starting planning..." : "Register and start planning"}</button>}</div>{error && <p className="warning" role="alert">{error}</p>}
+    </form>}
+    {followUp && <div className="inline-status" role="status"><p>{followUp}</p><strong className={notificationStatus === "sent" ? "success" : "warning"}>{notificationStatus === "sent" ? notificationDelivery === "number_one_agent" ? "Number One planning message sent." : notificationDelivery === "message_fallback" ? "Planning message sent via fallback; Number One session was unavailable." : "Discord follow-up sent." : notificationStatus === "failed" ? `Number One planning handoff failed${notificationError ? `: ${notificationError}` : "."}` : "Number One planning handoff was not confirmed."}</strong></div>}
   </section>;
+}
+
+function DiscoveryCard({ discovery }: { discovery: NonNullable<RegistrationResult["discovery"]> }) {
+  const clone = discovery.local_clone;
+  const plan = discovery.planning_document;
+  return <div className="discovery-card" role="status"><strong>Inspection complete</strong><div><span className={clone?.cloned ? "good" : "warn"}>{clone?.cloned ? "Local clone found" : "No local clone found"}</span><small>{clone?.path ?? "Managed workspace will be determined by Number One."}</small></div><div><span className={plan?.found ? "good" : "warn"}>{plan?.found ? "Planning document found" : "Planning document needs confirmation"}</span><small>{plan?.path ?? "Number One will ask for the plan source."}</small></div>{discovery.git?.branch && <div><span>Git state</span><small>{discovery.git.branch}{discovery.git.dirty ? " · uncommitted changes" : " · clean"}</small></div>}</div>;
 }
 
 function GreenfieldPanel({ onCreated }: { onCreated: () => void }) {
@@ -554,6 +1191,7 @@ function CourseModelSettings({ repository, repo, course, onSaved }: { repository
   const [stageName, setStageName] = useState("implementation");
   const [packageKey, setPackageKey] = useState(course.work_packages[0]?.key ?? "");
   const [preset, setPreset] = useState<ModelPreset>("balanced");
+  const [intelligence, setIntelligence] = useState<IntelligenceLevel>("balanced");
   const [routes, setRoutes] = useState<Record<string, EditableRoute>>(() => initialRoutesFromProfiles(course.model_profiles));
   const [stageRoute, setStageRoute] = useState<EditableRoute>(() => initialStageRoute(course.model_profiles?.["stage:implementation"], stageName));
   const [saving, setSaving] = useState(false);
@@ -564,7 +1202,7 @@ function CourseModelSettings({ repository, repo, course, onSaved }: { repository
   useEffect(() => {
     if (layer === "stage") setStageRoute(initialStageRoute(stageProfiles?.[`stage:${stageName}`], stageName));
     else setRoutes(initialRoutesFromProfiles(selectedProfiles));
-    setPreset("balanced");
+    setPreset("balanced"); setIntelligence("balanced");
     setError(null);
   }, [course, layer, packageKey, stageName, stageScope]);
   const save = async () => {
@@ -601,8 +1239,8 @@ function CourseModelSettings({ repository, repo, course, onSaved }: { repository
       {layer === "stage" && <><label>Stage scope<select value={stageScope} onChange={(event) => setStageScope(event.target.value as "course" | "work_package")}><option value="course">Course stage</option><option value="work_package">Work package stage</option></select></label><label>Stage name<input value={stageName} onChange={(event) => setStageName(event.target.value)} pattern="[A-Za-z0-9._-]+" /></label></>}
       {(layer === "work_package" || (layer === "stage" && stageScope === "work_package")) && <label>Work package<select value={packageKey} onChange={(event) => setPackageKey(event.target.value)} disabled={!course.work_packages.length}>{course.work_packages.map((item) => <option key={item.key} value={item.key}>{item.key}</option>)}</select></label>}
     </div>
-    {layer !== "stage" && <div className="settings-grid"><label>Route preset<select aria-label="Course route preset" value={preset} onChange={(event) => setPreset(event.target.value as ModelPreset)}>{Object.entries(MODEL_PRESET_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><button className="secondary compact" type="button" onClick={() => setRoutes(presetRoutes(preset))}>Apply course preset</button></div>}
-    {layer === "stage" ? <fieldset className="stage-route"><legend>{stageName || "Workflow stage"} route</legend><label>Model<input value={stageRoute.model} onChange={(event) => setStageRoute({ ...stageRoute, model: event.target.value })} /></label><label>Reasoning<select value={stageRoute.effort} onChange={(event) => setStageRoute({ ...stageRoute, effort: event.target.value })}><option>low</option><option>medium</option><option>high</option><option>xhigh</option></select></label></fieldset> : <div className="route-grid">{ROUTE_DEFAULTS.map(({ role, label }) => <fieldset key={role}><legend>{label}</legend><label>Model<input value={routes[role].model} onChange={(event) => setRoutes({ ...routes, [role]: { ...routes[role], model: event.target.value } })} /></label><label>Reasoning<select value={routes[role].effort} onChange={(event) => setRoutes({ ...routes, [role]: { ...routes[role], effort: event.target.value } })}><option>low</option><option>medium</option><option>high</option><option>xhigh</option></select></label></fieldset>)}</div>}
+    {layer !== "stage" && <div className="settings-grid"><label>Route preset<select aria-label="Course route preset" value={preset} onChange={(event) => setPreset(event.target.value as ModelPreset)}>{Object.entries(MODEL_PRESET_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><button className="secondary compact" type="button" onClick={() => setRoutes(presetRoutes(preset))}>Apply course preset</button><label>Intelligence level<select aria-label="Course intelligence level" value={intelligence} onChange={(event) => setIntelligence(event.target.value as IntelligenceLevel)}>{Object.entries(INTELLIGENCE_LEVEL_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><button className="secondary compact" type="button" onClick={() => setRoutes(routesForIntelligence(intelligence, routes))}>Apply course intelligence</button></div>}
+    {layer === "stage" ? <fieldset className="stage-route"><legend>{stageName || "Workflow stage"} route</legend><label>Model<input value={stageRoute.model} onChange={(event) => setStageRoute({ ...stageRoute, model: event.target.value })} /></label><label>Intelligence<select value={stageRoute.effort} onChange={(event) => setStageRoute({ ...stageRoute, effort: event.target.value })}><option>low</option><option>medium</option><option>high</option><option>xhigh</option></select></label></fieldset> : <div className="route-grid">{ROUTE_DEFAULTS.map(({ role, label }) => <fieldset key={role}><legend>{label}</legend><label>Model<input value={routes[role].model} onChange={(event) => setRoutes({ ...routes, [role]: { ...routes[role], model: event.target.value } })} /></label><label>Intelligence<select value={routes[role].effort} onChange={(event) => setRoutes({ ...routes, [role]: { ...routes[role], effort: event.target.value } })}><option>low</option><option>medium</option><option>high</option><option>xhigh</option></select></label></fieldset>)}</div>}
     <section className="route-preview" aria-labelledby={`route-preview-${course.key}`}><h3 id={`route-preview-${course.key}`}>Effective route preview</h3>{ROUTE_DEFAULTS.map(({ role, label, model, effort }) => { const route = effectiveRoute(repo, course, previewPackage, role, model, effort, stageName); return <div key={role}><span>{label}</span><strong>{route.model}</strong><small>{route.effort} / {route.source}</small></div>; })}</section>
     <button className="primary compact" onClick={save} disabled={saving || ((layer === "work_package" || (layer === "stage" && stageScope === "work_package")) && !selectedPackage)}>{saving ? "Saving..." : "Save model routes"}</button>{error && <p className="warning" role="alert">{error}</p>}
   </details>;
@@ -616,6 +1254,14 @@ function SchedulePanel({ status, onRefresh }: { status: ScheduleStatus | null; o
     setReconcileEvery(status?.jobs.find((job) => job.name === "make-it-so-reconcile")?.every ?? "5m");
     setReviewEvery(status?.jobs.find((job) => job.name === "make-it-so-course-review")?.every ?? "2h");
   }, [status]);
+  const runNow = async () => {
+    setMessage(null);
+    try {
+      const result = await callGateway<{ status?: string }>("run/start", { kind: "review", force_replan: true });
+      setMessage(result.status === "started" ? "Course review started." : "Course review requested.");
+      onRefresh();
+    } catch (reason) { setMessage(String(reason)); }
+  };
   const action = async (path: string, params: Record<string, unknown> = {}) => {
     setMessage(null);
     try {
@@ -624,10 +1270,143 @@ function SchedulePanel({ status, onRefresh }: { status: ScheduleStatus | null; o
       onRefresh();
     } catch (reason) { setMessage(String(reason)); }
   };
-  return <section className="schedule-section" aria-labelledby="schedule-title"><div className="section-heading"><div><p className="eyebrow">AUTOMATION</p><h2 id="schedule-title">Managed schedules</h2></div><button className="secondary compact" onClick={() => action("install")}>Reconcile</button></div>
+  const schedulesMissing = status?.jobs?.some((job) => job.health === "missing") ?? false;
+  return <section className="schedule-section" aria-labelledby="schedule-title"><div className="section-heading"><div><p className="eyebrow">AUTOMATION</p><h2 id="schedule-title">Managed schedules</h2></div><div className="action-row">{schedulesMissing && <button className="primary compact" onClick={() => action("install")}>Install schedules</button>}<button className="secondary compact" onClick={runNow}>Run course review</button></div></div>
     <div className="schedule-grid">{status?.jobs?.map((job) => <div className="schedule-row" key={job.name}><div><strong>{job.name}</strong><span>Every {job.every}</span></div><span className={`health ${job.health}`}>{job.health}</span><div className="action-row"><button className="secondary compact" onClick={() => action(job.enabled ? "pause" : "resume", { name: job.name })}>{job.enabled ? "Pause" : "Resume"}</button><button className="secondary compact danger" onClick={() => action("remove", { name: job.name })}>Remove</button></div></div>) ?? <p className="muted">Schedule state is unavailable.</p>}</div>
     <div className="settings-grid schedule-editor"><label>Reconcile cadence<input aria-label="Reconcile cadence" value={reconcileEvery} onChange={(event) => setReconcileEvery(event.target.value)} pattern="[1-9][0-9]*(s|m|h|d)" /></label><label>Course review cadence<input aria-label="Course review cadence" value={reviewEvery} onChange={(event) => setReviewEvery(event.target.value)} pattern="[1-9][0-9]*(s|m|h|d)" /></label><button className="primary compact" onClick={() => action("edit", { reconcile_every: reconcileEvery, review_every: reviewEvery })}>Save cadence</button></div>
     {message && <p className="inline-status" role="status">{message}</p>}
+  </section>;
+}
+
+function milestoneStatusTone(status?: string): string {
+  if (status === "passed") return "good";
+  if (status === "not_run" || status === "optional") return "neutral";
+  return "danger";
+}
+
+function artifactLabel(artifact: EvidenceArtifact): string {
+  return artifact.title || artifact.viewport || artifact.kind || artifact.url || artifact.path || "Evidence artifact";
+}
+
+const BOOTSTRAP_ROLE_LABELS: Record<BootstrapRole, { label: string; description: string }> = {
+  captain: { label: "Number One", description: "Course leadership and recovery" },
+  coder: { label: "Coder", description: "Implementation and repair" },
+  reviewer: { label: "Reviewer", description: "Independent code review" },
+  tester: { label: "Tester", description: "Tests and CI evidence" },
+  ux_reviewer: { label: "UX reviewer", description: "Browser and accessibility evidence" },
+  final_reviewer: { label: "Final reviewer", description: "Current-head completion decision" },
+  merger: { label: "Merger", description: "Deterministic merge gate" },
+  verifier: { label: "Verifier", description: "Post-merge verification" },
+};
+const BOOTSTRAP_ROLES = Object.keys(BOOTSTRAP_ROLE_LABELS) as BootstrapRole[];
+
+function FirstRunSetup({ status, onConfigured }: { status: BootstrapStatus; onConfigured: () => void }) {
+  const [step, setStep] = useState(1);
+  const [workers, setWorkers] = useState<Record<BootstrapRole, BootstrapWorker>>(() => status.workers ?? {} as Record<BootstrapRole, BootstrapWorker>);
+  const configuredOpenClaw = status.openclaw_executable ?? "openclaw";
+  const [openclawExecutable, setOpenclawExecutable] = useState(
+    status.runtime_available === false && configuredOpenClaw === "openclaw" ? "" : configuredOpenClaw,
+  );
+  const [codexExecutable, setCodexExecutable] = useState(status.codex_executable ?? "codex");
+  const [workspaceRoot, setWorkspaceRoot] = useState(status.workspace_root ?? "");
+  const [reconcileEvery, setReconcileEvery] = useState(status.schedules?.reconcile_every ?? "5m");
+  const [reviewEvery, setReviewEvery] = useState(status.schedules?.review_every ?? "2h");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const existingAgents = status.agents ?? [];
+  const duplicateAgents = useMemo(() => {
+    const counts = BOOTSTRAP_ROLES.reduce<Record<string, number>>((result, role) => {
+      const id = workers[role]?.agent_id?.trim();
+      if (id) result[id] = (result[id] ?? 0) + 1;
+      return result;
+    }, {});
+    return Object.entries(counts).filter(([, count]) => count > 1).map(([id]) => id);
+  }, [workers]);
+  const updateWorker = (role: BootstrapRole, update: Partial<BootstrapWorker>) => setWorkers((current) => ({
+    ...current,
+    [role]: { ...current[role], ...update },
+  }));
+  const apply = async () => {
+    setSaving(true); setError(null);
+    try {
+      await callGateway<BootstrapStatus>("bootstrap/apply", {
+        workers,
+        openclaw_executable: openclawExecutable,
+        codex_executable: codexExecutable,
+        workspace_root: workspaceRoot,
+        reconcile_every: reconcileEvery,
+        review_every: reviewEvery,
+      });
+      onConfigured();
+    } catch (reason) { setError(String(reason)); }
+    finally { setSaving(false); }
+  };
+  const allWorkersValid = BOOTSTRAP_ROLES.every((role) => workers[role]?.agent_id?.trim() && workers[role]?.model?.trim());
+  return <main className="shell setup-page">
+    <header className="topbar"><div className="brand-lockup"><div className="brand-mark" aria-hidden="true"><Rocket size={22} /></div><div><p className="eyebrow">FIRST-RUN SETUP</p><h1>Make It So</h1><p className="subtitle">Install the command deck. Configure the crew.</p></div></div><span className="status-pill">Step {step} of 3</span></header>
+    <section className="setup-card" aria-labelledby="setup-title">
+      <div className="setup-progress" aria-label="Setup progress"><span className={step >= 1 ? "active" : ""}>1. Host</span><span className={step >= 2 ? "active" : ""}>2. Crew</span><span className={step >= 3 ? "active" : ""}>3. Review</span></div>
+      {step === 1 && <div className="setup-step"><p className="eyebrow">PLUGIN-FIRST ONBOARDING</p><h2 id="setup-title">Your command deck is installed</h2><p>Make It So will create its configuration, provision eight role-separated OpenClaw workers, and leave automation disabled until you explicitly install the managed schedules.</p><div className={`setup-check ${status.runtime_available === false ? "warning" : "good"}`}><strong>{status.runtime_available === false ? "OpenClaw runtime needs attention" : "OpenClaw runtime detected"}</strong><span>{status.warning ?? `${existingAgents.length} existing agents available to reuse.`}</span></div><div className="settings-grid setup-runtime-fields"><label>OpenClaw executable<input aria-label="OpenClaw executable" value={openclawExecutable} onChange={(event) => setOpenclawExecutable(event.target.value)} placeholder="openclaw or /path/to/openclaw" /></label><label>Direct Codex executable<input aria-label="Direct Codex executable" value={codexExecutable} onChange={(event) => setCodexExecutable(event.target.value)} placeholder="codex or /path/to/codex" /><small>{status.codex_available === false ? "A Direct Codex role will be checked again before setup completes." : "Only required when a crew role uses Direct Codex."}</small></label></div><div className="setup-facts"><span><b>Configuration</b>{status.config_path}</span><span><b>Worker isolation</b>Dedicated workspaces and role protocols</span><span><b>Automation</b>Off until the canary and schedule install</span></div></div>}
+      {step === 2 && <div className="setup-step"><p className="eyebrow">AGENT CREW</p><h2 id="setup-title">Choose the workers and models</h2><p>Keep the generated dedicated agents or map a role to an existing compatible OpenClaw agent. Every role must use a distinct agent ID.</p><datalist id="make-it-so-agent-options">{existingAgents.map((agent) => <option key={agent.id} value={agent.id}>{agent.model}</option>)}</datalist><div className="crew-setup-grid">{BOOTSTRAP_ROLES.map((role) => { const worker = workers[role]; const existing = existingAgents.find((agent) => agent.id === worker?.agent_id); const planned = status.actions?.find((action) => action.role === role); return <fieldset key={role}><legend>{BOOTSTRAP_ROLE_LABELS[role].label}</legend><p>{BOOTSTRAP_ROLE_LABELS[role].description}</p><label>Agent ID<input aria-label={`${BOOTSTRAP_ROLE_LABELS[role].label} agent ID`} list="make-it-so-agent-options" value={worker?.agent_id ?? ""} onChange={(event) => updateWorker(role, { agent_id: event.target.value })} /></label><label>Model<input aria-label={`${BOOTSTRAP_ROLE_LABELS[role].label} model`} value={worker?.model ?? ""} onChange={(event) => updateWorker(role, { model: event.target.value })} /></label><label>Runtime<select aria-label={`${BOOTSTRAP_ROLE_LABELS[role].label} runtime`} value={worker?.runtime ?? "openclaw"} onChange={(event) => updateWorker(role, { runtime: event.target.value as "openclaw" | "codex" })}><option value="openclaw">OpenClaw</option><option value="codex">Direct Codex</option></select></label><span className={`crew-action ${existing ? "reuse" : "create"}`}>{existing ? `Reuse ${existing.model || "existing route"}` : planned?.action === "create" ? "Create dedicated agent" : "New dedicated agent"}</span></fieldset>; })}</div>{duplicateAgents.length > 0 && <p className="warning" role="alert">Each role must be independent. Duplicate agent IDs: {duplicateAgents.join(", ")}</p>}</div>}
+      {step === 3 && <div className="setup-step"><p className="eyebrow">REVIEW AND APPLY</p><h2 id="setup-title">Provision the command deck</h2><p>This writes the validated configuration and creates or updates the crew. It does not register a repository, dispatch work, or enable schedules.</p><div className="settings-grid"><label>Managed worker root<input value={workspaceRoot} onChange={(event) => setWorkspaceRoot(event.target.value)} /></label><label>Reconcile cadence<input aria-label="First-run reconcile cadence" value={reconcileEvery} onChange={(event) => setReconcileEvery(event.target.value)} pattern="[1-9][0-9]*(s|m|h|d)" /></label><label>Course review cadence<input aria-label="First-run course review cadence" value={reviewEvery} onChange={(event) => setReviewEvery(event.target.value)} pattern="[1-9][0-9]*(s|m|h|d)" /></label></div><div className="review-box"><strong>{BOOTSTRAP_ROLES.length} role-separated workers</strong><span>{BOOTSTRAP_ROLES.filter((role) => existingAgents.some((agent) => agent.id === workers[role]?.agent_id)).length} existing agents reused; remaining agents created in managed workspaces.</span></div><p className="step-note">After setup: register a repository, complete readiness, run the canary, then install schedules from the Automation panel.</p></div>}
+      <div className="onboarding-actions">{step > 1 && <button className="secondary" type="button" onClick={() => setStep(step - 1)}>Back</button>}<span className="action-spacer" />{step < 3 ? <button className="primary" type="button" onClick={() => setStep(step + 1)} disabled={step === 1 ? !openclawExecutable.trim() : !allWorkersValid || duplicateAgents.length > 0}>Continue</button> : <button className="primary" type="button" onClick={() => void apply()} disabled={saving || !allWorkersValid || duplicateAgents.length > 0}>{saving ? "Provisioning crew..." : "Configure Make It So"}</button>}</div>
+      {error && <p className="warning" role="alert">{error}</p>}
+    </section>
+  </main>;
+}
+
+function MilestoneEvidencePanel({ item, repo }: { item: CourseSummary; repo?: Repo }) {
+  const initialRows = repo?.workboard_status?.milestones?.filter((row) => row.course_key === item.course.key) ?? [];
+  const [loaded, setLoaded] = useState<Record<string, MilestoneEvidence>>({});
+  const [loadingKey, setLoadingKey] = useState<string | null>(null);
+  const rows = item.course.work_packages.map((pkg) => loaded[pkg.key] ?? initialRows.find((row) => row.work_package_key === pkg.key) ?? {
+    course_key: item.course.key,
+    work_package_key: pkg.key,
+    title: pkg.title,
+    objective: pkg.objective,
+    status: pkg.status,
+    policy: pkg.test_evidence_policy,
+    evidence: { status: "not_run", reason: "No Workboard test evidence recorded yet", screenshots: [], artifacts: [], commands: [] },
+  });
+  const loadDetails = async (packageKey: string) => {
+    if (!repo || loaded[packageKey] || loadingKey === packageKey) return;
+    setLoadingKey(packageKey);
+    try {
+      const result = await callGateway<{ milestones?: MilestoneEvidence[] }>("course/milestone-evidence", { full_name: item.repository, course_key: item.course.key, work_package_key: packageKey });
+      const row = result.milestones?.[0];
+      if (row) setLoaded((current) => ({ ...current, [packageKey]: row }));
+    } finally {
+      setLoadingKey(null);
+    }
+  };
+  const passed = rows.filter((row) => row.evidence?.status === "passed").length;
+  const screenshots = rows.reduce((total, row) => total + (row.evidence?.screenshots?.length ?? 0), 0);
+  return <section className="detail-section milestone-evidence" aria-labelledby={`milestone-evidence-${item.course.key}`}>
+    <div className="detail-heading"><div><p className="eyebrow">PROOF OF DONE</p><h3 id={`milestone-evidence-${item.course.key}`}>Milestone test evidence</h3></div><span className="evidence-summary">{passed}/{rows.length} passing · {screenshots} screenshot{screenshots === 1 ? "" : "s"}</span></div>
+    <p className="muted">Each milestone carries its own pass-rate, current-head, command, and artifact contract. Expand a row to inspect the proof.</p>
+    {rows.length ? <div className="milestone-list">{rows.map((row) => {
+      const evidence = row.evidence ?? { status: "not_run", reason: "No evidence recorded", screenshots: [], artifacts: [], commands: [] };
+      const policy = row.policy ?? {};
+      const artifacts = [...(evidence.screenshots ?? []), ...(evidence.artifacts ?? []).filter((artifact) => !(evidence.screenshots ?? []).some((shot) => shot.url && shot.url === artifact.url))];
+      const rate = typeof evidence.pass_rate === "number" ? `${evidence.pass_rate}%` : "--";
+      return <details className={`milestone-row ${milestoneStatusTone(evidence.status)}`} key={row.work_package_key} onToggle={(event) => { if (event.currentTarget.open) void loadDetails(row.work_package_key); }}>
+        <summary><span className="milestone-title"><strong>{row.title}</strong><small>{row.work_package_key} · {row.status}</small></span><span className="milestone-stats"><em>{statusLabel(evidence.status)}</em><b>{rate}</b><small>{evidence.screenshots?.length ?? 0} shots</small></span></summary>
+        <div className="milestone-body"><p>{row.objective}</p>{loadingKey === row.work_package_key && <p className="muted">Loading latest evidence...</p>}<div className="evidence-facts"><span><b>{evidence.tests_passed ?? 0}</b> passed</span><span><b>{evidence.tests_failed ?? 0}</b> failed</span><span><b>{evidence.tests_skipped ?? 0}</b> skipped</span><span><b>{evidence.tests_total ?? 0}</b> total</span><span><b>{policy.minimum_pass_rate ?? 100}%</b> required</span></div>{evidence.reason && <p className={`evidence-reason ${milestoneStatusTone(evidence.status)}`}>{evidence.reason}</p>}{evidence.commands?.length ? <div className="evidence-block"><strong>Commands</strong>{evidence.commands.map((command) => <code key={command}>{command}</code>)}</div> : null}<dl className="evidence-meta">{evidence.head_sha && <><dt>Evidence head</dt><dd><code>{evidence.head_sha}</code></dd></>}{evidence.current_head_sha && <><dt>Current head</dt><dd><code>{evidence.current_head_sha}</code></dd></>}{evidence.model && <><dt>Model</dt><dd>{shortModel(evidence.model)}{evidence.provider ? ` via ${evidence.provider}` : ""}</dd></>}</dl>{artifacts.length ? <div className="evidence-artifacts"><strong>Artifacts</strong><div>{artifacts.map((artifact, index) => { const href = artifact.url || artifact.path; const image = Boolean(artifact.mime_type?.startsWith("image/") || (artifact.url && /\.(png|jpe?g|webp|gif)$/i.test(artifact.url))); return <div className="evidence-artifact" key={`${href ?? artifactLabel(artifact)}-${index}`}>{image && artifact.url?.startsWith("http") && <img src={artifact.url} alt={artifact.description || artifactLabel(artifact)} loading="lazy" />}{href?.startsWith("http") ? <a href={href} target="_blank" rel="noreferrer">{artifactLabel(artifact)} <ExternalLink size={12} aria-hidden="true" /></a> : <span>{artifactLabel(artifact)}{href ? <code>{href}</code> : null}</span>}</div>; })}</div></div> : <p className="muted">No screenshot or artifact links were recorded.</p>}{row.pr_url && <a className="evidence-pr" href={row.pr_url} target="_blank" rel="noreferrer"><GitPullRequest size={14} aria-hidden="true" /> Open linked PR <ExternalLink size={12} aria-hidden="true" /></a>}</div>
+      </details>;
+    })}</div> : <p className="muted">No delivery milestones are defined for this course.</p>}
+  </section>;
+}
+
+function MilestoneGovernancePanel({ item, onAction }: { item: CourseSummary; onAction: (path: string, params: Record<string, unknown>) => Promise<void> }) {
+  const proposals = item.milestone_changes ?? [];
+  const pending = proposals.filter((proposal) => proposal.status === "proposed");
+  const latestReview = item.milestone_reviews?.[0];
+  return <section className="detail-section milestone-governance" aria-labelledby={`milestone-governance-${item.course.key}`}>
+    <div className="detail-heading"><div><p className="eyebrow">NUMBER ONE</p><h3 id={`milestone-governance-${item.course.key}`}>Course corrections</h3></div><span className="evidence-summary">Revision {item.course.plan_revision ?? 1} · {pending.length} awaiting decision</span></div>
+    <p className="muted">Number One owns the course direction. Supervised mode pauses here before a milestone graph change is applied.</p>
+    {item.number_one && <div className="number-one-context"><strong>Leadership session</strong><span>{item.number_one.model ?? "configured leadership route"} · {item.number_one.last_review_at ? new Date(item.number_one.last_review_at).toLocaleString() : "not reviewed yet"}</span>{item.number_one.summary && <small>{item.number_one.summary}</small>}</div>}
+    {latestReview && <div className={`number-one-review ${latestReview.status ?? "on_track"}`}><strong>Latest course review: {(latestReview.status ?? "on track").split("_").join(" ")}</strong><span>{latestReview.summary}</span><small>Next: {latestReview.next_action}</small></div>}
+    {pending.length ? <div className="proposal-list">{pending.map((proposal) => <div className="proposal-row" key={proposal.proposal_id}><div><strong>{proposal.summary}</strong><span>{proposal.reason}</span><small>{proposal.impact ?? "routine"} · base revision {proposal.base_revision ?? "?"} · {proposal.changes?.map((change) => `${change.kind ?? "change"} ${change.work_package_key ?? change.work_package?.key ?? "milestone"}`).join(", ")}</small></div><div className="action-row"><button className="primary compact" onClick={() => onAction("course/milestone-change-approve", { full_name: item.repository, course_key: item.course.key, proposal_id: proposal.proposal_id, approved_by: "owner" })}>Approve</button><button className="secondary compact danger" onClick={() => onAction("course/milestone-change-reject", { full_name: item.repository, course_key: item.course.key, proposal_id: proposal.proposal_id })}>Reject</button></div></div>)}</div> : <p className="muted">No milestone changes are awaiting a decision.</p>}
   </section>;
 }
 
@@ -636,11 +1415,13 @@ function CoursePanel({ item, repo, onAction, onRefresh }: { item: CourseSummary;
   const { course, repository, readiness } = item;
   const params = { full_name: repository, course_key: course.key };
   const openPlanning = async () => { setPlanningLoading(true); try { setPlanning(await callGateway<PlanningSession>("course/planning-session", params)); } finally { setPlanningLoading(false); } };
-  return <article className="course-card"><div className="course-heading"><div><strong>{course.title}</strong><span>{repository} / {course.kind} / {course.status}</span></div><span className={`readiness ${readiness.ready ? "ready" : "waiting"}`}>{readiness.ready ? "Ready for approval" : `${readiness.unresolved?.length ?? 0} readiness items`}</span><button className="icon-button" aria-label={`${open ? "Collapse" : "Expand"} ${course.title}`} onClick={() => setOpen(!open)}>{open ? "-" : "+"}</button></div>
+  return <article className={`course-card ${open ? "is-open" : ""}`}><div className="course-heading"><div><strong>{course.title}</strong><span>{repository} / {course.kind} / {course.status}</span></div><span className={`readiness ${readiness.ready ? "ready" : "waiting"}`}>{readiness.ready ? "Ready for approval" : `${readiness.unresolved?.length ?? 0} readiness items`}</span><button className="icon-button" aria-label={`${open ? "Collapse" : "Expand"} ${course.title}`} title={`${open ? "Collapse" : "Expand"} course details`} onClick={() => setOpen(!open)}><ChevronDown size={18} aria-hidden="true" /></button></div>
     {open && <div className="course-detail"><p className="course-goal">{course.goal}</p><div className="course-actions"><label>Decision owner<input value={actor} onChange={(event) => setActor(event.target.value)} /></label><button className="secondary" onClick={openPlanning} disabled={planningLoading}>{planningLoading ? "Preparing..." : "Open planning brief"}</button>{readiness.ready && course.status !== "engaged" && course.status !== "paused" && <button className="primary" onClick={() => onAction("course/approve", { ...params, approved_by: actor })}>Engage course</button>}{course.status === "engaged" && <button className="secondary" onClick={() => onAction("course/pause", params)}>Pause</button>}{course.status === "paused" && <button className="primary" onClick={() => onAction("course/resume", params)}>Resume</button>}</div>
       {planning && <section className="detail-section planning-brief"><h3>Plan and charter review</h3><p>{planning.prompt}</p><dl className="plan-diff"><div><dt>Goal</dt><dd>{course.goal}</dd></div><div><dt>Readiness</dt><dd>{readiness.unresolved?.length ?? 0} unresolved, {readiness.verified?.length ?? 0} verified</dd></div><div><dt>Delivery plan</dt><dd>{course.work_packages.length} work packages, {course.checkpoints.length} checkpoints</dd></div></dl>{planning.next_questions.length ? <><strong>Next questions</strong><ul>{planning.next_questions.map((question) => <li key={question}>{question}</li>)}</ul></> : <p className="muted">The charter is ready for owner review. Approval is still required before mutation.</p>}</section>}
       <section className="detail-section"><h3>Readiness</h3>{course.readiness.length ? course.readiness.map((requirement) => <div className="requirement" key={requirement.key}><div><strong>{requirement.key}</strong><span>{requirement.question}</span></div><span className="status-text">{requirement.status}</span>{requirement.status !== "verified" && <><textarea aria-label={`Answer ${requirement.key}`} value={answers[requirement.key] ?? requirement.answer ?? ""} onChange={(event) => setAnswers({ ...answers, [requirement.key]: event.target.value })} placeholder="Answer or evidence" /><button className="secondary compact" onClick={() => onAction("course/requirement", { ...params, requirement_key: requirement.key, status: "answered", answer: answers[requirement.key] ?? requirement.answer ?? "", evidence: ["owner-dashboard-answer"] })}>Submit answer</button></>}</div>) : <p className="muted">No readiness questions recorded.</p>}</section>
-      <section className="detail-section"><h3>Work-package dependency map</h3>{course.work_packages.length ? <div className="package-list">{course.work_packages.map((pkg) => <div key={pkg.key}><strong>{pkg.key}</strong><span>{pkg.title}{pkg.dependencies?.length ? ` | after ${pkg.dependencies.join(", ")}` : " | ready when engaged"}</span><em>{pkg.status}</em></div>)}</div> : <p className="muted">The Captain will decompose work after course approval.</p>}</section>
+      <section className="detail-section"><h3>Work-package dependency map</h3>{course.work_packages.length ? <div className="package-list">{course.work_packages.map((pkg) => <div key={pkg.key}><strong>{pkg.key}</strong><span>{pkg.title}{pkg.dependencies?.length ? ` | after ${pkg.dependencies.join(", ")}` : " | ready when engaged"}</span><em>{pkg.status}</em></div>)}</div> : <p className="muted">Number One will decompose work after course approval.</p>}</section>
+      <MilestoneGovernancePanel item={item} onAction={onAction} />
+      <MilestoneEvidencePanel item={item} repo={repo} />
       <section className="detail-section"><h3>Checkpoints</h3>{course.checkpoints.length ? course.checkpoints.map((checkpoint) => <div className="checkpoint" key={checkpoint.key}><div><strong>{checkpoint.title}</strong><span>{checkpoint.reason}</span></div><span className="status-text">{checkpoint.status}</span>{checkpoint.status === "pending" && <button className="secondary compact" onClick={() => onAction("course/checkpoint", { ...params, checkpoint_key: checkpoint.key, status: "resolved", resolved_by: actor, evidence: ["dashboard"] })}>Resolve</button>}</div>) : <p className="muted">No checkpoints are currently defined.</p>}</section>
       <CourseModelSettings repository={repository} repo={repo} course={course} onSaved={onRefresh} />
     </div>}
@@ -667,27 +1448,59 @@ function ActivityPanel({ repos, onRefresh }: { repos: Repo[]; onRefresh: () => v
     <div className="section-heading"><div><p className="eyebrow">SHIP STATUS</p><h2>Attention and crew activity</h2></div></div>
     <div className="activity-grid">
       <div className="activity-panel"><h3>Attention queue</h3>{attention.length ? attention.map((event) => <div className="event-row attention" key={`${event.repo}:${event.created_at}:${event.event_type}`}><strong>{event.event_type.split("_").join(" ")}</strong><span>{event.repo} | {event.summary}</span><small>{event.reason}</small><div className="event-actions">{evidenceLink(event.evidence) && <a href={evidenceLink(event.evidence)!} target="_blank" rel="noreferrer">Open on GitHub</a>}{Boolean(event.evidence.fingerprint) && <button className="secondary compact" onClick={() => acknowledge(event)}>Acknowledge</button>}</div></div>) : <p className="muted">No blocking decisions.</p>}</div>
-      <div className="activity-panel"><h3>PR review and crew activity</h3>{crew.length ? crew.map((event) => <div className="event-row" key={`${event.repo}:${event.created_at}:${event.event_type}`}><strong>{event.event_type.split("_").join(" ")}</strong><span>{event.repo} | {event.summary}</span><small>{String(event.evidence.worker ?? event.evidence.model ?? "Captain")}</small>{evidenceLink(event.evidence) && <a href={evidenceLink(event.evidence)!} target="_blank" rel="noreferrer">Review evidence</a>}</div>) : <p className="muted">No recent crew events.</p>}</div>
+      <div className="activity-panel"><h3>PR review and crew activity</h3>{crew.length ? crew.map((event) => <div className="event-row" key={`${event.repo}:${event.created_at}:${event.event_type}`}><strong>{event.event_type.split("_").join(" ")}</strong><span>{event.repo} | {event.summary}</span><small>{String(event.evidence.worker ?? event.evidence.model ?? "Number One")}</small>{evidenceLink(event.evidence) && <a href={evidenceLink(event.evidence)!} target="_blank" rel="noreferrer">Review evidence</a>}</div>) : <p className="muted">No recent crew events.</p>}</div>
       <div className="activity-panel"><h3>Token efficiency by course, package, stage, model, and date</h3>{Object.keys(models).length ? Object.entries(models).sort((a, b) => b[1] - a[1]).map(([model, tokens]) => <div className="token-row" key={model}><span>{model}</span><strong>{tokens.toLocaleString()}</strong></div>) : <p className="muted">Provider token telemetry is not available yet.</p>}{repos.flatMap((repo) => repo.usage_detail?.dimensions ?? []).slice(0, 8).map((row, index) => <div className="token-row token-dimension" key={`${row.date}:${row.course_key}:${row.work_package_key}:${row.stage}:${row.model}:${index}`}><span>{row.date ?? "date unknown"} | {row.course_key ?? "portfolio"} / {row.work_package_key ?? "unscoped"} | {row.stage ?? "stage unknown"} | {row.model ?? "model unknown"}</span><strong>{(row.tokens ?? 0).toLocaleString()}</strong></div>)}</div>
     </div>
   </section>;
 }
 
-export function App() {
+function CommandDeck() {
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null); const [courses, setCourses] = useState<Courses | null>(null); const [modelConfig, setModelConfig] = useState<ModelConfig | null>(null); const [scheduleStatus, setScheduleStatus] = useState<ScheduleStatus | null>(null); const [error, setError] = useState<string | null>(null); const [refreshing, setRefreshing] = useState(false);
-  const refresh = () => { setRefreshing(true); setError(null); Promise.all([callGateway<Portfolio>("portfolio/status"), callGateway<Courses>("courses/list"), callGateway<ModelConfig>("models/config"), callGateway<ScheduleStatus>("schedule/status")]).then(([nextPortfolio, nextCourses, nextModelConfig, nextScheduleStatus]) => { setPortfolio(nextPortfolio); setCourses(nextCourses); setModelConfig(nextModelConfig); setScheduleStatus(nextScheduleStatus); }).catch((reason: unknown) => setError(String(reason))).finally(() => setRefreshing(false)); };
+  const [selectedRepoName, setSelectedRepoName] = useState("");
+  const refresh = () => {
+    setRefreshing(true);
+    setError(null);
+    const reportError = (reason: unknown) => setError(String(reason));
+    const requests = [
+      callGateway<Portfolio>("portfolio/status", { fast: true }).then(setPortfolio).catch(reportError),
+      callGateway<Courses>("courses/list").then(setCourses).catch(reportError),
+      callGateway<ModelConfig>("models/config").then(setModelConfig).catch(reportError),
+      callGateway<ScheduleStatus>("schedule/status").then(setScheduleStatus).catch(reportError),
+    ];
+    void Promise.allSettled(requests).finally(() => setRefreshing(false));
+  };
   const updateRepo = async (fullName: string, payload: UpdatePayload) => { await callGateway("repos/update", { full_name: fullName, ...payload }); refresh(); };
   const courseAction = async (path: string, params: Record<string, unknown>) => { try { await callGateway(path, params); refresh(); } catch (reason) { setError(String(reason)); } };
   useEffect(refresh, []);
   const repos = portfolio?.repos ?? [];
-  return <main className="shell"><header className="topbar"><div><p className="eyebrow">FLIGHT CONTROL</p><h1>Make It So</h1><p className="subtitle">Set the course. Engage the crew.</p></div><div className="action-row"><button className="secondary" onClick={refresh} disabled={refreshing} aria-label="Refresh portfolio">{refreshing ? "Refreshing..." : "Refresh"}</button></div></header>
+  useEffect(() => {
+    if (!repos.length || repos.some((repo) => repo.full_name === selectedRepoName)) return;
+    const latest = [...repos].sort((left, right) => repoActivity(right).localeCompare(repoActivity(left)))[0];
+    setSelectedRepoName(latest.full_name);
+  }, [repos, selectedRepoName]);
+  const selectedRepo = repos.find((repo) => repo.full_name === selectedRepoName) ?? repos[0];
+  return <main className="shell"><header className="topbar"><div className="brand-lockup"><div className="brand-mark" aria-hidden="true"><Rocket size={22} /></div><div><p className="eyebrow">COMMAND DECK <span className="eyebrow-divider">/</span> OPENCLAW</p><h1>Make It So</h1><p className="subtitle">Set the course. Engage the crew.</p></div></div><div className="topbar-actions"><span className="connection-state"><span className="connection-dot" aria-hidden="true" />Control surface online</span><div className="action-row"><button className="secondary icon-label" onClick={refresh} disabled={refreshing} aria-label="Refresh portfolio"><RefreshCw size={16} aria-hidden="true" className={refreshing ? "spinning" : ""} />{refreshing ? "Refreshing" : "Refresh"}</button></div></div></header>
     {error && <div className="alert" role="alert">{error}</div>}
-    <section className="overview" aria-labelledby="overview-title"><div className="section-heading"><div><p className="eyebrow">MISSION OVERVIEW</p><h2 id="overview-title">Current courses</h2></div><span className="status-pill">{portfolio ? `${repos.length} registered` : "Connecting"}</span></div>{repos.length ? <div className="repo-grid">{repos.map((repo) => <RepoPanel key={repo.full_name} repo={repo} onSave={updateRepo} />)}</div> : <div className="empty"><h3>No repositories registered</h3><p>Register a repository to begin a readiness review.</p></div>}</section>
+     <section className="overview" aria-labelledby="overview-title"><div className="section-heading"><div><p className="eyebrow">MISSION OVERVIEW</p><h2 id="overview-title">Current courses</h2></div><span className="status-pill">{portfolio ? `${repos.length} registered` : "Loading"}</span></div><RegisterPanel onRegistered={refresh} />{portfolio === null ? <div className="loading-state" role="status"><strong>Loading fleet status...</strong><span>Course charters and repository facts are arriving independently.</span></div> : repos.length ? <><PortfolioSummary repos={repos} />{selectedRepo && <ExecutiveSummary repo={selectedRepo} courses={courses} />}<div className="mission-layout"><RepoSelector repos={repos} selected={selectedRepo?.full_name ?? ""} onSelect={setSelectedRepoName} />{selectedRepo && <RepoPanel key={selectedRepo.full_name} repo={selectedRepo} onSave={updateRepo} />}</div></> : <div className="empty"><h3>No repositories registered</h3><p>Register a repository to begin a readiness review.</p></div>}</section>
     <SchedulePanel status={scheduleStatus} onRefresh={refresh} />
     {modelConfig && <><ModelPolicyPanel config={modelConfig} onSaved={refresh} /><UsagePolicyPanel config={modelConfig} onSaved={refresh} /></>}
-    <section className="courses" aria-labelledby="courses-title"><div className="section-heading"><div><p className="eyebrow">COURSE CHARTER</p><h2 id="courses-title">Readiness and work packages</h2></div><span className="status-pill">{courses?.courses.length ?? 0} courses</span></div>{courses?.courses.length ? <div className="course-list">{courses.courses.map((item) => <CoursePanel key={`${item.repository}:${item.course.key}`} item={item} repo={repos.find((repo) => repo.full_name === item.repository)} onAction={courseAction} onRefresh={refresh} />)}</div> : <p className="muted">No course charter has been saved yet.</p>}</section>
-    <CourseCreatePanel repos={repos} onCreated={refresh} /><ActivityPanel repos={repos} onRefresh={refresh} /><GreenfieldPanel onCreated={refresh} /><RegisterPanel onRegistered={refresh} />
+     <section className="courses" aria-labelledby="courses-title"><div className="section-heading"><div><p className="eyebrow">COURSE CHARTER</p><h2 id="courses-title">Readiness and work packages</h2></div><span className="status-pill">{courses ? `${courses.courses.length} courses` : "Loading"}</span></div>{courses === null ? <div className="loading-state" role="status"><strong>Loading course charters...</strong><span>This stays independent of GitHub and token reconciliation.</span></div> : courses.courses.length ? <div className="course-list">{courses.courses.map((item) => <CoursePanel key={`${item.repository}:${item.course.key}`} item={item} repo={repos.find((repo) => repo.full_name === item.repository)} onAction={courseAction} onRefresh={refresh} />)}</div> : <p className="muted">No course charter has been saved yet.</p>}</section>
+    <CourseCreatePanel repos={repos} onCreated={refresh} /><ActivityPanel repos={repos} onRefresh={refresh} />
   </main>;
+}
+
+export function App() {
+  const [bootstrap, setBootstrap] = useState<BootstrapStatus | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const loadBootstrap = () => {
+    setError(null);
+    void callGateway<BootstrapStatus>("bootstrap/status").then(setBootstrap).catch((reason) => setError(String(reason)));
+  };
+  useEffect(loadBootstrap, []);
+  if (error) return <main className="shell setup-page"><div className="alert" role="alert">Could not start Make It So setup: {error}</div><button className="secondary" onClick={loadBootstrap}>Retry</button></main>;
+  if (bootstrap === null) return <main className="shell setup-page"><div className="loading-state" role="status"><strong>Inspecting the OpenClaw host...</strong><span>Discovering configuration and crew state.</span></div></main>;
+  if (bootstrap.setup_required === true) return <FirstRunSetup status={bootstrap} onConfigured={loadBootstrap} />;
+  return <CommandDeck />;
 }
 
 const rootElement = document.getElementById("root");

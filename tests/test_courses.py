@@ -286,6 +286,52 @@ def test_course_store_round_trips_durable_yaml(tmp_path: Path) -> None:
         store.path_for("../escape")
 
 
+def test_course_store_migrates_legacy_registration_payload(tmp_path: Path) -> None:
+    store = CourseStore(tmp_path / "repo")
+    path = store.path_for("legacy-course")
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        """version: 1
+key: legacy-course
+repository: example/project
+kind: takeover
+title: Legacy course
+goal: Bring the existing project to a tested and reviewable state.
+status: engaged
+approved_by: old-owner
+approved_at: 2026-07-19T08:00:00Z
+readiness:
+  - baseline_complete: true
+  - wp02_pr_open: true
+readiness_review:
+  reviewed_at: 2026-07-19T08:00:00Z
+  reviewer: old-owner
+  approved: true
+work_packages:
+  - key: WP-01
+    title: Foundation
+    status: complete
+  - key: WP-02
+    title: Collectors
+    status: in_review
+    dependencies:
+      - WP-01
+""",
+        encoding="utf-8",
+    )
+
+    migrated = store.load("legacy-course")
+
+    assert migrated.status == CourseStatus.READINESS_REVIEW
+    assert migrated.approved_by is None
+    assert migrated.readiness_review is None
+    assert [item.key for item in migrated.readiness] == ["baseline_complete", "wp02_pr_open"]
+    assert all(item.status == RequirementStatus.UNKNOWN for item in migrated.readiness)
+    assert migrated.work_packages[0].objective == "Foundation"
+    assert migrated.work_packages[1].status == WorkPackageStatus.REVIEWING
+    assert store.load("legacy-course") == migrated
+
+
 def test_course_rejects_unknown_graph_references() -> None:
     with pytest.raises(ValueError, match="unknown dependencies"):
         Course(

@@ -25,7 +25,7 @@ class QASelection(StrictModel):
 BUILTIN_QA_PROFILES: dict[ApplicationSurface, QAProfile] = {
     ApplicationSurface.WEB_UI: QAProfile(
         key="web-ui-qa",
-        title="Web UI usability and accessibility QA",
+        title="UI acceptance: form, function, and finish",
         surfaces=frozenset({ApplicationSurface.WEB_UI}),
         required_tools=("browser",),
         reviewer_role="ui_qa_reviewer",
@@ -133,8 +133,6 @@ def select_qa(
     )
     for surface in sorted(surfaces - covered, key=lambda item: item.value):
         profile = BUILTIN_QA_PROFILES[surface]
-        if surface == ApplicationSurface.WEB_UI and not repo.ux_enabled:
-            profile = profile.model_copy(update={"reviewer_role": "qa_assistant", "required_tools": ()})
         selected.append(profile)
 
     global_checks = tuple(dict.fromkeys((*((manifest.checks if manifest else ())), *repo.checks)))

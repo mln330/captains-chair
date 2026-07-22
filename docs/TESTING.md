@@ -4,12 +4,12 @@ MAKE_IT_SO tests are organized around evidence, not implementation shape.
 
 ## Unit Tests
 
-- every Captain mode and completion policy
+- every Number One mode and completion policy
 - every approval invariant and high-risk action
 - DAG topology and role separation
 - no autonomous merge cards under owner-only policies
 - explicit user-blocker classification
-- technical retry and Captain recovery routing
+- technical retry and Number One recovery routing
 - review-failure repair creation and gate rerun
 - unrelated dispatch while another card is blocked
 - OpenClaw RPC payloads, noisy output, malformed output, and permission failures
@@ -90,15 +90,18 @@ the normal unit and integration suite remains required on Windows.
 
 ## Current Verification Status
 
-The local implementation currently verifies 586 Python tests, OpenClaw plugin
-typecheck/tests/build, repository QA and token-safeguard dashboard controls, four
-Playwright dashboard tests across desktop and mobile Chromium with keyboard,
-accessibility, and visual snapshot checks, Codex plugin manifest validation,
-Python package build, portable-core coverage at 90%, zero high-severity frontend
-audit findings, and an isolated OpenClaw host registration check.
-Package-wide coverage is 88.70% statements and 76.04% branches, so the product
-target is not yet met. Broader Playwright accessibility and visual coverage and
-the live PrintHub canary remain explicit acceptance work.
+The local implementation currently verifies 832 Python tests, OpenClaw plugin
+typecheck/tests/build, repository QA and token-safeguard dashboard controls, explicit
+intelligence-level and UI-acceptance dashboard controls, four Playwright dashboard
+tests across desktop and mobile Chromium with keyboard, accessibility, and visual
+snapshot checks, Codex plugin manifest validation, Python package build,
+zero high-severity frontend audit findings, and an isolated OpenClaw host
+registration check.
+
+The full July 18 verification run reached 93.07% lines and 85.33% branches,
+meeting the product target. Broader Playwright accessibility and visual coverage and
+the live PrintHub canary remain explicit operational acceptance work; passing local
+coverage never substitutes for a clean host-side canary.
 Mutation testing is configured for Linux CI and remains environment-limited on
 this Windows development host; disposable fixtures must pass before any live run
 is treated as validated.

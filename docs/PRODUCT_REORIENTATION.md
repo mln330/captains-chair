@@ -7,8 +7,8 @@ the next supported runtime and all runtime-specific behavior isolated behind
 typed adapters.
 
 OpenClaw P0 will be a real TypeScript plugin. The SDK supports dashboard tabs,
-HTTP routes, services, commands, tools, hooks, and Gateway methods. Captain's
-Chair will use those surfaces while offering OpenClaw Workboard as its preferred
+HTTP routes, services, commands, tools, hooks, and Gateway methods. Make It So's
+Number One leadership layer will use those surfaces while offering OpenClaw Workboard as its preferred
 built-in orchestration adapter, not as a core requirement. Scheduling will remain
 owned by the Gateway cron service and managed idempotently by the plugin UI.
 [OpenClaw Plugin SDK](https://docs.openclaw.ai/plugins/sdk-overview),
@@ -20,6 +20,36 @@ document an OpenClaw-style persistent dashboard tab. Codex will work without a
 task board by default while permitting optional custom kanban integrations.
 [Codex plugins](https://learn.chatgpt.com/docs/build-plugins.md),
 [Codex apps](https://learn.chatgpt.com/docs/build-app.md).
+
+## Number One Leadership
+
+Number One is Make It So's first-in-command agent. Number One owns requirements
+gathering, readiness, course planning, milestone governance, progress review,
+and final course corrections. The role uses the highest-power configured
+strategist route and has authority to reject an implementation, request repair,
+or revise the approved course when the evidence no longer supports the plan.
+
+Each repository/course receives one durable Number One leadership session. The
+session identifier is stable for the life of that course, while every call still
+records its own telemetry identifier. The runtime also persists a compact context
+package containing the approved course, plan revision, recent reviews, pending
+milestone proposals, and evidence. OpenClaw may continue the provider session;
+other harnesses can use the same durable context contract without inheriting
+OpenClaw session assumptions.
+
+The configurable course-review cadence is the Number One review cycle. It is a
+bounded review and planning checkpoint, not a separate project-manager role.
+Worker agents remain role-separated and independent; Number One reviews their
+evidence and controls the course rather than pretending to be the coder or
+reviewer.
+
+Completing a milestone creates a typed milestone checkpoint. In supervised mode,
+the checkpoint pauses dependent work until the owner approves it. In autonomous
+mode, routine graph-safe changes can be validated and applied by Number One, while
+major, destructive, or ambiguous changes remain owner-gated. Every add, update,
+or removal is versioned against the course revision, recorded in SQLite, and
+rejected when stale or graph-invalid. The dashboard exposes the current revision,
+Number One's latest review, pending proposals, and direct approve/reject actions.
 
 ## Architecture
 
@@ -102,7 +132,7 @@ Planning will use a hybrid wizard and agent conversation:
 
 - The UI starts "Set Course," selects greenfield, in-progress takeover, or
   shipped-product feature work, and collects structured prerequisites.
-- A capable Captain model asks only questions that cannot be answered through
+- A capable Number One model asks only questions that cannot be answered through
   repository and environment inspection.
 - A readiness review checks goals, non-goals, users, architecture constraints,
   permissions, secret references, external access, environments, test data, CI,
@@ -241,6 +271,10 @@ Model configuration will support:
 - Qualification states of `untested`, `shadow`, `canary`, `certified`, and
   `autonomous`.
 - Presets for `Economy`, `Balanced`, `Maximum Quality`, `Local First`, and `Custom`.
+- A separate, user-selected intelligence level that adjusts reasoning effort without
+  silently replacing the chosen model. `Economy`, `Balanced`, `Deep`, and `Maximum`
+  provide a clear starting point; every role and workflow stage remains individually
+  editable for cases such as Sol at medium versus Sol at high.
 - An effective-route preview showing which configuration layer supplied each value.
 - Adapter-driven capability discovery so unavailable models or unsupported effort
   levels cannot be saved.
@@ -285,7 +319,9 @@ The dashboard will provide:
 - Attention queue for decisions and checkpoints.
 - Crew activity with worker, model, task, duration, tokens, and outcome.
 - Repository autonomy, channel routing, schedules, QA profiles, model routes,
-  reasoning levels, and token limits.
+  intelligence levels, and token limits.
+- A visible UI acceptance gate for web work, including its current verdict, evidence,
+  reviewer model, and any required repair loop.
 - PR review and comment-triage status.
 - Token usage and efficiency views by model.
 - Direct links into Workboard only when its adapter is enabled.
@@ -294,6 +330,25 @@ The dashboard will provide:
 The visual style will use restrained command-console cues, an original futuristic
 chair illustration, and subtle optimistic science-fiction influence without copying
 Star Trek logos, uniforms, ships, or trade dress.
+
+### UI Acceptance Review
+
+Web UI changes receive a dedicated, independent UI acceptance reviewer. This is not
+a general code-review pass and never shares the coder's context. The reviewer uses a
+browser-capable worker at mobile, tablet, and desktop sizes to verify three things:
+
+- **Form:** labels, validation, disabled and error states, keyboard and touch
+  interaction, and submission behavior.
+- **Function:** primary user journeys, navigation, loading, empty, and failure states.
+- **Finish:** contrast, focus visibility, responsive text and overflow, hierarchy,
+  spacing, touch targets, and cohesion with the established design language.
+
+Detected or declared web UI work always selects this gate; it cannot be silently
+downgraded to generic QA by a repository toggle. The reviewer records the tested
+flows, current commit, screenshots where supported, and actionable findings. A
+material defect routes the work through repair and a fresh UI acceptance review before
+final review or merge. The dashboard surfaces this gate alongside tests and code
+review so a completed course cannot hide missing user acceptance evidence.
 
 The README will include generated hero artwork, project badges and icons, architecture
 and SDLC diagrams, screenshots, setup instructions, model and token guidance, and an

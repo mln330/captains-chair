@@ -194,6 +194,55 @@ def test_openclaw_worker_usage_uses_card_context_for_stage_and_model_dimensions(
     ]
 
 
+def test_number_one_session_uses_strategist_route_and_course_context(tmp_path: Path) -> None:
+    output = json.dumps(
+        {
+            "sessions": [
+                {
+                    "key": "agent:github-captain:make-it-so:number-one:example-project",
+                    "agentId": "github-captain",
+                    "model": "gpt-5.6-sol",
+                    "modelProvider": "codex",
+                    "inputTokens": 791,
+                    "outputTokens": 137,
+                    "totalTokens": 22039,
+                }
+            ]
+        }
+    )
+
+    def runner(command: Sequence[str], *, timeout: int = 60, **_: object) -> CommandResult:
+        del command, timeout
+        return CommandResult(0, output, "")
+
+    state = StateStore(tmp_path / "state.db")
+    result = sync_openclaw_sessions(
+        state,
+        repo="example/project",
+        runner=runner,
+        expected_models={
+            "captain": "codex/gpt-5.6-terra",
+            "number_one": "codex/gpt-5.6-sol",
+            "strategist": "codex/gpt-5.6-sol",
+        },
+        number_one_context={
+            "agent:github-captain:make-it-so:number-one:example-project": {
+                "course_key": "image-manager-takeover",
+                "stage": "number_one",
+            }
+        },
+    )
+
+    assert result["sessions_imported"] == 1
+    summary = state.usage_summary(repo="example/project")
+    assert summary["external_sessions"]["model_mismatch_attempts"] == 0
+    group = summary["external_groups"][0]
+    assert group["role"] == "number_one"
+    assert group["stage"] == "number_one"
+    assert group["course_key"] == "image-manager-takeover"
+    assert group["model"] == "gpt-5.6-sol"
+
+
 def test_openclaw_native_workboard_session_uses_durable_card_context(tmp_path: Path) -> None:
     card_id = "039ef01a-7bc3-4fc9-9834-eaad70f8cf9e"
     output = json.dumps(
@@ -622,6 +671,7 @@ def test_usage_tracks_fallback_tokens_by_stage_and_actual_model(tmp_path: Path) 
                 "model": "gpt-5.3-codex-spark",
                 "success": True,
                 "input_tokens": 50,
+                "cached_input_tokens": 20,
                 "output_tokens": 5,
             },
         ],
@@ -673,6 +723,22 @@ def test_usage_dimensions_keep_identical_model_routes_separate_by_date(tmp_path:
         ("2026-07-16", 10),
         ("2026-07-17", 20),
     }
+
+
+@pytest.mark.parametrize(
+    ("group", "expected"),
+    (
+        ({"total_tokens": 0, "input_tokens": 9}, 0),
+        ({"total_tokens": 3.0, "input_tokens": 9}, 3),
+        ({"total_tokens": False, "input_tokens": 7, "cached_input_tokens": 100, "output_tokens": 3}, 10),
+        ({"total_tokens": -1, "input_tokens": 2.0, "output_tokens": None}, 2),
+        ({"input_tokens": True, "output_tokens": -2}, 0),
+    ),
+)
+def test_dimension_tokens_never_double_count_cached_input(
+    group: dict[str, Any], expected: int
+) -> None:
+    assert state_module._dimension_tokens(group) == expected  # pyright: ignore[reportPrivateUsage]
 
 
 def test_usage_summary_ignores_corrupt_attempt_envelopes(tmp_path: Path) -> None:

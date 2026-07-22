@@ -7,6 +7,7 @@ const root = path.dirname(fileURLToPath(import.meta.url));
 export default defineConfig({
   test: { environment: "jsdom", include: ["tests/**/*.test.ts", "ui-tests/**/*.test.tsx"] },
   resolve: {
+    dedupe: ["react", "react-dom"],
     alias: {
       react: path.resolve(root, "node_modules/react"),
       "react-dom": path.resolve(root, "node_modules/react-dom"),

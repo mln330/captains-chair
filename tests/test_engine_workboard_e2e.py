@@ -172,6 +172,27 @@ class RepairPlanningHarness(HarnessAdapter):
         ).model_dump(mode="json")
 
 
+class ReviewPlanningHarness(RepairPlanningHarness):
+    def invoke(
+        self,
+        *,
+        prompt: str,
+        model: ModelTarget,
+        role: str,
+        output_model: type[OutputModel],
+        cwd: Path,
+        writable: bool,
+        session_id: str,
+    ) -> dict[str, Any]:
+        del prompt, model, role, output_model, cwd, writable, session_id
+        return PlanDecision(
+            action=ActionKind.REVIEW_PR,
+            summary="Review the current pull request",
+            reason="The active PR needs a fresh independent review.",
+            target_pr=42,
+        ).model_dump(mode="json")
+
+
 class SnapshotGitHub:
     def snapshot(self, repo: object) -> RepositorySnapshot:
         del repo
@@ -314,13 +335,17 @@ class FakeRepairWorktrees:
     def __init__(self, path: Path) -> None:
         self.path = path
         self.calls: list[tuple[str, str]] = []
+        self.lanes: list[str] = []
 
-    def checkout_existing(self, repo: object, work_id: str, remote_branch: str) -> Worktree:
+    def checkout_existing(
+        self, repo: object, work_id: str, remote_branch: str, *, lane: str = "repair"
+    ) -> Worktree:
         del repo
         self.calls.append((work_id, remote_branch))
+        self.lanes.append(lane)
         return Worktree(
             path=self.path,
-            branch="make_it_so/repair/pr-42",
+            branch=f"make_it_so/{lane}/pr-42",
             base="origin/main",
             push_branch=remote_branch,
         )
@@ -715,6 +740,46 @@ def test_engine_queues_planner_selected_repair_with_existing_pr_workspace(tmp_pa
     assert repair_card.workspace.branch == "make_it_so/repair/pr-42"
     assert repair_card.workspace.push_branch == "feature/current-pr"
     assert "push implementation changes to `feature/current-pr`" in (repair_card.notes or "")
+
+
+def test_engine_queues_planner_selected_review_with_existing_pr_workspace(tmp_path: Path) -> None:
+    (tmp_path / "ISSUES_EXECUTION_PLAN.md").write_text("# Durable plan\n", encoding="utf-8")
+    artifact = tmp_path / "baseline.json"
+    artifact.write_text(
+        '{"analysis":{"summary":"review is required"},"checks":[]}',
+        encoding="utf-8",
+    )
+    repo = repo_config(tmp_path, mode=OperationMode.AUTONOMOUS)
+    config = app_config(tmp_path, repo)
+    state = StateStore(config.state_dir / "state.db")
+    state.save_baseline(repo.full_name, "baseline", artifact, analyzed=True)
+    state.transition(repo.full_name, RunState.BASELINE_REVIEW)
+    state.transition(repo.full_name, RunState.READY)
+    queue = InMemoryWorkQueue()
+    orchestrator = WorkflowOrchestrator(queue, worker_policy())
+    engine = ControlPlaneEngine(
+        config,
+        state,
+        cast(GhGitHubProvider, SnapshotGitHub()),
+        ReviewPlanningHarness(),
+        MemoryNotifier(),
+        model_policy(),
+        orchestrator=orchestrator,
+        runner=no_op_git_runner,
+    )
+    worktrees = FakeRepairWorktrees(tmp_path / "review-worktree")
+    engine.worktrees = cast(Any, worktrees)
+
+    result = engine.cycle(repo, shadow=False, execute=True)
+
+    assert result.event.event_type == "WORKFLOW_QUEUED"
+    assert worktrees.lanes == ["review"]
+    action_id = str(result.event.evidence["action_id"])
+    review_card = queue.cards[queue.keys[f"{action_id}:review"]]
+    assert review_card.workspace is not None
+    assert review_card.workspace.branch == "make_it_so/review/pr-42"
+    assert review_card.workspace.push_branch == "feature/current-pr"
+    assert "push implementation changes to `feature/current-pr`" in (review_card.notes or "")
 
 
 def test_workboard_queue_failure_is_audited_and_does_not_replan_unchanged_evidence(

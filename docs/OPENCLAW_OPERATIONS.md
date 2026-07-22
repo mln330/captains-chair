@@ -6,6 +6,29 @@ records, and leases stay in the configured state directory. OpenClaw Workboard
 is the preferred P0 worker tracker and orchestration adapter, but the core can
 fall back to `DirectOrchestrator` with no board.
 
+## First-Run Plugin Setup
+
+A packaged installation does not require a Python environment or a hand-written
+configuration. Install and enable the plugin, restart the Gateway when prompted,
+then open the Make It So tab. The unconfigured sidecar reports `setup_required`
+while remaining healthy so the dashboard can:
+
+1. discover OpenClaw and the existing agent inventory;
+2. create or map the eight distinct crew roles and validate model conflicts;
+3. generate the configuration and durable state directories;
+4. install role protocols and the bounded worker safety policy; and
+5. return to the command deck with schedules still absent.
+
+Agent provisioning is idempotent. Existing compatible agents retain their
+registered workspaces, existing model mismatches fail before configuration is
+replaced, and Make It So never deletes a reused agent. The generated
+configuration uses supported OpenClaw authentication inheritance by default;
+the wizard does not request or display credentials.
+
+Schedule installation remains the final explicit operator action after the
+resume gates below. This preserves the pause guarantee while removing shell
+setup steps.
+
 ## Pause Guarantee
 
 Set the managed repository to `operation_mode: disabled` before pausing work. Disabled
@@ -67,6 +90,12 @@ before unattended work:
 5. Run the no-repository-mutation Workboard canary. The plan phase is safe;
    `--run` dispatches a real worker and consumes runtime usage.
 
+For a hybrid Workboard/Codex configuration, confirm `worker_runtimes.coder` is
+`codex`, `worker_models.coder` is `codex/gpt-5.3-codex-spark`, and
+`codex_executable` points to the ChatGPT-authenticated Codex CLI. The canary must
+retain a direct-Codex execution receipt on its completed card and the usage report
+must show the same Spark model and stage before autonomous implementation resumes.
+
 ```bash
 make_it_so --config "$MAKE_IT_SO_CONFIG" orchestrate canary --repo OWNER/REPO
 make_it_so --config "$MAKE_IT_SO_CONFIG" orchestrate canary --repo OWNER/REPO --run
@@ -85,7 +114,7 @@ make_it_so --config "$MAKE_IT_SO_CONFIG" orchestrate canary --repo OWNER/REPO --
    autonomous PR pass. Use the dashboard or `openclaw make-it-so schedule`
    commands to inspect, edit, pause, resume, remove, or reconcile them. Pausing
    a live OpenClaw cron survives plugin restarts and ordinary reconciliation.
-   Keep worker reconciliation frequent enough to claim ready cards; the Captain
+   Keep worker reconciliation frequent enough to claim ready cards; the Number One
    cycle is for planning and state review.
 
 ## Existing Queue Migration
@@ -102,7 +131,7 @@ repeat. Before resuming:
 - keep preserved migration PRs explicitly protected by repository policy;
 - dispatch only after current worker-model health and usage admission pass.
 
-Technical failures should become bounded retries or Captain recovery. Only
+Technical failures should become bounded retries or Number One recovery. Only
 `USER_SECRET:`, `GOAL_DIVERGENCE:`, `EXTERNAL_ACCESS:`, and
 `HIGH_RISK_DECISION:` are owner-attention categories. A user-blocked card must
 not suppress unrelated ready work.
@@ -119,3 +148,19 @@ classification, proof validation, or usage accounting.
 Before enabling a future adapter, run its contract tests and the full shared
 workflow scenario, including technical recovery, owner-blocker isolation,
 simultaneous blockers, restart recovery, and current-head merge proof.
+
+## Sidebar Icon Compatibility
+
+Make It So advertises the `rocket` icon through OpenClaw's Control UI descriptor.
+OpenClaw releases whose built-in dashboard icon registry predates that icon fall
+back to a puzzle piece. Install the matching Lucide-style icon after installing or
+upgrading OpenClaw, then restart the gateway:
+
+```bash
+cd /path/to/make-it-so/openclaw-plugin
+npm run install:sidebar-icon -- /path/to/openclaw
+systemctl --user restart openclaw-gateway.service
+```
+
+The installer creates one backup beside the dashboard asset, refuses unknown
+bundle layouts, and is safe to run repeatedly.

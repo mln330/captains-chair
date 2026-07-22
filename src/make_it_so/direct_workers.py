@@ -3,15 +3,17 @@ from __future__ import annotations
 import json
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast, runtime_checkable
 
-from pydantic import Field, model_validator
+from pydantic import Field, PrivateAttr, model_validator
 
 from make_it_so.command import CommandRunner, run_command
 from make_it_so.harness import strict_output_schema
 from make_it_so.json_tools import decode_first_json
-from make_it_so.models import StrictModel
+from make_it_so.model_policy import runtime_model
+from make_it_so.models import ModelUsage, StrictModel
 from make_it_so.orchestration import QueueCard
 
 
@@ -24,6 +26,7 @@ class WorkerExecutionResult(StrictModel):
     summary: str = Field(min_length=1)
     proof: tuple[dict[str, Any], ...] = ()
     reason: str | None = None
+    _telemetry: WorkerExecutionTelemetry | None = PrivateAttr(default=None)
 
     @model_validator(mode="after")
     def validate_outcome(self) -> WorkerExecutionResult:
@@ -32,6 +35,82 @@ class WorkerExecutionResult(StrictModel):
         if self.status == "blocked" and not (self.reason or "").strip():
             raise ValueError("blocked worker execution requires a reason")
         return self
+
+    @property
+    def telemetry(self) -> WorkerExecutionTelemetry | None:
+        return self._telemetry
+
+    def attach_telemetry(self, telemetry: WorkerExecutionTelemetry) -> None:
+        self._telemetry = telemetry
+
+
+class WorkerExecutionTelemetry(StrictModel):
+    runtime: Literal["openclaw", "codex"]
+    requested_model: str
+    attempt_id: str
+    duration_ms: int = Field(ge=0)
+    usage: ModelUsage = Field(default_factory=ModelUsage)
+
+
+def _worker_output_schema() -> dict[str, Any]:
+    """Return the closed structured-output contract accepted by Codex."""
+    schema = strict_output_schema(WorkerExecutionResult)
+    properties = cast(dict[str, Any], schema["properties"])
+    proof = cast(dict[str, Any], properties["proof"])
+    proof["items"] = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "status": {"type": "string", "enum": ["passed", "failed"]},
+            "note": {"type": "string", "minLength": 1},
+            "url": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            "test_evidence": {
+                "anyOf": [
+                    {"type": "null"},
+                    {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "status": {"type": "string", "enum": ["passed", "failed"]},
+                            "head_sha": {"type": "string", "minLength": 7},
+                            "command": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                            "commands": {"type": "array", "items": {"type": "string"}},
+                            "tests_total": {"type": "integer", "minimum": 0},
+                            "tests_passed": {"type": "integer", "minimum": 0},
+                            "tests_failed": {"type": "integer", "minimum": 0},
+                            "tests_skipped": {"type": "integer", "minimum": 0},
+                            "pass_rate": {"type": "number", "minimum": 0, "maximum": 100},
+                            "screenshots": {"type": "array", "items": {"type": "string"}},
+                            "artifacts": {"type": "array", "items": {"type": "string"}},
+                            "model": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                            "provider": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                            "captured_at": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                            "summary": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                        },
+                        "required": [
+                            "artifacts",
+                            "captured_at",
+                            "command",
+                            "commands",
+                            "head_sha",
+                            "model",
+                            "pass_rate",
+                            "provider",
+                            "screenshots",
+                            "status",
+                            "tests_failed",
+                            "tests_passed",
+                            "tests_skipped",
+                            "tests_total",
+                            "summary",
+                        ],
+                    },
+                ]
+            },
+        },
+        "required": ["note", "status", "test_evidence", "url"],
+    }
+    return schema
 
 
 @runtime_checkable
@@ -80,6 +159,7 @@ class CommandWorkerExecutor:
         if self.runtime == "codex":
             return self._run_codex(
                 prompt,
+                attempt_id=attempt_id,
                 workspace=workspace,
                 model=model,
                 timeout_seconds=timeout_seconds,
@@ -96,6 +176,7 @@ class CommandWorkerExecutor:
         self,
         prompt: str,
         *,
+        attempt_id: str,
         workspace: Path,
         model: str,
         timeout_seconds: int,
@@ -104,7 +185,7 @@ class CommandWorkerExecutor:
             schema_path = Path(temp_dir) / "schema.json"
             output_path = Path(temp_dir) / "result.json"
             schema_path.write_text(
-                json.dumps(strict_output_schema(WorkerExecutionResult), indent=2),
+                json.dumps(_worker_output_schema(), indent=2),
                 encoding="utf-8",
             )
             command = [
@@ -121,8 +202,11 @@ class CommandWorkerExecutor:
                 str(workspace),
                 "--model",
                 _runtime_model("codex", model),
-                "-",
             ]
+            for writable_dir in _codex_additional_writable_dirs(workspace):
+                command.extend(("--add-dir", str(writable_dir)))
+            command.append("-")
+            started = time.monotonic()
             try:
                 result = self.runner(
                     command,
@@ -136,7 +220,22 @@ class CommandWorkerExecutor:
                 raise WorkerExecutionError((result.stderr or result.stdout).strip()[:3000])
             if not output_path.is_file():
                 raise WorkerExecutionError("Codex worker did not write its structured outcome")
-            return _parse_result(output_path.read_text(encoding="utf-8"))
+            output_text = output_path.read_text(encoding="utf-8")
+            outcome = _parse_result(output_text)
+            outcome.attach_telemetry(
+                WorkerExecutionTelemetry(
+                    runtime="codex",
+                    requested_model=_runtime_model("codex", model),
+                    attempt_id=attempt_id,
+                    duration_ms=max(0, round((time.monotonic() - started) * 1000)),
+                    usage=_codex_usage(
+                        result.stdout,
+                        prompt_bytes=len(prompt.encode("utf-8")),
+                        response_bytes=len(output_text.encode("utf-8")),
+                    ),
+                )
+            )
+            return outcome
 
     def _run_openclaw(
         self,
@@ -191,13 +290,21 @@ class CommandWorkerExecutor:
 
 
 def _worker_prompt(card: QueueCard, *, attempt_id: str, workspace: Path) -> str:
-    schema = json.dumps(strict_output_schema(WorkerExecutionResult), separators=(",", ":"))
+    schema = json.dumps(_worker_output_schema(), separators=(",", ":"))
+    runtime_canary = "runtime-canary" in card.labels
     merge_rule = (
         "This is an explicitly assigned merge-stage card: you may merge only after the configured merge gate "
         "passes and its completion policy allows it. Do not release, deploy, expose secrets, force-push, or "
         "delete branches."
         if "stage:merge" in card.labels
         else "Do not merge, release, deploy, expose secrets, force-push, or delete branches."
+    )
+    publish_rule = (
+        "For implementation and repair cards, do not commit, push, or create/update a pull request. "
+        "The trusted host controller will publish the isolated worktree after you return; report the code "
+        "changes, checks, and evidence in your structured result."
+        if any(label in {"stage:implementation", "stage:repair"} for label in card.labels)
+        else ""
     )
     return (
         "You are a Make It So worker in a fresh context. Execute only the assigned card.\n"
@@ -208,10 +315,16 @@ def _worker_prompt(card: QueueCard, *, attempt_id: str, workspace: Path) -> str:
         "This managed launcher owns Workboard claim, heartbeat, completion, and blocking. Do not call "
         "Workboard tools or lifecycle helper commands, even if the assignment text mentions them. "
         "Report the outcome only by returning the JSON object requested below.\n\n"
-        "Inspect current repository state before mutating it. Keep changes inside the exact working directory. "
-        f"{merge_rule} Run the checks relevant "
+        + (
+            "This is a runtime-only canary. Do not inspect files, run commands, or mutate the workspace. "
+            "Return the required canary marker as passed proof immediately. "
+            if runtime_canary
+            else "Inspect current repository state before mutating it. Keep changes inside the exact working directory. "
+        )
+        + f"{merge_rule} {publish_rule} Run the checks relevant "
         "to this card. Return blocked with a TECHNICAL:, USER_SECRET:, GOAL_DIVERGENCE:, EXTERNAL_ACCESS:, or "
         "HIGH_RISK_DECISION: reason when completion is not justified. Never invent proof.\n\n"
+        "For non-test cards set `test_evidence` to null. For test and UX cards return the complete evidence object.\n"
         "Return exactly one JSON object matching this schema, with no markdown or commentary:\n"
         f"{schema}"
     )
@@ -235,14 +348,83 @@ def _parse_result(text: str) -> WorkerExecutionResult:
 
 
 def _runtime_model(runtime: Literal["openclaw", "codex"], model: str) -> str:
-    if runtime == "codex" and model.startswith("codex/"):
-        return model.split("/", 1)[1]
-    return model
+    return runtime_model(runtime, model)
+
+
+def _codex_additional_writable_dirs(workspace: Path) -> tuple[Path, ...]:
+    """Include linked-worktree Git metadata in Codex's workspace-write scope."""
+    marker = workspace / ".git"
+    if marker.is_dir():
+        return (marker.resolve(),)
+    if not marker.is_file():
+        return ()
+
+    try:
+        line = marker.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ()
+    if not line.lower().startswith("gitdir:"):
+        return ()
+
+    raw_git_dir = line.split(":", 1)[1].strip()
+    git_dir = Path(raw_git_dir)
+    if not git_dir.is_absolute():
+        git_dir = workspace / git_dir
+    git_dir = git_dir.resolve()
+    candidates = [git_dir]
+    commondir = git_dir / "commondir"
+    try:
+        common_name = commondir.read_text(encoding="utf-8").strip()
+    except OSError:
+        common_name = ""
+    if common_name:
+        common_dir = (git_dir / common_name).resolve()
+        if common_dir not in candidates:
+            candidates.append(common_dir)
+    return tuple(path for path in candidates if path.exists())
+
+
+def _codex_usage(stdout: str, *, prompt_bytes: int, response_bytes: int) -> ModelUsage:
+    usage: dict[str, Any] = {}
+    reported_model: str | None = None
+    for line in stdout.splitlines():
+        try:
+            raw_event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(raw_event, dict):
+            continue
+        event = cast(dict[str, Any], raw_event)
+        if event.get("type") != "turn.completed":
+            continue
+        raw_usage = event.get("usage")
+        if isinstance(raw_usage, dict):
+            usage = cast(dict[str, Any], raw_usage)
+        if event.get("model"):
+            reported_model = str(event["model"])
+
+    def token(name: str) -> int | None:
+        value = usage.get(name)
+        return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+    return ModelUsage(
+        reported_model=reported_model,
+        input_tokens=token("input_tokens"),
+        cached_input_tokens=token("cached_input_tokens"),
+        cache_write_tokens=token("cache_write_tokens"),
+        reasoning_tokens=token("reasoning_output_tokens") or token("reasoning_tokens"),
+        output_tokens=token("output_tokens"),
+        total_tokens=token("total_tokens"),
+        prompt_bytes=prompt_bytes,
+        response_bytes=response_bytes,
+        source="codex" if usage else "unreported",
+    )
 
 
 __all__ = [
     "CommandWorkerExecutor",
     "WorkerExecutionError",
     "WorkerExecutionResult",
+    "WorkerExecutionTelemetry",
     "WorkerExecutorAdapter",
 ]

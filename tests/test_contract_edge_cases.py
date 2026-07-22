@@ -19,6 +19,7 @@ from make_it_so.models import (
     OperationMode,
     RepoConfig,
 )
+from make_it_so.openclaw_workboard import OpenClawWorkboardAdapter
 from make_it_so.orchestration import QueueCard, QueueCardSpec, QueueStatus, WorkStage
 from make_it_so.scheduler import OpenClawScheduler, ScheduleSpec
 from make_it_so.worktrees import Worktree, WorktreeManager
@@ -119,6 +120,31 @@ def test_scheduler_rejects_malformed_openclaw_payloads_and_handles_cron_shape(tm
 
     with pytest.raises(RuntimeError, match="has no ID"):
         OpenClawScheduler("openclaw", missing_id).install(value)
+
+
+def test_openclaw_card_reads_workspace_from_automation_metadata() -> None:
+    card = OpenClawWorkboardAdapter._card(  # pyright: ignore[reportPrivateUsage]
+        {
+            "id": "review-card",
+            "title": "Review",
+            "status": "ready",
+            "metadata": {
+                "automation": {
+                    "workspace": {
+                        "kind": "worktree",
+                        "path": "/state/worktrees/review",
+                        "branch": "make_it_so/review/pr-1",
+                        "pushBranch": "make_it_so/work/pr-1",
+                    }
+                }
+            },
+        }
+    )
+
+    assert card.workspace is not None
+    assert card.workspace.path == Path("/state/worktrees/review")
+    assert card.workspace.branch == "make_it_so/review/pr-1"
+    assert card.workspace.push_branch == "make_it_so/work/pr-1"
 
 
 def test_canary_completion_and_direct_orchestrator_edge_contracts(tmp_path: Path) -> None:

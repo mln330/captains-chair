@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from make_it_so.command import CommandRunner, run_command
-from make_it_so.model_policy import models_match
+from make_it_so.model_policy import models_match, runtime_model
 from make_it_so.models import OpenClawWorkboardConfig
 from make_it_so.openclaw_workboard import (
     REQUIRED_WORKER_TOOLS,
@@ -26,7 +26,7 @@ Mandatory protocol:
 1. Read the card, parent results, source links, repository AGENTS.md, `.make-it-so/project.yaml`, and canonical planning documents before acting.
 2. Work only in the workspace or worktree supplied by the card. Never switch the shared checkout to a feature branch.
 3. Keep the card claim alive with the MAKE_IT_SO `worker-protocol heartbeat` command during long operations. Never call `heartbeat_respond`; it is not a Workboard lease heartbeat and may be unavailable.
-4. Record direct proof: commands, current GitHub links, current head SHA, tests, CI, screenshots, or artifacts as appropriate.
+4. Record direct proof: commands, current GitHub links, current head SHA, tests, CI, screenshots, or artifacts as appropriate. For a milestone test or UX card, include a `test_evidence` object with `status`, `head_sha`, `commands`, `tests_total`, `tests_passed`, `tests_failed`, `tests_skipped`, `pass_rate`, and `screenshots` or other artifact URLs.
 5. Use the lifecycle helper below for heartbeat, completion, or blocking. Never simply stop after writing a narrative response.
 6. Use `TECHNICAL:` for failures that another worker or retry can repair.
 7. Request the owner only with `USER_SECRET:`, `GOAL_DIVERGENCE:`, `EXTERNAL_ACCESS:`, or `HIGH_RISK_DECISION:`.
@@ -47,12 +47,12 @@ Examples (replace values with the card id, ownerId, and claim token from the Wor
 
 
 ROLE_PROTOCOLS: dict[str, str] = {
-    "captain": """\n## Role: Captain supervisor\n\nReconcile the card against live GitHub state and repository-owned plans. Make routine decisions autonomously when they preserve the documented goal. Decompose work into bounded cards, route technical blockers to repair or recovery workers, and reserve owner questions for true goal divergence, access, secrets, or high-risk decisions.\n""",
-    "coder": """\n## Role: implementation and repair\n\nImplement only the linked acceptance criteria in the supplied isolated worktree. Run targeted checks, scan the diff for secrets and unrelated churn, push the MAKE_IT_SO branch, and open or update the linked PR with its exact GitHub PR URL, head SHA, and test proof in the structured completion proof. Never review, approve, or merge your own work.\n""",
+    "captain": """\n## Role: Number One supervisor\n\nReconcile the card against live GitHub state and repository-owned plans. Make routine decisions autonomously when they preserve the documented goal. Decompose work into bounded cards, route technical blockers to repair or recovery workers, and reserve owner questions for true goal divergence, access, secrets, or high-risk decisions.\n""",
+    "coder": """\n## Role: implementation and repair\n\nImplement only the linked acceptance criteria in the supplied isolated worktree. Run targeted checks and scan the diff for secrets and unrelated churn. Do not commit, push, or create/update a pull request: the trusted host controller publishes the isolated worktree after the worker returns. Include the code-change summary and test proof in the structured completion proof. Never review, approve, or merge your own work.\n""",
     "reviewer": """\n## Role: independent code reviewer\n\nUse fresh context and inspect the current PR head. Do not edit files. Review correctness, security, scope, tests, docs alignment, and unrelated churn. Complete only with current-head evidence; otherwise block with actionable findings prefixed `TECHNICAL:`.\n""",
-    "tester": """\n## Role: independent test and CI checker\n\nRun configured targeted checks and inspect required GitHub checks on the current PR head. Do not waive pending or failed checks. Record exact commands and links. Block repairably failing work with `TECHNICAL:`.\n""",
-    "ux_reviewer": """\n## Role: frontend usability reviewer\n\nFor UI-impacting work, exercise real flows in a browser at mobile, tablet, and desktop sizes. Check functionality, contrast, keyboard and focus behavior, responsive layout, error/loading/empty states, touch targets, overflow, and visual cohesion. Attach screenshot proof. Do not edit implementation files.\n""",
-    "final_reviewer": """\n## Role: Captain final reviewer\n\nCompare the current PR head with the original issue, repository plan, acceptance criteria, independent review, UX evidence, tests, CI, and unresolved threads. Complete only when all evidence is current. The card states the exact configured completion policy and its one required marker; use that marker and never infer a different policy. Return a passed proof marker anchored to the current head: `READY_FOR_OWNER:<head-sha>` for owner approval, `CONTROL_PLANE_COMPLETE:<head-sha>` for Captain completion, or `AUTO_MERGE_ALLOWED:<head-sha>` for autonomous merge. READY_FOR_OWNER is not permission to auto-merge.\n\nEfficiency boundary: use only focused evidence calls against this card, its parent cards, the linked PR, and the repository. Never call session-inventory tools or inspect other workers' conversations. Do not repeat an unchanged command; after a small bounded set of checks, complete with proof or block with one precise `TECHNICAL:` reason.\n""",
+    "tester": """\n## Role: independent test and CI checker\n\nRun configured targeted checks and inspect required GitHub checks on the current PR head. Do not waive pending or failed checks. Record exact commands and links. Complete with structured `test_evidence` containing the current head SHA, test counts, computed pass rate, command, model/provider, and artifact URLs. Block repairably failing work with `TECHNICAL:`.\n""",
+    "ux_reviewer": """\n## Role: frontend usability reviewer\n\nFor UI-impacting work, exercise real flows in a browser at mobile, tablet, and desktop sizes. Check functionality, contrast, keyboard and focus behavior, responsive layout, error/loading/empty states, touch targets, overflow, and visual cohesion. Complete with structured `test_evidence`, including current head SHA, pass rate, exact commands, and screenshot artifact URLs for the tested viewports. Do not edit implementation files.\n""",
+    "final_reviewer": """\n## Role: Number One final reviewer\n\nCompare the current PR head with the original issue, repository plan, acceptance criteria, independent review, UX evidence, tests, CI, and unresolved threads. Complete only when all evidence is current. The card states the exact configured completion policy and its one required marker; use that marker and never infer a different policy. Return a passed proof marker anchored to the current head: `READY_FOR_OWNER:<head-sha>` for owner approval, `CONTROL_PLANE_COMPLETE:<head-sha>` for Number One completion, or `AUTO_MERGE_ALLOWED:<head-sha>` for autonomous merge. READY_FOR_OWNER is not permission to auto-merge.\n\nEfficiency boundary: use only focused evidence calls against this card, its parent cards, the linked PR, and the repository. Never call session-inventory tools or inspect other workers' conversations. Do not repeat an unchanged command; after a small bounded set of checks, complete with proof or block with one precise `TECHNICAL:` reason.\n""",
     "merger": """\n## Role: deterministic merger\n\nDo not reinterpret requirements. Read the PR number and final-review card id from the card's parent results, then run `{make_it_so_command} merge-gate --repo <owner/repo> --pr <number> --final-card <id> --merge`. Complete the Workboard card only when that command reports both `allowed: true` and `merged: true`, and attach the PR URL and merge result as proof. Never invoke `gh pr merge` directly. Pending checks, unresolved threads, stale review evidence, scope drift, or an owner-only completion policy must fail closed.\n""",
     "verifier": """\n## Role: post-action verifier\n\nRead the result back from GitHub. For merges, verify the actual default-branch commit and main CI; treat deployment according to repository policy. Complete with direct links and SHAs, or block with a precise tagged reason.\n""",
 }
@@ -80,8 +80,13 @@ class OpenClawRuntimeInstaller:
         existing = self._agents()
         actions: list[RuntimeInstallAction] = []
         for role, agent_id, model in self._roles():
-            workspace = (workspace_root / agent_id).resolve()
             current = existing.get(agent_id)
+            configured_workspace = str((current or {}).get("workspace") or "").strip()
+            workspace = (
+                Path(configured_workspace).expanduser().resolve()
+                if configured_workspace
+                else (workspace_root / agent_id).resolve()
+            )
             if current is None:
                 action = "create"
             elif not models_match(model, str(current.get("model") or "")):
@@ -90,6 +95,17 @@ class OpenClawRuntimeInstaller:
                 action = "update_instructions"
             actions.append(RuntimeInstallAction(role, agent_id, model, str(workspace), action))
         return tuple(actions)
+
+    def agent_inventory(self) -> tuple[dict[str, str], ...]:
+        """Return the safe agent fields needed by first-run setup surfaces."""
+        return tuple(
+            {
+                "id": agent_id,
+                "model": str(value.get("model") or ""),
+                "workspace": str(value.get("workspace") or ""),
+            }
+            for agent_id, value in sorted(self._agents().items())
+        )
 
     def install(self, workspace_root: Path) -> tuple[RuntimeInstallAction, ...]:
         existing = self._agents()
@@ -112,7 +128,7 @@ class OpenClawRuntimeInstaller:
                         "--workspace",
                         str(workspace),
                         "--model",
-                        item.model,
+                        runtime_model("openclaw", item.model),
                         "--non-interactive",
                         "--json",
                     ],

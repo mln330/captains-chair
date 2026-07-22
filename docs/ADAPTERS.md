@@ -30,7 +30,7 @@ kind is still unusable until a matching registry builder is installed.
 
 Direct model admission also accepts an optional runtime telemetry synchronizer.
 The OpenClaw CLI supplies one backed by `openclaw sessions`; it reconciles the
-previous call before the next direct Captain call is admitted and suppresses the call
+previous call before the next direct Number One call is admitted and suppresses the call
 when the telemetry endpoint is degraded. A Codex or future runtime
 can provide the same callback from its native usage ledger without importing
 OpenClaw code into the engine.
@@ -94,14 +94,16 @@ idempotency key. Both must return the portable `WorkerExecutionResult` contract.
 
 Runtime model mappings are intentionally separate. The portable `models` and
 `harness_model_overrides.codex` sections describe direct Codex execution, where
-`gpt-5.3-codex-spark` is the economical coding route. The OpenClaw
-`openclaw-workers.worker_models` section describes models passed through the
-OpenClaw Gateway. On a ChatGPT-account gateway, the OpenClaw worker route must
-use a gateway-compatible Codex model such as `codex/gpt-5.6-terra`; Spark is
-rejected by that gateway even though standalone Codex OAuth accepts it. This is
-still Codex-provider execution, not an OpenAI API-key path. Runtime-specific
-capability checks must be performed before dispatch and the requested, reported,
-provider, and authentication route must be retained in usage evidence.
+`gpt-5.3-codex-spark` is the economical coding route. OpenClaw Workboard also
+supports typed per-role execution through `worker_runtimes`: Workboard retains
+the claim, heartbeat, dependency, retry, and proof lifecycle while a coding card
+may run through `codex exec`. The resulting execution receipt, including the
+requested model and provider token telemetry, is retained in Workboard proof and
+imported idempotently into the portable usage store. OpenClaw-only roles continue
+to use the configured gateway model. Direct Codex uses ChatGPT OAuth, not an
+OpenAI API-key path. Runtime-specific capability checks must be performed before
+dispatch and the requested, reported, provider, and authentication route must be
+retained in usage evidence.
 An `external` direct runtime leaves cards ready for a third-party worker to claim
 through the same lifecycle API.
 
@@ -202,7 +204,7 @@ validators remain in MAKE_IT_SO.
 `GitHubProvider` is the engine-facing protocol. `GhGitHubProvider` is the current
 implementation using authenticated `gh` REST, GraphQL, and CLI operations. A future
 provider can use GitHub App REST/GraphQL, an organization service, or a test double
-without changing the Captain engine, baseline analysis, policy, or merge gate. It must
+without changing the Number One engine, baseline analysis, policy, or merge gate. It must
 preserve the same snapshot, pull-request, review-thread, check-gate, issue-mutation,
 and default-branch verification semantics. Issue mutation includes create, update,
 add-label, retarget (milestone and/or assignees), and close operations; these are
@@ -252,7 +254,7 @@ runtime-specific connection and dispatch fields. Workboard configuration belongs
 to the optional tracker adapter; it is never a required core field. The worker
 roles and retry policy remain common:
 
-- Captain recovery
+- Number One recovery
 - coder/repair
 - independent reviewer
 - tester/CI checker

@@ -8,8 +8,17 @@ from typing import Any
 import pytest
 
 from make_it_so.command import CommandResult
-from make_it_so.direct_workers import WorkerExecutionError, WorkerExecutionResult
-from make_it_so.models import OpenClawWorkboardConfig, WorkerAssignments
+from make_it_so.direct_workers import (
+    WorkerExecutionError,
+    WorkerExecutionResult,
+    WorkerExecutionTelemetry,
+)
+from make_it_so.models import (
+    ModelUsage,
+    OpenClawWorkboardConfig,
+    WorkerAssignments,
+    WorkerRuntimeAssignments,
+)
 from make_it_so.openclaw_workboard import (
     OpenClawWorkboardAdapter,
     OpenClawWorkboardError,
@@ -46,9 +55,51 @@ def test_managed_completion_proof_preserves_policy_marker_from_summary() -> None
         "Final review passed. AUTO_MERGE_ALLOWED:749a3a45de43fc2d6eeaf1cb2d2a91b549fd04b3",
     )
 
-    assert proof[0]["note"].endswith(
-        "AUTO_MERGE_ALLOWED:749a3a45de43fc2d6eeaf1cb2d2a91b549fd04b3"
+    assert proof[0]["note"].endswith("AUTO_MERGE_ALLOWED:749a3a45de43fc2d6eeaf1cb2d2a91b549fd04b3")
+
+
+def test_managed_completion_proof_persists_nested_test_evidence_in_flat_workboard_note() -> None:
+    proof = _managed_completion_proof(
+        (
+            {
+                "status": "passed",
+                "note": "pytest passed",
+                "test_evidence": {
+                    "status": "passed",
+                    "head_sha": "abcdef1234567",
+                    "commands": ["pytest -q"],
+                    "tests_total": 4,
+                    "tests_passed": 4,
+                    "tests_failed": 0,
+                    "tests_skipped": 0,
+                    "pass_rate": 100,
+                    "screenshots": [],
+                },
+            },
+        )
     )
+
+    assert "MAKE_IT_SO_TEST_EVIDENCE_JSON:" in proof[0]["note"]
+
+
+def test_card_rehydrates_managed_metadata_from_workboard_notes() -> None:
+    raw = {
+        "id": "card-1",
+        "title": "Test",
+        "status": "done",
+        "notes": (
+            "Repository: example/project\n"
+            "MAKE_IT_SO_METADATA_JSON:{\"courseKey\":\"course-1\",\"workPackageKey\":\"package-1\","
+            "\"testEvidenceRequired\":true}"
+        ),
+        "metadata": {"proof": [{"status": "passed", "note": "pytest"}]},
+    }
+
+    card = OpenClawWorkboardAdapter._card(raw)  # pyright: ignore[reportPrivateUsage]
+
+    assert card.metadata["courseKey"] == "course-1"
+    assert card.metadata["workPackageKey"] == "package-1"
+    assert card.metadata["testEvidenceRequired"] is True
 
 
 @pytest.mark.parametrize(
@@ -124,6 +175,56 @@ def test_recovery_treats_missing_session_as_ended() -> None:
     assert recovered == ("card-1",)
 
 
+def test_recovery_uses_loose_workboard_session_link() -> None:
+    commands: list[Sequence[str]] = []
+
+    def runner(
+        command: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        input_text: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        del cwd, input_text, timeout
+        commands.append(command)
+        if "sessions" in command:
+            return CommandResult(0, "session ended: direct launch exited\n", "")
+        if "workboard.cards.reclaim" in command:
+            return CommandResult(
+                0,
+                json.dumps({"card": {"id": "card-1", "title": "Test", "status": "review"}}),
+                "",
+            )
+        raise AssertionError(f"unexpected command: {command}")
+
+    adapter = OpenClawWorkboardAdapter(config(), runner)
+    card = QueueCard(
+        id="card-1",
+        title="Test",
+        status=QueueStatus.RUNNING,
+        agent_id="coder",
+        linked_session_id="agent:coder:subagent:workboard-card-1",
+    )
+
+    assert adapter.recover_ended_workers("board", [card]) == ("card-1",)
+    session_command = next(command for command in commands if "sessions" in command)
+    assert "agent:coder:subagent:workboard-card-1" in session_command
+
+
+def test_card_preserves_loose_workboard_session_link() -> None:
+    raw = {
+        "id": "card-1",
+        "title": "Test",
+        "status": "running",
+        "agentId": "coder",
+        "sessionId": "agent:coder:subagent:workboard-card-1",
+    }
+
+    card = OpenClawWorkboardAdapter._card(raw)  # pyright: ignore[reportPrivateUsage]
+
+    assert card.linked_session_id == "agent:coder:subagent:workboard-card-1"
+
+
 def test_create_card_uses_gateway_rpc_and_preserves_worker_metadata(tmp_path: Path) -> None:
     commands: list[Sequence[str]] = []
 
@@ -192,6 +293,7 @@ def test_create_card_uses_gateway_rpc_and_preserves_worker_metadata(tmp_path: Pa
     assert params["workspace"]["kind"] == "worktree"
     assert params["workspace"]["pushBranch"] == "feature/current-pr"
     assert params["metadata"] == {"courseKey": "course-1", "workPackageKey": "package-1"}
+    assert "MAKE_IT_SO_METADATA_JSON:" in params["notes"]
     assert card.workspace == WorkspaceRef(
         kind="worktree",
         path=tmp_path,
@@ -431,9 +533,7 @@ def test_claimed_worker_lifecycle_uses_typed_runtime_boundary(
 
     adapter = OpenClawWorkboardAdapter(config(), runner)
     if operation == "heartbeat":
-        adapter.heartbeat_card(
-            "card-1", owner_id="tester", token="claim-token", note="still working"
-        )
+        adapter.heartbeat_card("card-1", owner_id="tester", token="claim-token", note="still working")
     else:
         adapter.block_claimed_card(
             "card-1", owner_id="tester", token="claim-token", reason="TECHNICAL: test failed"
@@ -616,9 +716,7 @@ def test_recover_ended_worker_reclaims_running_card_for_fresh_retry() -> None:
         id="card-1",
         title="Test",
         status=QueueStatus.RUNNING,
-        metadata={
-            "attempts": [{"sessionKey": "agent:tester:subagent:card-1", "status": "running"}]
-        },
+        metadata={"attempts": [{"sessionKey": "agent:tester:subagent:card-1", "status": "running"}]},
     )
 
     assert adapter.recover_ended_workers("printhub", [card]) == ("card-1",)
@@ -696,6 +794,46 @@ def test_recover_expired_claim_without_session_lookup() -> None:
     assert any("workboard.cards.reclaim" in command for command in commands)
 
 
+def test_recover_stale_heartbeat_before_lease_expiry_without_session_lookup() -> None:
+    commands: list[Sequence[str]] = []
+
+    def runner(
+        command: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        input_text: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        del cwd, input_text, timeout
+        commands.append(command)
+        if "workboard.cards.reclaim" in command:
+            return CommandResult(
+                0,
+                json.dumps({"card": {"id": "card-1", "title": "Test", "status": "review"}}),
+                "",
+            )
+        raise AssertionError(f"unexpected command: {command}")
+
+    adapter = OpenClawWorkboardAdapter(config(), runner)
+    card = QueueCard(
+        id="card-1",
+        title="Test",
+        status=QueueStatus.RUNNING,
+        metadata={
+            "claim": {
+                "ownerId": "tester",
+                "claimedAt": 1,
+                "lastHeartbeatAt": 1,
+                "expiresAt": 9999999999999,
+            },
+        },
+    )
+
+    assert adapter.recover_ended_workers("board", [card]) == ("card-1",)
+    assert not any("sessions" in command for command in commands)
+    assert any("workboard.cards.reclaim" in command for command in commands)
+
+
 def test_recover_stopped_attempt_without_session_lookup() -> None:
     commands: list[Sequence[str]] = []
 
@@ -731,9 +869,7 @@ def test_recover_stopped_attempt_without_session_lookup() -> None:
         },
     )
 
-    assert OpenClawWorkboardAdapter(config(), runner).recover_ended_workers("board", [card]) == (
-        "card-1",
-    )
+    assert OpenClawWorkboardAdapter(config(), runner).recover_ended_workers("board", [card]) == ("card-1",)
     assert not any("sessions" in command for command in commands)
 
 
@@ -777,9 +913,7 @@ def test_worker_model_health_accepts_codex_route_reported_by_openai_provider() -
         if list(command)[1:4] == ["agents", "list", "--json"]:
             return CommandResult(
                 0,
-                json.dumps(
-                    [{"id": agent_id, "model": model} for agent_id, model in observed.items()]
-                ),
+                json.dumps([{"id": agent_id, "model": model} for agent_id, model in observed.items()]),
                 "",
             )
         if list(command)[3] == "tools":
@@ -840,9 +974,7 @@ def test_worker_health_fails_closed_on_missing_tools_and_unsafe_concurrency() ->
         if list(command)[1:4] == ["agents", "list", "--json"]:
             return CommandResult(
                 0,
-                json.dumps(
-                    [{"id": agent_id, "model": model} for agent_id, model in observed.items()]
-                ),
+                json.dumps([{"id": agent_id, "model": model} for agent_id, model in observed.items()]),
                 "",
             )
         if list(command)[3] == "tools":
@@ -885,9 +1017,7 @@ def test_worker_health_accepts_unrestricted_tool_policy() -> None:
         if list(command)[1:4] == ["agents", "list", "--json"]:
             return CommandResult(
                 0,
-                json.dumps(
-                    [{"id": agent_id, "model": model} for agent_id, model in observed.items()]
-                ),
+                json.dumps([{"id": agent_id, "model": model} for agent_id, model in observed.items()]),
                 "",
             )
         if list(command)[3] == "tools":
@@ -925,9 +1055,7 @@ def test_worker_health_rejects_bool_concurrency() -> None:
         if list(command)[1:4] == ["agents", "list", "--json"]:
             return CommandResult(
                 0,
-                json.dumps(
-                    [{"id": agent_id, "model": model} for agent_id, model in observed.items()]
-                ),
+                json.dumps([{"id": agent_id, "model": model} for agent_id, model in observed.items()]),
                 "",
             )
         if list(command)[3] == "tools":
@@ -965,9 +1093,7 @@ def test_worker_health_fails_closed_when_runtime_config_read_fails() -> None:
         if list(command)[1:4] == ["agents", "list", "--json"]:
             return CommandResult(
                 0,
-                json.dumps(
-                    [{"id": agent_id, "model": model} for agent_id, model in observed.items()]
-                ),
+                json.dumps([{"id": agent_id, "model": model} for agent_id, model in observed.items()]),
                 "",
             )
         return CommandResult(1, "", "config unavailable")
@@ -1001,9 +1127,7 @@ def test_worker_health_fails_closed_when_runtime_config_is_not_object() -> None:
         if list(command)[1:4] == ["agents", "list", "--json"]:
             return CommandResult(
                 0,
-                json.dumps(
-                    [{"id": agent_id, "model": model} for agent_id, model in observed.items()]
-                ),
+                json.dumps([{"id": agent_id, "model": model} for agent_id, model in observed.items()]),
                 "",
             )
         return CommandResult(0, "[]", "")
@@ -1035,6 +1159,117 @@ def test_managed_dispatch_completes_one_ready_card(monkeypatch: pytest.MonkeyPat
     assert cards["card-1"]["status"] == "done"
     assert cards["card-2"]["status"] == "ready"
     assert "workboard.cards.dispatch" not in calls
+
+
+def test_managed_dispatch_routes_coder_through_direct_codex(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cards = {"card-1": _managed_card("card-1", status="ready", agent_id="coder")}
+    constructed: list[tuple[str, str]] = []
+    outcome = WorkerExecutionResult(
+        status="completed",
+        summary="implemented",
+        proof=({"status": "passed", "note": "tests passed"},),
+    )
+    outcome.attach_telemetry(
+        WorkerExecutionTelemetry(
+            runtime="codex",
+            requested_model="gpt-5.3-codex-spark",
+            attempt_id="spark-attempt",
+            duration_ms=25,
+            usage=ModelUsage(input_tokens=100, cached_input_tokens=20, output_tokens=10, source="codex"),
+        )
+    )
+
+    class FakeExecutor:
+        def __init__(self, runtime: str, executable: str, _runner: object) -> None:
+            constructed.append((runtime, executable))
+
+        def execute(self, *args: object, **kwargs: object) -> WorkerExecutionResult:
+            return outcome
+
+    monkeypatch.setattr("make_it_so.openclaw_workboard.CommandWorkerExecutor", FakeExecutor)
+    configured = config().model_copy(
+        update={
+            "codex_executable": "/opt/codex",
+            "worker_runtimes": WorkerRuntimeAssignments(coder="codex"),
+        }
+    )
+
+    result = OpenClawWorkboardAdapter(configured, _managed_runner(cards, [])).dispatch("board")
+
+    assert result["completed"] == ["card-1"]
+    assert result["runtime"] == "codex"
+    assert result["model"] == "codex/gpt-5.3-codex-spark"
+    assert constructed == [("codex", "/opt/codex")]
+    receipt = cards["card-1"]["metadata"]["comments"][0]["body"]
+    assert receipt.startswith("MAKE_IT_SO_WORKER_EXECUTION:")
+    execution = cards["card-1"]["metadata"]["proof"][0]["execution"]
+    assert execution["runtime"] == "codex"
+    assert execution["usage"]["input_tokens"] == 100
+
+
+def test_host_controller_publishes_coder_worktree_without_sandbox_network(
+    tmp_path: Path,
+) -> None:
+    calls: list[list[str]] = []
+    pr_list_calls = 0
+
+    def runner(
+        command: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        input_text: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        del cwd, input_text, timeout
+        nonlocal pr_list_calls
+        argv = list(command)
+        calls.append(argv)
+        if argv[:4] == ["git", "-C", str(tmp_path), "status"]:
+            return CommandResult(0, " M apps/server/src/index.ts\n", "")
+        if argv[:4] == ["git", "-C", str(tmp_path), "symbolic-ref"]:
+            return CommandResult(0, "refs/remotes/origin/HEAD -> refs/remotes/origin/main\n", "")
+        if argv[:4] == ["git", "-C", str(tmp_path), "rev-parse"]:
+            return CommandResult(0, "a" * 40, "")
+        if argv[:3] == ["gh", "pr", "list"]:
+            pr_list_calls += 1
+            return CommandResult(
+                0,
+                "[]" if pr_list_calls == 1 else json.dumps(
+                    [{"number": 7, "url": "https://github.com/mln330/example/pull/7", "isDraft": False}]
+                ),
+                "",
+            )
+        if argv[:3] == ["gh", "pr", "create"]:
+            return CommandResult(0, "https://github.com/mln330/example/pull/7\n", "")
+        return CommandResult(0, "", "")
+
+    card = QueueCard(
+        id="coder-card",
+        title="Implement the viewer",
+        status=QueueStatus.RUNNING,
+        labels=("stage:implementation",),
+        source_url="https://github.com/mln330/example",
+        workspace=WorkspaceRef(
+            kind="worktree",
+            path=tmp_path,
+            branch="make_it_so/work/coder-card",
+        ),
+    )
+    result = OpenClawWorkboardAdapter(config(), runner)._publish_worker_changes(  # pyright: ignore[reportPrivateUsage]
+        card,
+        WorkerExecutionResult(
+            status="completed",
+            summary="implemented viewer",
+            proof=({"status": "passed", "note": "targeted tests passed"},),
+        ),
+    )
+
+    assert result.proof[0]["url"] == "https://github.com/mln330/example/pull/7"
+    assert "head aaaaaaaaaa" in result.proof[0]["note"]
+    assert ["git", "-C", str(tmp_path), "push", "--set-upstream", "origin", "HEAD:refs/heads/make_it_so/work/coder-card"] in calls
+    assert any(argv[:3] == ["gh", "pr", "create"] for argv in calls)
 
 
 def test_managed_dispatch_collapses_multiple_worker_proof_records(
@@ -1142,19 +1377,13 @@ def test_merge_card_uses_deterministic_gate_without_model_worker(
                 "proof": [
                     {
                         "status": "passed",
-                        "note": (
-                            f"AUTO_MERGE_ALLOWED:{head}"
-                            if allowed
-                            else f"READY_FOR_OWNER:{head}"
-                        ),
+                        "note": (f"AUTO_MERGE_ALLOWED:{head}" if allowed else f"READY_FOR_OWNER:{head}"),
                     }
                 ]
             },
         },
         "merge": {
-            **_managed_card(
-                "merge", status=merge_status, agent_id=merge_agent, parents=("final",)
-            ),
+            **_managed_card("merge", status=merge_status, agent_id=merge_agent, parents=("final",)),
             "notes": "Repository: mln330/canary",
             "labels": ["workflow:current", "stage:merge"],
         },
@@ -1212,9 +1441,7 @@ def test_merge_card_uses_deterministic_gate_without_model_worker(
         assert proof["model"] == "deterministic/no-model"
         assert "Model: deterministic/no-model; Provider: make-it-so" in proof["note"]
     else:
-        assert "missing AUTO_MERGE_ALLOWED" in cards["merge"]["metadata"]["workerProtocol"][
-            "detail"
-        ]
+        assert "missing AUTO_MERGE_ALLOWED" in cards["merge"]["metadata"]["workerProtocol"]["detail"]
 
 
 def test_assigned_merge_card_never_falls_through_to_model_dispatch() -> None:
@@ -1235,13 +1462,46 @@ def test_assigned_merge_card_never_falls_through_to_model_dispatch() -> None:
     assert not any("sessions.spawn" in call for call in calls)
 
 
+def test_deterministic_merge_waits_for_active_repair() -> None:
+    cards: dict[str, dict[str, Any]] = {
+        "final": {
+            **_managed_card("final", status="done", agent_id="final"),
+            "notes": "Repository: mln330/canary",
+            "labels": ["workflow:current", "stage:final_review"],
+            "metadata": {
+                "proof": [
+                    {
+                        "status": "passed",
+                        "note": "AUTO_MERGE_ALLOWED:6fc76b2",
+                        "url": "https://github.com/mln330/canary/pull/1",
+                    }
+                ]
+            },
+        },
+        "repair": {
+            **_managed_card("repair", status="running", agent_id="coder"),
+            "notes": "Repository: mln330/canary",
+            "labels": ["workflow:current", "stage:repair", "repair-for:review"],
+        },
+        "merge": {
+            **_managed_card("merge", status="todo", agent_id="", parents=("final",)),
+            "notes": "Repository: mln330/canary",
+            "labels": ["workflow:current", "stage:merge"],
+        },
+    }
+
+    result = OpenClawWorkboardAdapter(config(), _managed_runner(cards, [])).dispatch("board")
+
+    assert result["deterministic_merge"]["status"] == "waiting"
+    assert cards["merge"]["status"] == "ready"
+    assert cards["repair"]["status"] == "running"
+
+
 @pytest.mark.parametrize("missing", ("repository", "pull_request", "final_review"))
 def test_deterministic_merge_waits_for_unambiguous_context(missing: str) -> None:
     final_labels = ["workflow:current", "stage:final_review"]
     notes = "Repository: mln330/canary"
-    proof: list[dict[str, str]] = [
-        {"status": "passed", "url": "https://github.com/mln330/canary/pull/1"}
-    ]
+    proof: list[dict[str, str]] = [{"status": "passed", "url": "https://github.com/mln330/canary/pull/1"}]
     if missing == "repository":
         notes = "Repository context is unavailable"
     elif missing == "pull_request":
@@ -1433,6 +1693,8 @@ def _managed_runner(
         elif method == "workboard.cards.complete":
             card["status"] = "done"
             card["metadata"]["proof"] = [params["proof"]]
+        elif method == "workboard.cards.comment":
+            card["metadata"].setdefault("comments", []).append({"body": params["body"]})
         elif method == "workboard.cards.block":
             card["status"] = "blocked"
             card["metadata"]["workerProtocol"] = {

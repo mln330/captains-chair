@@ -205,7 +205,10 @@ def _usage_attempt_index(
     if attempt_session_id:
         for index, item in enumerate(attempts):
             item_value = cast(dict[str, Any], item) if isinstance(item, dict) else None
-            if item_value is not None and item_value.get("session_id") == attempt_session_id:
+            if item_value is not None and (
+                item_value.get("session_id") == attempt_session_id
+                or item_value.get("provider_session_id") == attempt_session_id
+            ):
                 return index
         return None
     for index, item in enumerate(attempts):
@@ -227,6 +230,20 @@ def _event_from_row(row: sqlite3.Row) -> EventRecord:
         fingerprint=row["fingerprint"],
         evidence=json.loads(row["evidence_json"]),
         created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+def _dimension_tokens(group: dict[str, Any]) -> int:
+    total = group.get("total_tokens")
+    if isinstance(total, (int, float)) and not isinstance(total, bool) and total >= 0:
+        return int(total)
+    # Provider input totals already include the cached subset. Keep cache
+    # visible as its own efficiency dimension without counting it twice.
+    return sum(
+        int(value)
+        for field in ("input_tokens", "output_tokens")
+        for value in (group.get(field),)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0
     )
 
 
@@ -291,6 +308,7 @@ class StateStore:
                     repo TEXT NOT NULL,
                     run_id TEXT NOT NULL,
                     session_id TEXT,
+                    continuation_session_id TEXT,
                     runtime TEXT NOT NULL DEFAULT 'legacy',
                     role TEXT NOT NULL,
                     course_key TEXT,
@@ -379,6 +397,39 @@ class StateStore:
                     updated_at TEXT NOT NULL,
                     PRIMARY KEY(repo, fingerprint, event_type)
                 );
+                CREATE TABLE IF NOT EXISTS number_one_sessions (
+                    repo TEXT NOT NULL,
+                    course_key TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    runtime TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    plan_revision INTEGER NOT NULL,
+                    last_review_at TEXT,
+                    summary TEXT,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(repo, course_key)
+                );
+                CREATE TABLE IF NOT EXISTS milestone_changes (
+                    proposal_id TEXT PRIMARY KEY,
+                    repo TEXT NOT NULL,
+                    course_key TEXT NOT NULL,
+                    base_revision INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    proposal_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS milestone_changes_course_status
+                    ON milestone_changes(repo, course_key, status, created_at DESC);
+                CREATE TABLE IF NOT EXISTS milestone_reviews (
+                    review_id TEXT PRIMARY KEY,
+                    repo TEXT NOT NULL,
+                    course_key TEXT NOT NULL,
+                    reviewed_at TEXT NOT NULL,
+                    review_json TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS milestone_reviews_course_date
+                    ON milestone_reviews(repo, course_key, reviewed_at DESC);
                 CREATE TABLE IF NOT EXISTS orchestration_cards (
                     repo TEXT NOT NULL,
                     card_id TEXT NOT NULL,
@@ -392,6 +443,7 @@ class StateStore:
             columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(model_calls)")}
             migrations = {
                 "session_id": "TEXT",
+                "continuation_session_id": "TEXT",
                 "runtime": "TEXT NOT NULL DEFAULT 'legacy'",
                 "input_tokens": "INTEGER",
                 "cached_input_tokens": "INTEGER",
@@ -455,6 +507,23 @@ class StateStore:
                 )
         return transitions
 
+    def orchestration_card_payloads(self, repo: str) -> list[dict[str, Any]]:
+        """Read the last durable Workboard mirror without calling the host runtime."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT payload_json FROM orchestration_cards WHERE repo=?",
+                (repo,),
+            ).fetchall()
+        payloads: list[dict[str, Any]] = []
+        for row in rows:
+            try:
+                value = json.loads(str(row["payload_json"]))
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, dict):
+                payloads.append(cast(dict[str, Any], value))
+        return payloads
+
     def openclaw_session_context(self, repo: str) -> dict[str, dict[str, str]]:
         """Return stage context keyed by managed Workboard card ID.
 
@@ -497,6 +566,27 @@ class StateStore:
             if values_by_prefix.get("workflow") and "work_package_key" not in context_value:
                 context_value["work_package_key"] = values_by_prefix["workflow"]
             context[str(row["card_id"])] = context_value
+        return context
+
+    def number_one_session_context(self, repo: str) -> dict[str, dict[str, str]]:
+        """Return durable course context for Number One's named sessions."""
+        context: dict[str, dict[str, str]] = {}
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT session_id, course_key, plan_revision, model FROM number_one_sessions WHERE repo=?",
+                (repo,),
+            ).fetchall()
+        for row in rows:
+            session_id = str(row["session_id"] or "").strip()
+            course_key = str(row["course_key"] or "").strip()
+            if not session_id or not course_key:
+                continue
+            context[session_id] = {
+                "course_key": course_key,
+                "stage": "number_one",
+                "plan_revision": str(row["plan_revision"]),
+                "expected_model": str(row["model"] or "").strip(),
+            }
         return context
 
     def approve(self, repo: str, action_id: str, approved_by: str) -> None:
@@ -830,6 +920,123 @@ class StateStore:
             row = conn.execute("SELECT * FROM baselines WHERE repo = ?", (repo,)).fetchone()
         return dict(row) if row else None
 
+    def save_number_one_session(
+        self,
+        repo: str,
+        course_key: str,
+        session_id: str,
+        runtime: str,
+        model: str,
+        plan_revision: int,
+        *,
+        summary: str | None = None,
+        reviewed_at: str | None = None,
+    ) -> None:
+        now = datetime.now(UTC).isoformat()
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO number_one_sessions(repo,course_key,session_id,runtime,model,plan_revision,last_review_at,summary,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(repo,course_key) DO UPDATE SET session_id=excluded.session_id,"
+                "runtime=excluded.runtime,model=excluded.model,plan_revision=excluded.plan_revision,"
+                "last_review_at=COALESCE(excluded.last_review_at,number_one_sessions.last_review_at),"
+                "summary=COALESCE(excluded.summary,number_one_sessions.summary),updated_at=excluded.updated_at",
+                (repo, course_key, session_id, runtime, model, plan_revision, reviewed_at, summary, now),
+            )
+
+    def number_one_session(self, repo: str, course_key: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM number_one_sessions WHERE repo=? AND course_key=?",
+                (repo, course_key),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def save_milestone_change(self, proposal: dict[str, Any]) -> None:
+        required = ("proposal_id", "repository", "course_key", "base_revision", "status")
+        if any(not str(proposal.get(key, "")).strip() for key in required):
+            raise ValueError(f"milestone proposal requires {required}")
+        now = datetime.now(UTC).isoformat()
+        created = str(proposal.get("created_at") or now)
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO milestone_changes(proposal_id,repo,course_key,base_revision,status,proposal_json,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(proposal_id) DO UPDATE SET status=excluded.status,"
+                "proposal_json=excluded.proposal_json,updated_at=excluded.updated_at",
+                (
+                    str(proposal["proposal_id"]),
+                    str(proposal["repository"]),
+                    str(proposal["course_key"]),
+                    int(proposal["base_revision"]),
+                    str(proposal["status"]),
+                    json.dumps(proposal, sort_keys=True, default=str),
+                    created,
+                    now,
+                ),
+            )
+
+    def milestone_change(self, repo: str, proposal_id: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT proposal_json FROM milestone_changes WHERE repo=? AND proposal_id=?",
+                (repo, proposal_id),
+            ).fetchone()
+        if row is None:
+            return None
+        try:
+            value = json.loads(str(row["proposal_json"]))
+        except json.JSONDecodeError:
+            return None
+        return cast(dict[str, Any], value) if isinstance(value, dict) else None
+
+    def milestone_changes(self, repo: str, course_key: str) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT proposal_json FROM milestone_changes WHERE repo=? AND course_key=? ORDER BY created_at DESC",
+                (repo, course_key),
+            ).fetchall()
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            try:
+                value = json.loads(str(row["proposal_json"]))
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, dict):
+                result.append(cast(dict[str, Any], value))
+        return result
+
+    def record_milestone_review(self, review: dict[str, Any]) -> None:
+        required = ("review_id", "repository", "course_key", "reviewed_at")
+        if any(not str(review.get(key, "")).strip() for key in required):
+            raise ValueError(f"milestone review requires {required}")
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO milestone_reviews(review_id,repo,course_key,reviewed_at,review_json) VALUES(?,?,?,?,?)",
+                (
+                    str(review["review_id"]),
+                    str(review["repository"]),
+                    str(review["course_key"]),
+                    str(review["reviewed_at"]),
+                    json.dumps(review, sort_keys=True, default=str),
+                ),
+            )
+
+    def milestone_reviews(self, repo: str, course_key: str, *, limit: int = 20) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT review_json FROM milestone_reviews WHERE repo=? AND course_key=? "
+                "ORDER BY reviewed_at DESC LIMIT ?",
+                (repo, course_key, max(1, min(limit, 100))),
+            ).fetchall()
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            try:
+                value = json.loads(str(row["review_json"]))
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, dict):
+                result.append(cast(dict[str, Any], value))
+        return result
+
     def record_model_call(
         self,
         repo: str,
@@ -841,6 +1048,7 @@ class StateStore:
         prompt: str | None = None,
         prompt_fingerprint: str | None = None,
         session_id: str | None = None,
+        continuation_session_id: str | None = None,
         runtime: str = "make_it_so",
         course_key: str | None = None,
         work_package_key: str | None = None,
@@ -875,14 +1083,15 @@ class StateStore:
         usage_known = int(any(value is not None for value in (input_tokens, cached_input_tokens, cache_write_tokens, output_tokens, total_tokens)))
         with self._connect() as conn:
             conn.execute(
-                "INSERT INTO model_calls(repo,run_id,session_id,runtime,role,course_key,work_package_key,stage,resolved_model,attempts_json,input_tokens,"
+                "INSERT INTO model_calls(repo,run_id,session_id,continuation_session_id,runtime,role,course_key,work_package_key,stage,resolved_model,attempts_json,input_tokens,"
                 "cached_input_tokens,cache_write_tokens,reasoning_tokens,output_tokens,total_tokens,prompt_bytes,response_bytes,usage_known,"
                 "fallback_count,model_mismatch_count,duration_ms,prompt_fingerprint,created_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     repo,
                     run_id,
                     session_id,
+                    continuation_session_id,
                     runtime.strip() or "make_it_so",
                     role,
                     course_key,
@@ -929,11 +1138,7 @@ class StateStore:
                     "reasoning_tokens": group.get("reasoning_tokens"),
                     "output_tokens": group.get("output_tokens"),
                     "total_tokens": group.get("total_tokens"),
-                    "tokens": group.get("total_tokens")
-                    or sum(
-                        int(group.get(field) or 0)
-                        for field in ("input_tokens", "cached_input_tokens", "output_tokens")
-                    ),
+                    "tokens": _dimension_tokens(group),
                 }
             )
         for group in cast(list[dict[str, Any]], summary.get("external_groups", [])):
@@ -954,11 +1159,7 @@ class StateStore:
                     "reasoning_tokens": group.get("reasoning_tokens"),
                     "output_tokens": group.get("output_tokens"),
                     "total_tokens": group.get("total_tokens"),
-                    "tokens": group.get("total_tokens")
-                    or sum(
-                        int(group.get(field) or 0)
-                        for field in ("input_tokens", "cached_input_tokens", "output_tokens")
-                    ),
+                    "tokens": _dimension_tokens(group),
                 }
             )
         return sorted(dimensions, key=lambda item: (str(item["date"]), int(item["tokens"])), reverse=True)
@@ -967,10 +1168,15 @@ class StateStore:
         """Return opaque direct-harness IDs that may be correlated with OpenClaw sessions."""
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT session_id FROM model_calls WHERE repo=? AND session_id IS NOT NULL",
+                "SELECT session_id, continuation_session_id FROM model_calls WHERE repo=?",
                 (repo,),
             ).fetchall()
-        return {str(row["session_id"]) for row in rows if row["session_id"]}
+        values: set[str] = set()
+        for row in rows:
+            for key in ("session_id", "continuation_session_id"):
+                if row[key]:
+                    values.add(str(row[key]))
+        return values
 
     def enrich_model_call_usage(
         self,
@@ -985,9 +1191,9 @@ class StateStore:
             total_tokens = None
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT id, attempts_json FROM model_calls WHERE session_id=? "
+                "SELECT id, attempts_json FROM model_calls WHERE session_id=? OR continuation_session_id=? "
                 "ORDER BY id DESC LIMIT 1",
-                (session_id,),
+                (session_id, session_id),
             ).fetchone()
             if row is None:
                 return False

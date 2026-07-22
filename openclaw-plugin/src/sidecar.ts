@@ -41,6 +41,7 @@ export function withSidecarShutdown<Args extends unknown[], Result>(
 export class SidecarSupervisor {
   private child: ChildProcessWithoutNullStreams | undefined;
   private lines: Interface | undefined;
+  private startPromise: Promise<void> | undefined;
   private nextId = 1;
   private readonly pending = new Map<number, Pending>();
   private readonly timeoutMs: number;
@@ -58,6 +59,17 @@ export class SidecarSupervisor {
 
   public async start(): Promise<void> {
     if (this.running) return;
+    if (this.startPromise) return this.startPromise;
+    const pendingStart = this.startInternal();
+    this.startPromise = pendingStart;
+    try {
+      await pendingStart;
+    } finally {
+      if (this.startPromise === pendingStart) this.startPromise = undefined;
+    }
+  }
+
+  private async startInternal(): Promise<void> {
     const child = spawn(
       this.options.executable,
       [...this.options.args, "--config", this.options.configPath],
@@ -98,8 +110,15 @@ export class SidecarSupervisor {
     }
   }
 
-  public async request(method: string, params: Record<string, unknown> = {}): Promise<RpcResult> {
-    await this.start();
+  public async request(
+    method: string,
+    params: Record<string, unknown> = {},
+    timeoutMs = this.timeoutMs,
+  ): Promise<RpcResult> {
+    if (!this.running) {
+      if (this.startPromise) await this.startPromise;
+      else await this.start();
+    }
     if (!this.child?.stdin.writable) throw new Error("Make It So sidecar is not writable");
     const id = this.nextId++;
     const request: SidecarRequest = { jsonrpc: "2.0", id, method, params };
@@ -107,7 +126,7 @@ export class SidecarSupervisor {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`sidecar request timed out: ${method}`));
-      }, this.timeoutMs);
+      }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
       this.child?.stdin.write(`${JSON.stringify(request)}\n`);
     });

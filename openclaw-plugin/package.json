@@ -1,11 +1,13 @@
 {
   "name": "@mln330/openclaw-make-it-so",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Make It So control plane for OpenClaw",
   "type": "module",
   "main": "./dist/index.js",
   "files": [
     "dist",
+    "bin",
+    "scripts",
     "openclaw.plugin.json"
   ],
   "scripts": {
@@ -15,7 +17,8 @@
     "test": "vitest run",
     "test:host": "node tests/host-registration.mjs",
     "test:package": "node tests/package.mjs",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "install:sidebar-icon": "node scripts/install-sidebar-rocket.mjs"
   },
   "peerDependencies": {
     "openclaw": ">=2026.7.1"
@@ -45,5 +48,8 @@
       "pluginApi": ">=2026.7.1",
       "minGatewayVersion": "2026.7.1"
     }
+  },
+  "dependencies": {
+    "lucide-react": "^1.25.0"
   }
 }

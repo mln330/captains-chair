@@ -3,6 +3,7 @@ export type ScheduleDefinition = {
   every: string;
   kind: string;
   command: string[];
+  timeout_seconds?: number;
 };
 
 export type CronJob = Record<string, unknown>;
@@ -15,7 +16,7 @@ export type OpenClawCommandResult = {
 
 export type OpenClawCommandRunner = (
   argv: string[],
-  options?: { timeoutMs?: number },
+  options: { timeoutMs: number },
 ) => Promise<OpenClawCommandResult>;
 
 export type ScheduleInspection = {
@@ -71,7 +72,7 @@ export function buildCronAddArgs(
   return [
     "cron", "add", "--name", job.name, "--every", job.every,
     "--command-argv", JSON.stringify(buildCommandArgv(job, pythonExecutable, configPath)),
-    "--command-cwd", cwd, "--no-deliver", "--json",
+    "--command-cwd", cwd, "--timeout-seconds", String(scheduleTimeoutSeconds(job)), "--no-deliver", "--json",
   ];
 }
 
@@ -85,8 +86,16 @@ export function buildCronEditArgs(
   return [
     "cron", "edit", id, "--name", job.name, "--every", job.every,
     "--command-argv", JSON.stringify(buildCommandArgv(job, pythonExecutable, configPath)),
-    "--command-cwd", cwd, "--no-deliver",
+    "--command-cwd", cwd, "--timeout-seconds", String(scheduleTimeoutSeconds(job)), "--no-deliver",
   ];
+}
+
+function scheduleTimeoutSeconds(job: ScheduleDefinition): number {
+  const value = job.timeout_seconds;
+  if (value === undefined || !Number.isInteger(value) || value < 60) {
+    throw new Error(`schedule ${job.name} has an invalid timeout_seconds value`);
+  }
+  return value;
 }
 
 export function inspectCronJob(
@@ -109,6 +118,7 @@ export function inspectCronJob(
   else if (!sameArray(actualArgv, buildCommandArgv(definition, pythonExecutable, configPath))) {
     drift.push("command");
   }
+  if (readTimeoutSeconds(primary) !== scheduleTimeoutSeconds(definition)) drift.push("timeout");
   return {
     primary,
     duplicates: matching.slice(1),
@@ -148,6 +158,18 @@ function readArgv(job: CronJob): string[] | undefined {
   const candidates: unknown[] = [payload?.argv, payload?.commandArgv, job.argv, job.commandArgv];
   const value = candidates.find((candidate) => Array.isArray(candidate));
   return Array.isArray(value) && value.every((item) => typeof item === "string") ? value : undefined;
+}
+
+function readTimeoutSeconds(job: CronJob): number | undefined {
+  const payload = isRecord(job.payload) ? job.payload : undefined;
+  const candidates: unknown[] = [
+    payload?.timeoutSeconds,
+    payload?.timeout_seconds,
+    job.timeoutSeconds,
+    job.timeout_seconds,
+  ];
+  const value = candidates.find((candidate) => typeof candidate === "number");
+  return typeof value === "number" ? value : undefined;
 }
 
 function millisecondsToEvery(value: number): string {
