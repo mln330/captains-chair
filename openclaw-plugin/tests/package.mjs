@@ -12,10 +12,21 @@ const jsonStart = output.lastIndexOf('[\n  {\n    "id"');
 if (jsonStart < 0) throw new Error(`npm pack did not emit a JSON report: ${output.slice(-500)}`);
 const pack = JSON.parse(output.slice(jsonStart))[0];
 const paths = new Set(pack.files.map((entry) => entry.path));
+const architecture = process.arch === "x64" ? "x64" : process.arch === "arm64" ? "arm64" : process.arch;
+const sidecarName = process.platform === "win32" ? "make-it-so-sidecar.exe" : "make-it-so-sidecar";
+const sidecarPath = `bin/${process.platform}-${architecture}/${sidecarName}`;
+const releaseSidecars = process.env.MAKE_IT_SO_RELEASE_PACKAGE === "1"
+  ? [
+      "bin/linux-x64/make-it-so-sidecar",
+      "bin/win32-x64/make-it-so-sidecar.exe",
+      "bin/darwin-x64/make-it-so-sidecar",
+    ]
+  : [sidecarPath];
 for (const required of [
   "dist/index.js",
   "dist/ui/assets/index.js",
   "dist/ui/assets/index.css",
+  ...releaseSidecars,
   "openclaw.plugin.json",
 ]) {
   if (!paths.has(required)) throw new Error(`published package is missing ${required}`);

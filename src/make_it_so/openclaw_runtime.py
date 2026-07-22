@@ -80,8 +80,13 @@ class OpenClawRuntimeInstaller:
         existing = self._agents()
         actions: list[RuntimeInstallAction] = []
         for role, agent_id, model in self._roles():
-            workspace = (workspace_root / agent_id).resolve()
             current = existing.get(agent_id)
+            configured_workspace = str((current or {}).get("workspace") or "").strip()
+            workspace = (
+                Path(configured_workspace).expanduser().resolve()
+                if configured_workspace
+                else (workspace_root / agent_id).resolve()
+            )
             if current is None:
                 action = "create"
             elif not models_match(model, str(current.get("model") or "")):
@@ -90,6 +95,17 @@ class OpenClawRuntimeInstaller:
                 action = "update_instructions"
             actions.append(RuntimeInstallAction(role, agent_id, model, str(workspace), action))
         return tuple(actions)
+
+    def agent_inventory(self) -> tuple[dict[str, str], ...]:
+        """Return the safe agent fields needed by first-run setup surfaces."""
+        return tuple(
+            {
+                "id": agent_id,
+                "model": str(value.get("model") or ""),
+                "workspace": str(value.get("workspace") or ""),
+            }
+            for agent_id, value in sorted(self._agents().items())
+        )
 
     def install(self, workspace_root: Path) -> tuple[RuntimeInstallAction, ...]:
         existing = self._agents()

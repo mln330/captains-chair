@@ -154,6 +154,55 @@ describe("shared dashboard components", () => {
     vi.unstubAllGlobals();
   });
 
+  it("configures a role-separated crew through first-run setup", async () => {
+    const roles = {
+      captain: { agent_id: "github-captain", model: "codex/gpt-5.6-terra", runtime: "openclaw" },
+      coder: { agent_id: "github-coder", model: "codex/gpt-5.3-codex-spark", runtime: "openclaw" },
+      reviewer: { agent_id: "github-reviewer", model: "codex/gpt-5.6-terra", runtime: "openclaw" },
+      tester: { agent_id: "github-tester", model: "codex/gpt-5.6-luna", runtime: "openclaw" },
+      ux_reviewer: { agent_id: "github-ux", model: "codex/gpt-5.6-terra", runtime: "openclaw" },
+      final_reviewer: { agent_id: "github-final", model: "codex/gpt-5.6-sol", runtime: "openclaw" },
+      merger: { agent_id: "github-merge", model: "codex/gpt-5.6-terra", runtime: "openclaw" },
+      verifier: { agent_id: "github-verify", model: "codex/gpt-5.6-terra", runtime: "openclaw" },
+    };
+    let configured = false;
+    const fetchMock = vi.fn((request: RequestInfo | URL) => {
+      const path = String(request);
+      if (path.includes("bootstrap/status")) return Promise.resolve(response(configured ? { configured: true, setup_required: false } : {
+        configured: false,
+        setup_required: true,
+        runtime_available: true,
+        config_path: "/home/test/.config/make-it-so/config.yaml",
+        workspace_root: "/home/test/.openclaw/make-it-so/workers",
+        agents: [{ id: "main", model: "ollama/test", workspace: "/home/test/.openclaw/workspace" }],
+        workers: roles,
+        actions: Object.entries(roles).map(([role, worker]) => ({ role, ...worker, workspace: `/workers/${worker.agent_id}`, action: "create" })),
+        schedules: { reconcile_every: "5m", review_every: "2h" },
+      }));
+      if (path.includes("bootstrap/apply")) { configured = true; return Promise.resolve(response({ configured: true, setup_required: false })); }
+      if (path.includes("portfolio/status")) return Promise.resolve(response({ repos: [] }));
+      if (path.includes("courses/list")) return Promise.resolve(response({ courses: [] }));
+      if (path.includes("models/config")) return Promise.resolve(response({ global_profiles: {}, runtime_profiles: {}, runtimes: ["openclaw"] }));
+      if (path.includes("schedule/status")) return Promise.resolve(response({ status: "inspected", jobs: [] }));
+      return Promise.resolve(response({ status: "ok" }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Your command deck is installed" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    expect(screen.getByLabelText("Coder model")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Coder model"), { target: { value: "ollama/kimi-code:cloud" } });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Configure Make It So" }));
+
+    await waitFor(() => expect(fetchMock.mock.calls.some(([request]) => String(request).includes("bootstrap/apply"))).toBe(true));
+    const applyCall = fetchMock.mock.calls.find(([request]) => String(request).includes("bootstrap/apply"));
+    expect(String((applyCall?.[1] as RequestInit | undefined)?.body)).toContain("ollama/kimi-code:cloud");
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Current courses" })).toBeTruthy());
+  });
+
   it("renders loaded course state and starts an immediate course review", async () => {
     render(<App />);
 

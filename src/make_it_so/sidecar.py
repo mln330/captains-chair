@@ -67,6 +67,7 @@ from make_it_so.models import (
     UsageConfig,
     WorkPackageStatus,
 )
+from make_it_so.openclaw_runtime import OpenClawRuntimeInstaller
 from make_it_so.openclaw_usage import sync_openclaw_sessions
 from make_it_so.openclaw_workboard import WORKER_EXECUTION_COMMENT_PREFIX
 from make_it_so.orchestration import QueueCard, QueueStatus
@@ -80,6 +81,161 @@ class SidecarError(RuntimeError):
 
 
 SIDECAR_TIMEOUT_SAFETY_SECONDS = 300
+
+_BOOTSTRAP_ROLES = (
+    "captain",
+    "coder",
+    "reviewer",
+    "tester",
+    "ux_reviewer",
+    "final_reviewer",
+    "merger",
+    "verifier",
+)
+_BOOTSTRAP_AGENT_IDS = {
+    "captain": "github-captain",
+    "coder": "github-coder",
+    "reviewer": "github-reviewer",
+    "tester": "github-tester",
+    "ux_reviewer": "github-ux",
+    "final_reviewer": "github-final",
+    "merger": "github-merge",
+    "verifier": "github-verify",
+}
+_BOOTSTRAP_MODELS = {
+    "captain": "codex/gpt-5.6-terra",
+    "coder": "codex/gpt-5.3-codex-spark",
+    "reviewer": "codex/gpt-5.6-terra",
+    "tester": "codex/gpt-5.6-luna",
+    "ux_reviewer": "codex/gpt-5.6-terra",
+    "final_reviewer": "codex/gpt-5.6-sol",
+    "merger": "codex/gpt-5.6-terra",
+    "verifier": "codex/gpt-5.6-terra",
+}
+_BOOTSTRAP_THINKING = {
+    "captain": "high",
+    "coder": "medium",
+    "reviewer": "high",
+    "tester": "medium",
+    "ux_reviewer": "medium",
+    "final_reviewer": "high",
+    "merger": "medium",
+    "verifier": "medium",
+}
+
+
+def _bootstrap_model_profile(
+    model: str,
+    agent_id: str,
+    thinking: str,
+    *,
+    allow_fallback: bool = True,
+) -> dict[str, Any]:
+    return {
+        "primary": {"model": model, "agent": agent_id, "thinking": thinking},
+        "fallbacks": [],
+        "allow_fallback": allow_fallback,
+        "max_attempts": 1,
+    }
+
+
+def _bootstrap_config(config_path: Path, payload: dict[str, Any] | None = None) -> AppConfig:
+    """Build a conservative, valid configuration for plugin-first onboarding."""
+    values = payload or {}
+    workers_value = values.get("workers")
+    raw_workers = cast(dict[str, Any], workers_value) if isinstance(workers_value, dict) else {}
+    workers: dict[str, str] = {}
+    worker_models: dict[str, str] = {}
+    worker_runtimes: dict[str, str] = {}
+    for role in _BOOTSTRAP_ROLES:
+        worker_value = raw_workers.get(role)
+        item = cast(dict[str, Any], worker_value) if isinstance(worker_value, dict) else {}
+        agent_id = str(item.get("agent_id") or _BOOTSTRAP_AGENT_IDS[role]).strip()
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", agent_id):
+            raise SidecarError(f"invalid OpenClaw agent ID for {role}: {agent_id!r}")
+        workers[role] = agent_id
+        worker_models[role] = str(item.get("model") or _BOOTSTRAP_MODELS[role]).strip()
+        worker_runtimes[role] = str(item.get("runtime") or "openclaw").strip()
+
+    executable = str(values.get("openclaw_executable") or "openclaw").strip()
+    state_dir = config_path.parent / "state"
+    artifact_dir = state_dir / "artifacts"
+    lifecycle_value = values.get("lifecycle_command")
+    lifecycle_items = cast(list[Any], lifecycle_value) if isinstance(lifecycle_value, list) else []
+    if not (
+        lifecycle_items
+        and all(isinstance(item, str) and item.strip() for item in lifecycle_items)
+    ):
+        lifecycle_command: list[str] = ["make-it-so", "--config", str(config_path)]
+    else:
+        lifecycle_command = [str(item) for item in lifecycle_items]
+
+    profiles = {
+        role: _bootstrap_model_profile(
+            worker_models[role],
+            workers[role],
+            _BOOTSTRAP_THINKING[role],
+            allow_fallback=role != "final_reviewer",
+        )
+        for role in _BOOTSTRAP_ROLES
+    }
+    model_policy = {
+        "baseline": profiles["captain"],
+        "planner": profiles["captain"],
+        "coder": profiles["coder"],
+        "reviewer": profiles["reviewer"],
+        "comment_adjudicator": profiles["reviewer"],
+        "tester": profiles["tester"],
+        "final_reviewer": profiles["final_reviewer"],
+        "ux_reviewer": profiles["ux_reviewer"],
+        "profiles": {
+            "strategist": profiles["final_reviewer"],
+            "course_verifier": profiles["final_reviewer"],
+            "recovery_planner": profiles["captain"],
+            "code_reviewer": profiles["reviewer"],
+            "qa_assistant": profiles["tester"],
+            "ui_qa_reviewer": profiles["ux_reviewer"],
+        },
+    }
+    raw: dict[str, Any] = {
+        "version": 1,
+        "state_dir": str(state_dir),
+        "artifact_dir": str(artifact_dir),
+        "harnesses": {
+            "openclaw": {
+                "kind": "openclaw",
+                "executable": executable,
+                "default_agent": workers["captain"],
+                "timeout_seconds": 3600,
+            }
+        },
+        "orchestrators": {
+            "openclaw-workers": {
+                "kind": "openclaw_workboard",
+                "executable": executable,
+                "make_it_so_command": lifecycle_command,
+                "board_prefix": "make-it-so",
+                "workers": workers,
+                "worker_models": worker_models,
+                "worker_runtimes": worker_runtimes,
+                "codex_executable": str(values.get("codex_executable") or "codex"),
+                "max_concurrent_subagents": 1,
+                "dispatch_strategy": "managed_single",
+            }
+        },
+        "models": model_policy,
+        "harness_model_overrides": {"openclaw": model_policy},
+        "usage": {"block_on_unknown": True, "retention_days": 90},
+        "schedules": {
+            "reconcile_every": str(values.get("reconcile_every") or "5m"),
+            "review_every": str(values.get("review_every") or "2h"),
+        },
+        "repos": [],
+    }
+    try:
+        return AppConfig.model_validate(raw)
+    except ValueError as exc:
+        raise SidecarError(f"invalid first-run configuration: {exc}") from exc
 
 
 _WORKBOARD_ACTIVE_STATUSES = frozenset(
@@ -1036,7 +1192,8 @@ class SidecarServer:
         github: GitHubProvider | None = None,
     ) -> None:
         self.config_path = config_path
-        self.config = load_config(config_path)
+        self.configured = config_path.is_file()
+        self.config = load_config(config_path) if self.configured else _bootstrap_config(config_path)
         self.state = StateStore(self.config.state_dir / "state.db")
         self.interaction = interaction or NativeInteractionAdapter()
         self.github = github or GhGitHubProvider()
@@ -1195,8 +1352,14 @@ class SidecarServer:
                 "version": __version__,
                 "protocol_version": SIDECAR_PROTOCOL_VERSION,
                 "config": str(self.config_path),
+                "configured": self.configured,
+                "setup_required": not self.configured,
                 "timestamp": datetime.now(UTC).isoformat(),
             }
+        if method == "bootstrap.status":
+            return self._bootstrap_status(payload)
+        if method == "bootstrap.apply":
+            return self._apply_bootstrap(payload)
         if method in {"portfolio.status", "repos.list"}:
             repos = self.config.repos
             if not repos:
@@ -1287,6 +1450,99 @@ class SidecarServer:
             )
         raise SidecarError(f"unknown sidecar method: {method}")
 
+    def _bootstrap_status(self, payload: dict[str, Any]) -> dict[str, Any]:
+        executable = str(payload.get("openclaw_executable") or "").strip()
+        config = self.config
+        configured = config.orchestrators.get("openclaw-workers")
+        if not isinstance(configured, OpenClawWorkboardConfig):
+            generated = _bootstrap_config(
+                self.config_path,
+                {"openclaw_executable": executable or "openclaw"},
+            ).orchestrators.get("openclaw-workers")
+            if not isinstance(generated, OpenClawWorkboardConfig):
+                raise SidecarError("first-run OpenClaw workboard configuration is unavailable")
+            configured = generated
+        if executable and executable != configured.executable:
+            configured = configured.model_copy(update={"executable": executable})
+        installer = OpenClawRuntimeInstaller(configured)
+        workspace_root = Path(
+            str(payload.get("workspace_root") or self.config_path.parent / "workers")
+        ).expanduser()
+        try:
+            inventory = list(installer.agent_inventory())
+            actions = [item.__dict__ for item in installer.plan(workspace_root)]
+            runtime_available = True
+            warning = None
+        except Exception as exc:
+            inventory = []
+            actions = []
+            runtime_available = False
+            warning = str(exc)[:1000]
+        worker_payload = {
+            role: {
+                "agent_id": getattr(configured.workers, role),
+                "model": getattr(configured.worker_models, role),
+                "runtime": getattr(configured.worker_runtimes, role),
+            }
+            for role in _BOOTSTRAP_ROLES
+        }
+        return {
+            "status": "configured" if self.configured else "setup_required",
+            "configured": self.configured,
+            "setup_required": not self.configured,
+            "config_path": str(self.config_path),
+            "workspace_root": str(workspace_root),
+            "runtime_available": runtime_available,
+            "warning": warning,
+            "agents": inventory,
+            "workers": worker_payload,
+            "actions": actions,
+            "schedules": self.config.schedules.model_dump(mode="json"),
+            "automation_enabled": False,
+        }
+
+    def _apply_bootstrap(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if self.configured and self.config.repos and not bool(payload.get("reconfigure", False)):
+            raise SidecarError(
+                "first-run setup cannot replace a configuration with registered repositories"
+            )
+        candidate = _bootstrap_config(self.config_path, payload)
+        configured = candidate.orchestrators.get("openclaw-workers")
+        if not isinstance(configured, OpenClawWorkboardConfig):
+            raise SidecarError("first-run configuration did not create the OpenClaw orchestrator")
+        workspace_root = Path(
+            str(payload.get("workspace_root") or self.config_path.parent / "workers")
+        ).expanduser().resolve()
+        if workspace_root == Path(workspace_root.anchor):
+            raise SidecarError("worker workspace root cannot be a filesystem root")
+
+        installer = OpenClawRuntimeInstaller(configured)
+        # Planning before persistence catches agent/model conflicts without
+        # replacing an otherwise healthy configuration.
+        planned = installer.plan(workspace_root)
+        mismatches = [item for item in planned if item.action == "model_mismatch"]
+        if mismatches:
+            first = mismatches[0]
+            raise SidecarError(
+                f"agent {first.agent_id} already uses a different model; "
+                "choose another agent ID or update it explicitly"
+            )
+        actions = installer.install(workspace_root)
+        self._write_config(candidate)
+        self.configured = True
+        self.state = StateStore(candidate.state_dir / "state.db")
+        return {
+            "status": "configured",
+            "configured": True,
+            "setup_required": False,
+            "config_path": str(self.config_path),
+            "workspace_root": str(workspace_root),
+            "agents": [item.__dict__ for item in actions],
+            "schedules": candidate.schedules.model_dump(mode="json"),
+            "automation_enabled": False,
+            "next_action": "Register a repository, run the canary, then explicitly enable schedules.",
+        }
+
     def _discord_planning_bindings(self) -> dict[str, Any]:
         """Return durable Discord-to-Number-One bindings for plugin recovery."""
         bindings = [
@@ -1356,7 +1612,7 @@ class SidecarServer:
                     text=True,
                     timeout=10,
                 )
-                changed_paths = []
+                changed_paths: list[str] = []
                 for line in result.stdout.splitlines():
                     path = line[3:].strip() if len(line) >= 4 else ""
                     if not path:

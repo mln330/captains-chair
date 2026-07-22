@@ -1,11 +1,12 @@
 {
   "name": "@mln330/openclaw-make-it-so",
-  "version": "0.2.4",
+  "version": "0.3.0",
   "description": "Make It So control plane for OpenClaw",
   "type": "module",
   "main": "./dist/index.js",
   "files": [
     "dist",
+    "bin",
     "scripts",
     "openclaw.plugin.json"
   ],

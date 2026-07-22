@@ -68,6 +68,40 @@ def test_runtime_plan_is_portable_data_and_does_not_write(tmp_path: Path) -> Non
     assert not any(tmp_path.iterdir())
 
 
+def test_runtime_plan_reuses_the_registered_workspace_for_existing_agents(tmp_path: Path) -> None:
+    registered = tmp_path / "existing-captain"
+
+    def runner(
+        command: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        input_text: str | None = None,
+        timeout: int = 60,
+    ) -> CommandResult:
+        del cwd, input_text, timeout
+        if list(command)[1:4] == ["agents", "list", "--json"]:
+            return CommandResult(
+                0,
+                json.dumps(
+                    [
+                        {
+                            "id": "make-it-so",
+                            "model": "codex/gpt-5.6-terra",
+                            "workspace": str(registered),
+                        }
+                    ]
+                ),
+                "",
+            )
+        return CommandResult(0, "{}", "")
+
+    installer = OpenClawRuntimeInstaller(runtime_config(), runner)
+    captain = next(item for item in installer.plan(tmp_path / "managed") if item.role == "captain")
+
+    assert captain.workspace == str(registered.resolve())
+    assert installer.agent_inventory()[0]["workspace"] == str(registered)
+
+
 def test_runtime_install_creates_agents_and_role_protocols(tmp_path: Path) -> None:
     commands: list[Sequence[str]] = []
 

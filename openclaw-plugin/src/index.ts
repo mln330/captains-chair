@@ -166,6 +166,7 @@ const CONFIG_SCHEMA = {
     configPath: { type: "string" },
     pythonExecutable: { type: "string", default: "python3" },
     sidecarCommand: { type: "array", items: { type: "string" }, default: ["-m", "make_it_so.sidecar"] },
+    sidecarExecutable: { type: "string", default: "" },
     openclawExecutable: { type: "string", default: "" },
     numberOneAgent: { type: "string", default: DEFAULT_NUMBER_ONE_AGENT },
     numberOneModel: { type: "string", default: DEFAULT_NUMBER_ONE_MODEL },
@@ -174,7 +175,7 @@ const CONFIG_SCHEMA = {
     readinessReviewHarness: { type: "string", default: "openclaw" },
     discordBotUserIds: { type: "array", items: { type: "string" }, default: DEFAULT_DISCORD_BOT_USER_IDS },
     discordRouteAliases: { type: "object", additionalProperties: { type: "string" }, default: {} },
-    installSchedules: { type: "boolean", default: false },
+    installSchedules: { type: "boolean", default: true },
   },
 };
 
@@ -211,6 +212,24 @@ function configArgs(config: Record<string, unknown>): string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string")
     ? [...value]
     : ["-m", "make_it_so.sidecar"];
+}
+
+export function resolveSidecarLaunch(
+  rootDir: string | undefined,
+  config: Record<string, unknown>,
+): { executable: string; args: string[]; bundled: boolean } {
+  const configuredExecutable = configString(config, "sidecarExecutable", "").trim();
+  if (configuredExecutable) {
+    return { executable: expandPath(configuredExecutable), args: [], bundled: true };
+  }
+  const binaryName = process.platform === "win32" ? "make-it-so-sidecar.exe" : "make-it-so-sidecar";
+  const bundled = rootDir ? join(rootDir, "bin", `${process.platform}-${process.arch}`, binaryName) : "";
+  if (bundled && existsSync(bundled)) return { executable: bundled, args: [], bundled: true };
+  return {
+    executable: configString(config, "pythonExecutable", "python3"),
+    args: configArgs(config),
+    bundled: false,
+  };
 }
 
 function discordRouteKeys(value: unknown): Set<string> {
@@ -777,10 +796,11 @@ export default definePluginEntry({
   register(api: Api) {
     const config = api.pluginConfig ?? {};
     const configPath = expandPath(configString(config, "configPath", "~/.config/make-it-so/config.yaml"));
+    const sidecarLaunch = resolveSidecarLaunch(api.rootDir, config);
     const sidecarLease = acquireSharedSidecar(
       {
-        executable: configString(config, "pythonExecutable", "python3"),
-        args: configArgs(config),
+        executable: sidecarLaunch.executable,
+        args: sidecarLaunch.args,
         configPath,
       },
       (message, error) => api.logger?.warn?.(`${message}${error ? `: ${String(error)}` : ""}`),
@@ -863,6 +883,15 @@ export default definePluginEntry({
     };
     const request = async (method: string, params: Record<string, unknown> = {}): Promise<RpcResult> => {
       const timeoutMs = method === "course.readiness_review" ? READINESS_REVIEW_TIMEOUT_MS : undefined;
+      if (method === "bootstrap.status" || method === "bootstrap.apply") {
+        return sidecar.request(method, {
+          ...params,
+          openclaw_executable: executable,
+          lifecycle_command: sidecarLaunch.bundled
+            ? [sidecarLaunch.executable, "--config", configPath]
+            : ["make-it-so", "--config", configPath],
+        }, method === "bootstrap.apply" ? 300_000 : timeoutMs);
+      }
       if (method === "registration.options") {
         const base = await sidecar.request(method, params, timeoutMs);
         const channels = discordRouteCache && discordRouteCache.expiresAt > Date.now()
@@ -1026,6 +1055,8 @@ export default definePluginEntry({
         },
       });
     };
+    apiRoute("/make-it-so/api/bootstrap/status", "bootstrap.status");
+    apiRoute("/make-it-so/api/bootstrap/apply", "bootstrap.apply");
     apiRoute("/make-it-so/api/portfolio/status", "portfolio.status");
     apiRoute("/make-it-so/api/repos/list", "repos.list");
     apiRoute("/make-it-so/api/registration/options", "registration.options");
@@ -1427,6 +1458,8 @@ export default definePluginEntry({
       }, { scope });
     };
     gateway("makeItSo.health", "health");
+    gateway("makeItSo.bootstrap.status", "bootstrap.status");
+    gateway("makeItSo.bootstrap.apply", "bootstrap.apply", "operator.admin");
     gateway("makeItSo.portfolio.status", "portfolio.status");
     gateway("makeItSo.repos.list", "repos.list");
     gateway("makeItSo.registration.options", "registration.options");
@@ -1457,7 +1490,7 @@ export default definePluginEntry({
     gateway("makeItSo.attention.ack", "attention.ack", "operator.write");
     const scheduleDefinitions = async (): Promise<ScheduleDefinition[]> => {
       const description = await request("schedule.describe");
-      return Array.isArray(description.jobs)
+      const definitions = Array.isArray(description.jobs)
         ? description.jobs.filter((job): job is ScheduleDefinition => {
             return Boolean(
               job &&
@@ -1469,6 +1502,18 @@ export default definePluginEntry({
             );
           })
         : [];
+      if (!sidecarLaunch.bundled) return definitions;
+      return definitions.map((definition) => {
+        const command = definition.command;
+        const isPythonModule =
+          command.length >= 3 &&
+          /(?:^|[\\/])python(?:3(?:\.\d+)?)?(?:\.exe)?$/i.test(command[0] ?? "") &&
+          command[1] === "-m" &&
+          command[2] === "make_it_so.sidecar";
+        return isPythonModule
+          ? { ...definition, command: [sidecarLaunch.executable, ...command.slice(3)] }
+          : definition;
+      });
     };
     const invokeCron = async (args: string[]): Promise<CommandResult> => {
       if (!runCommand) throw new Error("OpenClaw command runtime is unavailable");
@@ -1485,7 +1530,9 @@ export default definePluginEntry({
     const scheduleStatus = async (): Promise<{ status: string; jobs: unknown[] }> => {
       const definitions = await scheduleDefinitions();
       const jobs = await liveCronJobs();
-      const pythonExecutable = configString(config, "pythonExecutable", "python3");
+      const pythonExecutable = sidecarLaunch.bundled
+        ? sidecarLaunch.executable
+        : configString(config, "pythonExecutable", "python3");
       return {
         status: "inspected",
         jobs: definitions.map((definition) => {
@@ -1503,11 +1550,13 @@ export default definePluginEntry({
       };
     };
     const reconcileSchedules = async (): Promise<{ status: string; jobs: unknown[] }> => {
-      if (config.installSchedules !== true) throw new Error("schedule management is disabled in plugin configuration");
+      if (config.installSchedules === false) throw new Error("schedule management is disabled in plugin configuration");
       const jobs = await scheduleDefinitions();
       const cronJobs = await liveCronJobs();
       const installed: unknown[] = [];
-      const pythonExecutable = configString(config, "pythonExecutable", "python3");
+      const pythonExecutable = sidecarLaunch.bundled
+        ? sidecarLaunch.executable
+        : configString(config, "pythonExecutable", "python3");
       for (const job of jobs) {
         const inspection = inspectCronJob(cronJobs, job, pythonExecutable, configPath);
         for (const duplicate of inspection.duplicates) {
@@ -1528,7 +1577,7 @@ export default definePluginEntry({
     };
 
     const mutateSchedules = async (action: "pause" | "resume" | "remove", name?: string) => {
-      if (config.installSchedules !== true) throw new Error("schedule management is disabled in plugin configuration");
+      if (config.installSchedules === false) throw new Error("schedule management is disabled in plugin configuration");
       if (action === "resume") await reconcileSchedules();
       const definitions = await scheduleDefinitions();
       const selected = name ? definitions.filter((item) => item.name === name) : definitions;

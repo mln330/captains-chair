@@ -4,6 +4,7 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -479,6 +480,108 @@ def test_sidecar_card_summary_uses_automation_then_comments_then_title() -> None
     assert sidecar_module._card_summary(automation) == "automated"  # pyright: ignore[reportPrivateUsage]
     assert sidecar_module._card_summary(comment) == "comment"  # pyright: ignore[reportPrivateUsage]
     assert sidecar_module._card_summary(title) == "Title"  # pyright: ignore[reportPrivateUsage]
+
+
+def test_sidecar_bootstraps_a_missing_configuration_and_provisions_the_crew(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / "config" / "config.yaml"
+    calls: list[str] = []
+
+    class FakeInstaller:
+        def __init__(self, configured: OpenClawWorkboardConfig) -> None:
+            self.configured = configured
+
+        def agent_inventory(self) -> tuple[dict[str, str], ...]:
+            return ({"id": "main", "model": "ollama/test", "workspace": "/workspace"},)
+
+        def plan(self, workspace_root: Path) -> tuple[SimpleNamespace, ...]:
+            calls.append(f"plan:{workspace_root}")
+            return tuple(
+                SimpleNamespace(
+                    role=role,
+                    agent_id=getattr(self.configured.workers, role),
+                    model=getattr(self.configured.worker_models, role),
+                    workspace=str(workspace_root / getattr(self.configured.workers, role)),
+                    action="create",
+                )
+                for role in (
+                    "captain",
+                    "coder",
+                    "reviewer",
+                    "tester",
+                    "ux_reviewer",
+                    "final_reviewer",
+                    "merger",
+                    "verifier",
+                )
+            )
+
+        def install(self, workspace_root: Path) -> tuple[SimpleNamespace, ...]:
+            calls.append(f"install:{workspace_root}")
+            return self.plan(workspace_root)
+
+    monkeypatch.setattr(sidecar_module, "OpenClawRuntimeInstaller", FakeInstaller)
+    server = SidecarServer(config_path)
+
+    health = server.request("health")
+    status = server.request("bootstrap.status", {"openclaw_executable": "openclaw"})
+    assert health["status"] == "healthy"
+    assert health["setup_required"] is True
+    assert status["setup_required"] is True
+    assert status["agents"][0]["id"] == "main"
+
+    result = server.request(
+        "bootstrap.apply",
+        {
+            "openclaw_executable": "openclaw",
+            "workspace_root": str(tmp_path / "workers"),
+            "reconcile_every": "10m",
+            "review_every": "4h",
+        },
+    )
+
+    persisted = load_config(config_path)
+    assert result["configured"] is True
+    assert result["automation_enabled"] is False
+    assert config_path.is_file()
+    assert persisted.repos == ()
+    assert persisted.schedules.reconcile_every == "10m"
+    assert persisted.orchestrators["openclaw-workers"].workers.captain == "github-captain"  # type: ignore[union-attr]
+    assert any(value.startswith("install:") for value in calls)
+
+
+def test_bootstrap_model_conflict_does_not_persist_configuration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / "config.yaml"
+
+    class ConflictingInstaller:
+        def __init__(self, _config: OpenClawWorkboardConfig) -> None:
+            pass
+
+        def plan(self, workspace_root: Path) -> tuple[SimpleNamespace, ...]:
+            return (
+                SimpleNamespace(
+                    role="coder",
+                    agent_id="github-coder",
+                    model="codex/gpt-5.3-codex-spark",
+                    workspace=str(workspace_root / "github-coder"),
+                    action="model_mismatch",
+                ),
+            )
+
+        def install(self, _workspace_root: Path) -> tuple[SimpleNamespace, ...]:
+            raise AssertionError("conflicts must fail before installation")
+
+    monkeypatch.setattr(sidecar_module, "OpenClawRuntimeInstaller", ConflictingInstaller)
+    server = SidecarServer(config_path)
+
+    with pytest.raises(SidecarError, match="different model"):
+        server.request("bootstrap.apply", {"openclaw_executable": "openclaw"})
+
+    assert not config_path.exists()
+    assert server.request("health")["setup_required"] is True
 
 
 def test_sidecar_does_not_mark_workboard_with_active_cards_completed(

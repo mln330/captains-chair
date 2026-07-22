@@ -253,6 +253,21 @@ type Portfolio = { repos: Repo[] };
 type Courses = { courses: CourseSummary[] };
 type ScheduleJob = { name: string; every: string; id?: string | null; enabled: boolean; health: string; drift?: string[]; duplicates?: number };
 type ScheduleStatus = { status: string; jobs: ScheduleJob[] };
+type BootstrapRole = "captain" | "coder" | "reviewer" | "tester" | "ux_reviewer" | "final_reviewer" | "merger" | "verifier";
+type BootstrapWorker = { agent_id: string; model: string; runtime: "openclaw" | "codex" };
+type BootstrapStatus = {
+  status?: string;
+  configured?: boolean;
+  setup_required?: boolean;
+  config_path?: string;
+  workspace_root?: string;
+  runtime_available?: boolean;
+  warning?: string | null;
+  agents?: Array<{ id: string; model?: string; workspace?: string }>;
+  workers?: Record<BootstrapRole, BootstrapWorker>;
+  actions?: Array<{ role: BootstrapRole; agent_id: string; model: string; workspace: string; action: string }>;
+  schedules?: { reconcile_every?: string; review_every?: string };
+};
 type UpdatePayload = Record<string, unknown>;
 type RegistrationResult = {
   status?: string;
@@ -1252,7 +1267,8 @@ function SchedulePanel({ status, onRefresh }: { status: ScheduleStatus | null; o
       onRefresh();
     } catch (reason) { setMessage(String(reason)); }
   };
-  return <section className="schedule-section" aria-labelledby="schedule-title"><div className="section-heading"><div><p className="eyebrow">AUTOMATION</p><h2 id="schedule-title">Managed schedules</h2></div><button className="secondary compact" onClick={runNow}>Run course review</button></div>
+  const schedulesMissing = status?.jobs?.some((job) => job.health === "missing") ?? false;
+  return <section className="schedule-section" aria-labelledby="schedule-title"><div className="section-heading"><div><p className="eyebrow">AUTOMATION</p><h2 id="schedule-title">Managed schedules</h2></div><div className="action-row">{schedulesMissing && <button className="primary compact" onClick={() => action("install")}>Install schedules</button>}<button className="secondary compact" onClick={runNow}>Run course review</button></div></div>
     <div className="schedule-grid">{status?.jobs?.map((job) => <div className="schedule-row" key={job.name}><div><strong>{job.name}</strong><span>Every {job.every}</span></div><span className={`health ${job.health}`}>{job.health}</span><div className="action-row"><button className="secondary compact" onClick={() => action(job.enabled ? "pause" : "resume", { name: job.name })}>{job.enabled ? "Pause" : "Resume"}</button><button className="secondary compact danger" onClick={() => action("remove", { name: job.name })}>Remove</button></div></div>) ?? <p className="muted">Schedule state is unavailable.</p>}</div>
     <div className="settings-grid schedule-editor"><label>Reconcile cadence<input aria-label="Reconcile cadence" value={reconcileEvery} onChange={(event) => setReconcileEvery(event.target.value)} pattern="[1-9][0-9]*(s|m|h|d)" /></label><label>Course review cadence<input aria-label="Course review cadence" value={reviewEvery} onChange={(event) => setReviewEvery(event.target.value)} pattern="[1-9][0-9]*(s|m|h|d)" /></label><button className="primary compact" onClick={() => action("edit", { reconcile_every: reconcileEvery, review_every: reviewEvery })}>Save cadence</button></div>
     {message && <p className="inline-status" role="status">{message}</p>}
@@ -1267,6 +1283,66 @@ function milestoneStatusTone(status?: string): string {
 
 function artifactLabel(artifact: EvidenceArtifact): string {
   return artifact.title || artifact.viewport || artifact.kind || artifact.url || artifact.path || "Evidence artifact";
+}
+
+const BOOTSTRAP_ROLE_LABELS: Record<BootstrapRole, { label: string; description: string }> = {
+  captain: { label: "Number One", description: "Course leadership and recovery" },
+  coder: { label: "Coder", description: "Implementation and repair" },
+  reviewer: { label: "Reviewer", description: "Independent code review" },
+  tester: { label: "Tester", description: "Tests and CI evidence" },
+  ux_reviewer: { label: "UX reviewer", description: "Browser and accessibility evidence" },
+  final_reviewer: { label: "Final reviewer", description: "Current-head completion decision" },
+  merger: { label: "Merger", description: "Deterministic merge gate" },
+  verifier: { label: "Verifier", description: "Post-merge verification" },
+};
+const BOOTSTRAP_ROLES = Object.keys(BOOTSTRAP_ROLE_LABELS) as BootstrapRole[];
+
+function FirstRunSetup({ status, onConfigured }: { status: BootstrapStatus; onConfigured: () => void }) {
+  const [step, setStep] = useState(1);
+  const [workers, setWorkers] = useState<Record<BootstrapRole, BootstrapWorker>>(() => status.workers ?? {} as Record<BootstrapRole, BootstrapWorker>);
+  const [workspaceRoot, setWorkspaceRoot] = useState(status.workspace_root ?? "");
+  const [reconcileEvery, setReconcileEvery] = useState(status.schedules?.reconcile_every ?? "5m");
+  const [reviewEvery, setReviewEvery] = useState(status.schedules?.review_every ?? "2h");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const existingAgents = status.agents ?? [];
+  const duplicateAgents = useMemo(() => {
+    const counts = BOOTSTRAP_ROLES.reduce<Record<string, number>>((result, role) => {
+      const id = workers[role]?.agent_id?.trim();
+      if (id) result[id] = (result[id] ?? 0) + 1;
+      return result;
+    }, {});
+    return Object.entries(counts).filter(([, count]) => count > 1).map(([id]) => id);
+  }, [workers]);
+  const updateWorker = (role: BootstrapRole, update: Partial<BootstrapWorker>) => setWorkers((current) => ({
+    ...current,
+    [role]: { ...current[role], ...update },
+  }));
+  const apply = async () => {
+    setSaving(true); setError(null);
+    try {
+      await callGateway<BootstrapStatus>("bootstrap/apply", {
+        workers,
+        workspace_root: workspaceRoot,
+        reconcile_every: reconcileEvery,
+        review_every: reviewEvery,
+      });
+      onConfigured();
+    } catch (reason) { setError(String(reason)); }
+    finally { setSaving(false); }
+  };
+  const allWorkersValid = BOOTSTRAP_ROLES.every((role) => workers[role]?.agent_id?.trim() && workers[role]?.model?.trim());
+  return <main className="shell setup-page">
+    <header className="topbar"><div className="brand-lockup"><div className="brand-mark" aria-hidden="true"><Rocket size={22} /></div><div><p className="eyebrow">FIRST-RUN SETUP</p><h1>Make It So</h1><p className="subtitle">Install the command deck. Configure the crew.</p></div></div><span className="status-pill">Step {step} of 3</span></header>
+    <section className="setup-card" aria-labelledby="setup-title">
+      <div className="setup-progress" aria-label="Setup progress"><span className={step >= 1 ? "active" : ""}>1. Host</span><span className={step >= 2 ? "active" : ""}>2. Crew</span><span className={step >= 3 ? "active" : ""}>3. Review</span></div>
+      {step === 1 && <div className="setup-step"><p className="eyebrow">PLUGIN-FIRST ONBOARDING</p><h2 id="setup-title">Your command deck is installed</h2><p>Make It So will create its configuration, provision eight role-separated OpenClaw workers, and leave automation disabled until you explicitly install the managed schedules.</p><div className={`setup-check ${status.runtime_available === false ? "warning" : "good"}`}><strong>{status.runtime_available === false ? "OpenClaw runtime needs attention" : "OpenClaw runtime detected"}</strong><span>{status.warning ?? `${existingAgents.length} existing agents available to reuse.`}</span></div><div className="setup-facts"><span><b>Configuration</b>{status.config_path}</span><span><b>Worker isolation</b>Dedicated workspaces and role protocols</span><span><b>Automation</b>Off until the canary and schedule install</span></div></div>}
+      {step === 2 && <div className="setup-step"><p className="eyebrow">AGENT CREW</p><h2 id="setup-title">Choose the workers and models</h2><p>Keep the generated dedicated agents or map a role to an existing compatible OpenClaw agent. Every role must use a distinct agent ID.</p><datalist id="make-it-so-agent-options">{existingAgents.map((agent) => <option key={agent.id} value={agent.id}>{agent.model}</option>)}</datalist><div className="crew-setup-grid">{BOOTSTRAP_ROLES.map((role) => { const worker = workers[role]; const existing = existingAgents.find((agent) => agent.id === worker?.agent_id); const planned = status.actions?.find((action) => action.role === role); return <fieldset key={role}><legend>{BOOTSTRAP_ROLE_LABELS[role].label}</legend><p>{BOOTSTRAP_ROLE_LABELS[role].description}</p><label>Agent ID<input aria-label={`${BOOTSTRAP_ROLE_LABELS[role].label} agent ID`} list="make-it-so-agent-options" value={worker?.agent_id ?? ""} onChange={(event) => updateWorker(role, { agent_id: event.target.value })} /></label><label>Model<input aria-label={`${BOOTSTRAP_ROLE_LABELS[role].label} model`} value={worker?.model ?? ""} onChange={(event) => updateWorker(role, { model: event.target.value })} /></label><label>Runtime<select aria-label={`${BOOTSTRAP_ROLE_LABELS[role].label} runtime`} value={worker?.runtime ?? "openclaw"} onChange={(event) => updateWorker(role, { runtime: event.target.value as "openclaw" | "codex" })}><option value="openclaw">OpenClaw</option><option value="codex">Direct Codex</option></select></label><span className={`crew-action ${existing ? "reuse" : "create"}`}>{existing ? `Reuse ${existing.model || "existing route"}` : planned?.action === "create" ? "Create dedicated agent" : "New dedicated agent"}</span></fieldset>; })}</div>{duplicateAgents.length > 0 && <p className="warning" role="alert">Each role must be independent. Duplicate agent IDs: {duplicateAgents.join(", ")}</p>}</div>}
+      {step === 3 && <div className="setup-step"><p className="eyebrow">REVIEW AND APPLY</p><h2 id="setup-title">Provision the command deck</h2><p>This writes the validated configuration and creates or updates the crew. It does not register a repository, dispatch work, or enable schedules.</p><div className="settings-grid"><label>Managed worker root<input value={workspaceRoot} onChange={(event) => setWorkspaceRoot(event.target.value)} /></label><label>Reconcile cadence<input aria-label="First-run reconcile cadence" value={reconcileEvery} onChange={(event) => setReconcileEvery(event.target.value)} pattern="[1-9][0-9]*(s|m|h|d)" /></label><label>Course review cadence<input aria-label="First-run course review cadence" value={reviewEvery} onChange={(event) => setReviewEvery(event.target.value)} pattern="[1-9][0-9]*(s|m|h|d)" /></label></div><div className="review-box"><strong>{BOOTSTRAP_ROLES.length} role-separated workers</strong><span>{BOOTSTRAP_ROLES.filter((role) => existingAgents.some((agent) => agent.id === workers[role]?.agent_id)).length} existing agents reused; remaining agents created in managed workspaces.</span></div><p className="step-note">After setup: register a repository, complete readiness, run the canary, then install schedules from the Automation panel.</p></div>}
+      <div className="onboarding-actions">{step > 1 && <button className="secondary" type="button" onClick={() => setStep(step - 1)}>Back</button>}<span className="action-spacer" />{step < 3 ? <button className="primary" type="button" onClick={() => setStep(step + 1)} disabled={step === 1 ? status.runtime_available === false : !allWorkersValid || duplicateAgents.length > 0}>Continue</button> : <button className="primary" type="button" onClick={() => void apply()} disabled={saving || !allWorkersValid || duplicateAgents.length > 0}>{saving ? "Provisioning crew..." : "Configure Make It So"}</button>}</div>
+      {error && <p className="warning" role="alert">{error}</p>}
+    </section>
+  </main>;
 }
 
 function MilestoneEvidencePanel({ item, repo }: { item: CourseSummary; repo?: Repo }) {
@@ -1368,7 +1444,7 @@ function ActivityPanel({ repos, onRefresh }: { repos: Repo[]; onRefresh: () => v
   </section>;
 }
 
-export function App() {
+function CommandDeck() {
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null); const [courses, setCourses] = useState<Courses | null>(null); const [modelConfig, setModelConfig] = useState<ModelConfig | null>(null); const [scheduleStatus, setScheduleStatus] = useState<ScheduleStatus | null>(null); const [error, setError] = useState<string | null>(null); const [refreshing, setRefreshing] = useState(false);
   const [selectedRepoName, setSelectedRepoName] = useState("");
   const refresh = () => {
@@ -1401,6 +1477,20 @@ export function App() {
      <section className="courses" aria-labelledby="courses-title"><div className="section-heading"><div><p className="eyebrow">COURSE CHARTER</p><h2 id="courses-title">Readiness and work packages</h2></div><span className="status-pill">{courses ? `${courses.courses.length} courses` : "Loading"}</span></div>{courses === null ? <div className="loading-state" role="status"><strong>Loading course charters...</strong><span>This stays independent of GitHub and token reconciliation.</span></div> : courses.courses.length ? <div className="course-list">{courses.courses.map((item) => <CoursePanel key={`${item.repository}:${item.course.key}`} item={item} repo={repos.find((repo) => repo.full_name === item.repository)} onAction={courseAction} onRefresh={refresh} />)}</div> : <p className="muted">No course charter has been saved yet.</p>}</section>
     <CourseCreatePanel repos={repos} onCreated={refresh} /><ActivityPanel repos={repos} onRefresh={refresh} />
   </main>;
+}
+
+export function App() {
+  const [bootstrap, setBootstrap] = useState<BootstrapStatus | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const loadBootstrap = () => {
+    setError(null);
+    void callGateway<BootstrapStatus>("bootstrap/status").then(setBootstrap).catch((reason) => setError(String(reason)));
+  };
+  useEffect(loadBootstrap, []);
+  if (error) return <main className="shell setup-page"><div className="alert" role="alert">Could not start Make It So setup: {error}</div><button className="secondary" onClick={loadBootstrap}>Retry</button></main>;
+  if (bootstrap === null) return <main className="shell setup-page"><div className="loading-state" role="status"><strong>Inspecting the OpenClaw host...</strong><span>Discovering configuration and crew state.</span></div></main>;
+  if (bootstrap.setup_required === true) return <FirstRunSetup status={bootstrap} onConfigured={loadBootstrap} />;
+  return <CommandDeck />;
 }
 
 const rootElement = document.getElementById("root");

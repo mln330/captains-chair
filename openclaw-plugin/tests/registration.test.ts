@@ -1,9 +1,28 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import plugin, { configuredDiscordRouteOptions, createToolExecutor, deliverDiscordPlanningStatus, deliverNumberOneDiscordTurn, deliverRegistrationFollowUp, discoverDiscordRouteOptions, discordAnswerMentionsRequirement, discordPendingReadinessQuestion, discordPlanningEventKey, discordPlanningRouteMatches, inferDiscordReadinessKey, isDiscordPlanningCourseStatus, nextDiscordReadinessKey, parseConfiguredDiscordGuildIds, parseDiscordChannelOptions, parseDiscordCourseApproval, parseDiscordGuildId, parseRouteParams, pendingDiscordReadinessKey, readRouteParams, resolveDiscordRoute, selectDiscordReadinessQuestion, READINESS_REVIEW_TIMEOUT_MS } from "../src/index.js";
+import plugin, { configuredDiscordRouteOptions, createToolExecutor, deliverDiscordPlanningStatus, deliverNumberOneDiscordTurn, deliverRegistrationFollowUp, discoverDiscordRouteOptions, discordAnswerMentionsRequirement, discordPendingReadinessQuestion, discordPlanningEventKey, discordPlanningRouteMatches, inferDiscordReadinessKey, isDiscordPlanningCourseStatus, nextDiscordReadinessKey, parseConfiguredDiscordGuildIds, parseDiscordChannelOptions, parseDiscordCourseApproval, parseDiscordGuildId, parseRouteParams, pendingDiscordReadinessKey, readRouteParams, resolveDiscordRoute, resolveSidecarLaunch, selectDiscordReadinessQuestion, READINESS_REVIEW_TIMEOUT_MS } from "../src/index.js";
 
 describe("Make It So OpenClaw registration", () => {
+  it("runs a configured standalone sidecar without Python module arguments", () => {
+    expect(resolveSidecarLaunch(undefined, {
+      sidecarExecutable: "C:/make-it-so/make-it-so-sidecar.exe",
+      sidecarCommand: ["-m", "make_it_so.sidecar"],
+    })).toEqual({
+      executable: "C:/make-it-so/make-it-so-sidecar.exe",
+      args: [],
+      bundled: true,
+    });
+  });
+
+  it("retains the Python development fallback when no packaged runtime is present", () => {
+    expect(resolveSidecarLaunch(undefined, { pythonExecutable: "python-dev" })).toEqual({
+      executable: "python-dev",
+      args: ["-m", "make_it_so.sidecar"],
+      bundled: false,
+    });
+  });
+
   it("gives readiness review RPCs more time than the Number One host turn", () => {
     expect(READINESS_REVIEW_TIMEOUT_MS).toBeGreaterThan(600_000);
   });
@@ -489,6 +508,8 @@ describe("Make It So OpenClaw registration", () => {
       icon: "rocket",
     }));
     expect(registrations.gateway).toContain("makeItSo.portfolio.status");
+    expect(registrations.gateway).toContain("makeItSo.bootstrap.status");
+    expect(registrations.gateway).toContain("makeItSo.bootstrap.apply");
     expect(registrations.gateway).toContain("makeItSo.models.config");
     expect(registrations.gateway).toContain("makeItSo.models.update");
     expect(registrations.gateway).toContain("makeItSo.usage.config");
@@ -499,6 +520,7 @@ describe("Make It So OpenClaw registration", () => {
     expect(registrations.gateway).toContain("makeItSo.course.planningSession");
     expect(registrations.gateway).toContain("makeItSo.course.models");
     expect(registrations.gatewayScopes["makeItSo.health"]).toBe("operator.read");
+    expect(registrations.gatewayScopes["makeItSo.bootstrap.apply"]).toBe("operator.admin");
     expect(registrations.gatewayScopes["makeItSo.course.create"]).toBe("operator.write");
     expect(registrations.gatewayScopes["makeItSo.schedule.install"]).toBe("operator.admin");
     expect(registrations.gatewayScopes["makeItSo.schedule.status"]).toBe("operator.read");
@@ -514,6 +536,8 @@ describe("Make It So OpenClaw registration", () => {
       "make-it-so-discord-number-one-planning-before-dispatch",
     ]);
     expect(registrations.routes).toContain("/make-it-so/");
+    expect(registrations.routes).toContain("/make-it-so/api/bootstrap/status");
+    expect(registrations.routes).toContain("/make-it-so/api/bootstrap/apply");
     expect(registrations.routes).toContain("/make-it-so/api/schedule/install");
     expect(registrations.routes).toContain("/make-it-so/api/schedule/status");
     expect(registrations.routes).toContain("/make-it-so/api/schedule/edit");

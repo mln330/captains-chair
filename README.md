@@ -147,21 +147,42 @@ failed calls, repeated prompt fingerprints, and high-consumption workflow stages
 
 ## OpenClaw installation
 
-Build the plugin and install it into the OpenClaw plugin directory from
-`openclaw-plugin/`. Configure the Python sidecar path and a config file in the
-OpenClaw host, then use the Make It So tab to register repositories and
-courses. The default five-minute worker schedule and two-hour course-review
-schedule are configurable in the dashboard or typed `schedules` configuration.
+Make It So 0.3 packages the Python control plane as a platform sidecar inside
+the OpenClaw plugin. Install the release archive and open the Make It So tab.
+OpenClaw records and enables the managed external plugin during installation
+and restarts the managed Gateway when required:
+
+```text
+openclaw plugins install npm-pack:./mln330-openclaw-make-it-so-0.3.0.tgz
+```
+
+When no configuration exists, the tab opens a first-run wizard instead of
+failing the sidecar. The wizard discovers existing OpenClaw agents, lets the
+operator create or map all eight role-separated workers, selects their models
+and runtimes, writes the validated configuration atomically, installs the role
+protocols, and leaves automation off. Register a repository and run the safety
+canary before selecting **Install schedules** in the Automation panel.
+
+The default five-minute worker schedule and two-hour course-review schedule are
+configurable in the dashboard. They are never installed merely because the
+plugin loaded; schedule installation remains an explicit operator-admin action.
 OpenClaw remains the live schedule source of truth: reconciliation repairs drift,
 removes duplicate plugin-owned jobs, and preserves an operator-paused job.
+
+For plugin development from a source checkout:
 
 ```text
 cd openclaw-plugin
 npm ci
+npm --prefix ui ci
 npm run check
 npm test
 npm run build
 ```
+
+`python scripts/build_sidecar.py` builds the current platform binary under
+`openclaw-plugin/bin/<platform>-<architecture>/`. The plugin package workflow
+assembles Linux, Windows, and macOS x64 binaries into one installable archive.
 
 Use `/make-it-so status [OWNER/REPO]` for a concise chat summary. The native
 command also supports `plan`, `approve`, `pause`, `resume`, `checkpoint`, and

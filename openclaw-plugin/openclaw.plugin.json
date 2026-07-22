@@ -33,6 +33,11 @@
         "items": { "type": "string" },
         "default": ["-m", "make_it_so.sidecar"]
       },
+      "sidecarExecutable": {
+        "type": "string",
+        "default": "",
+        "description": "Optional development override; packaged installs use the bundled platform sidecar"
+      },
       "openclawExecutable": {
         "type": "string",
         "default": "",
@@ -63,8 +68,8 @@
       },
       "installSchedules": {
         "type": "boolean",
-        "default": false,
-        "description": "Allow the operator to install the two plugin-owned Gateway cron jobs"
+        "default": true,
+        "description": "Allow explicit operator-admin actions to manage the two plugin-owned Gateway cron jobs"
       }
     }
   }

@@ -48,6 +48,7 @@ coverage.xml
 coverage*.json
 openclaw-plugin/test-results/
 openclaw-plugin/playwright-report/
+openclaw-plugin/bin/
 *.cover
 *.py.cover
 .hypothesis/
