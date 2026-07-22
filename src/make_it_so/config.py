@@ -8,7 +8,6 @@ import yaml
 
 from make_it_so.models import AppConfig, ProjectManifest
 
-
 # Older OpenClaw releases serialized worker settings at the application root.
 # Keep the current schema strict, but migrate that known shape before validation
 # so a sidecar restart cannot discard a previously registered repository.

@@ -64,6 +64,14 @@ const course = {
 };
 
 async function mockApi(page: Page) {
+  await page.route("**/make-it-so/api/bootstrap/status", (route) => route.fulfill({ json: {
+    configured: true,
+    setup_required: false,
+    runtime_available: true,
+    openclaw_executable: "openclaw",
+    codex_executable: "codex",
+    codex_available: true,
+  } }));
   await page.route("**/make-it-so/api/portfolio/status", (route) => route.fulfill({ json: { repos: [repo] } }));
   await page.route("**/make-it-so/api/courses/list", (route) => route.fulfill({ json: { courses: [{ repository: repo.full_name, course, readiness: { ready: true, unresolved: [] } }] } }));
   await page.route("**/make-it-so/api/models/config", (route) => route.fulfill({ json: { global_profiles: {}, runtime_profiles: {}, runtimes: ["openclaw"] } }));
